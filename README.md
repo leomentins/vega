@@ -1,23 +1,27 @@
-# Altair
+# vega
 
-Condução de ciclo por sessão para o Claude Code: uma maestra por ciclo, uma condutora
-por fase e uma operária por tarefa, cada ação emitida por script com nonce e conferida
-por comando. Distribuído como plugin, com um marketplace local neste repositório.
+A fábrica de condução de ciclo por sessão: uma maestra, uma condutora por fase e uma operária
+por tarefa, com cada ação emitida por script com nonce e conferida por comando.
+
+Esta vitrine é só de saída. A mudança nasce na fonte, `SISTOLI/sistoli`, e chega aqui por
+exportação: a árvore inteira vem da lista fechada do que sai, e o CI desta vitrine confere que
+ela bate com o manifesto da exportação. Proposta aberta aqui não é aceita — veja
+`CONTRIBUTING.md`.
 
 ## Instalar
 
-```bash
-claude plugin marketplace add <endereço deste repositório>
-claude plugin install altair@altair
-```
-
-A skill fica em `/altair:conducao`. Cada projeto conduzido declara o que é dele em
-`.altair/adaptador.json` na raiz do repositório: o passo a passo está em
-`plugins/altair/INSTALL.md`, e `exemplo/` traz um projeto de mentira conduzido de
-ponta a ponta pela suíte.
-
-## Testar
+No projeto, em escopo de projeto:
 
 ```bash
-node --test $(find plugins/altair -name '*.test.mjs')
+claude plugin marketplace add leomentins/vega
+claude plugin install vega@vega --scope project
 ```
+
+Depois, a declaração do projeto (`.vega/declaracao.json`) e os hooks:
+`plugins/vega/INSTALL.md`. A atualização automática fica desligada; o projeto declara a versão
+que instala.
+
+## Camadas
+
+O que está aqui é o corpo: fala em papéis, sem nada de empresa nem de projeto. Onde cada camada
+mora: `plugins/vega/references/camadas.md`.

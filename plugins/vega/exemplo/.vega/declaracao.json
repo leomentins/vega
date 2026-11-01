@@ -1,0 +1,60 @@
+{
+  "esquema": 1,
+  "papel": "consumidor",
+  "versao": {
+    "corpo": "0.1.1"
+  },
+  "decisoes": {
+    "destino": "git"
+  },
+  "conducao": {
+    "versao": 5,
+    "codigo": "superpowers",
+    "pagina": "docs/conducao.md",
+    "projeto": "exemplo",
+    "operadores": [
+      {
+        "handle": "bia",
+        "nome": "Bia"
+      }
+    ],
+    "estado": {
+      "pasta": "altair/conducao"
+    },
+    "log": {
+      "pasta": "."
+    },
+    "pergunta": {
+      "destino": "log"
+    },
+    "ci": false,
+    "sessao": {
+      "modosSemClique": [
+        "auto"
+      ],
+      "cli": [
+        "claude",
+        "plugin",
+        "list",
+        "--json"
+      ],
+      "settings": [
+        ".claude/settings.json",
+        ".claude/settings.local.json"
+      ],
+      "variavelDoTrafego": "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+      "ponte": {
+        "unidade": "claude-remote-control.service"
+      },
+      "instrucoes": [
+        "**/CLAUDE.md"
+      ]
+    },
+    "tiers": {
+      "mecanico": "haiku",
+      "parecer": "sonnet",
+      "critico": "opus",
+      "inherit": "inherit"
+    }
+  }
+}

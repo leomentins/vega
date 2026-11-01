@@ -1,0 +1,28 @@
+name: conferir-fonte
+
+# A vitrine é só saída (VEGA-29 E1.A3): todo push e toda proposta conferem que a árvore é a
+# exportação gravada no `.vega/manifesto.json` e que o manifesto é o do commit-fonte do HEAD
+# (HN-29 T18, D-HN29-13). Mudança nasce na fonte, nunca aqui: proposta aberta na vitrine reprova,
+# porque o commit dela não é uma exportação. Sem credencial nenhuma: só leitura, nada de
+# `pull_request_target`, nada de texto de proposta ou de commit interpolado em `run:`.
+# Este arquivo vem da exportação; editá-lo aqui reprova a própria conferência.
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  conferir:
+    name: a vitrine é a fonte filtrada
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Na proposta, o commit dela (não o merge sintético, que nunca traz o trailer da exportação).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: conferir-fonte
+        run: node .vega/conferir-fonte.mjs

@@ -1,0 +1,42 @@
+{
+  "versao": 5,
+  "codigo": "canonico.mjs",
+  "pagina": "docs/conducao-no-projeto.md",
+  "projeto": "teste",
+  "operadores": [{ "handle": "rita", "nome": "Rita" }],
+  "estado": { "pasta": "altair/conducao" },
+  "log": { "pasta": "." },
+  "pergunta": { "destino": "log" },
+  "ci": true,
+  "sessao": {
+    "modosSemClique": ["auto"],
+    "cli": ["host-de-teste", "plugin", "list", "--json"],
+    "settings": [".host/settings.json", ".host/settings.local.json"],
+    "variavelDoTrafego": "HOST_DE_TESTE_SEM_TRAFEGO",
+    "ponte": { "unidade": "ponte-de-teste.service" },
+    "instrucoes": ["**/CLAUDE.md"]
+  },
+  "publicacao": { "frasesLegadas": ["Sem publicação, por Rita: "] },
+  "conferencia": [
+    {
+      "marca": "gate-de-ux",
+      "arquivo": "gate-de-ux-approval.md",
+      "sim": ["SHIP", "SHIP_WITH_DEBT"],
+      "nao": ["NEEDS_REWORK"]
+    }
+  ],
+  "verificacao": {
+    "marcaSemCofre": "TESTE_SEM_COFRE_PRODUCAO",
+    "variaveisDeProducao": [
+      "BANCO_TOKEN",
+      "BANCO_SENHA",
+      "BANCO_URL",
+      "BANCO_CHAVE_DE_SERVICO",
+      "VERCEL_TOKEN",
+      "OPENROUTER_API_KEY",
+      "GEMINI_API_KEY"
+    ]
+  },
+  "guardas": { "pastaDoModo": ".claude/state" },
+  "tiers": { "mecanico": "modelo-barato", "parecer": "modelo-medio", "critico": "modelo-forte" }
+}

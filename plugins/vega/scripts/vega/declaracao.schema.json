@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "vega/declaracao.schema.json",
+  "title": "Declaração do projeto à fábrica (.vega/declaracao.json)",
+  "description": "Esquema versionado (`esquema`). Campo novo entra com versão nova, e a anterior segue aceita. A fonte roda a fábrica da própria árvore e diz onde estão as listas do que sai; o consumidor instala a fábrica e diz a versão que instala. O adaptador da condução, quando o projeto é conduzido, vai em `conducao`, na forma de `conducao/adaptador.schema.json`. O leitor sem dependência é `declaracao.mjs` (`validar`), que aplica a mesma regra; `conducao` é conferido por `adaptador.mjs` (`validar`).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["esquema", "papel", "decisoes"],
+  "properties": {
+    "esquema": {
+      "description": "A versão deste esquema.",
+      "const": 1
+    },
+    "papel": {
+      "description": "`fonte`: a árvore que guarda a fábrica e a roda sem instalar plugin. `consumidor`: o projeto que instala a fábrica pelas vitrines.",
+      "enum": ["fonte", "consumidor"]
+    },
+    "versao": {
+      "description": "Só no consumidor, obrigatório: a versão que o projeto instala, do corpo e, quando há, da camada da empresa.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["corpo"],
+      "properties": {
+        "corpo": { "$ref": "#/$defs/semver" },
+        "empresa": { "$ref": "#/$defs/semver" }
+      }
+    },
+    "decisoes": {
+      "description": "Onde o coletor grava as decisões do operador: `banco` (o verbo do banco do harness) ou `git` (arquivo de decisões do projeto).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["destino"],
+      "properties": {
+        "destino": { "enum": ["banco", "git"] }
+      }
+    },
+    "listas": {
+      "description": "Só na fonte, obrigatório: onde estão as listas do que sai, relativas à raiz do repositório — a do corpo e a da camada da empresa.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["corpo", "empresa"],
+      "properties": {
+        "corpo": { "$ref": "#/$defs/caminho" },
+        "empresa": { "$ref": "#/$defs/caminho" }
+      }
+    },
+    "conducao": {
+      "description": "OPCIONAL: o adaptador da condução. Aqui só se exige objeto; a forma é a de `conducao/adaptador.schema.json`, conferida à parte (o leitor é `adaptador.mjs`, `validar`).",
+      "type": "object"
+    },
+    "immutable_docs": {
+      "description": "OPCIONAL: documentos cujas seções imutáveis (declaradas no frontmatter de cada um) o `immutable-sections-guard.js` protege no commit. Veio do `harness.config.json` (HN-29 T12). Quem a usa exige lista não vazia e recusa sem ela.",
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/caminho" }
+    },
+    "lean_scope_docs": {
+      "description": "OPCIONAL: documentos cuja entrada nova o `lean-entry-check.js` mede contra a vizinhança. `entry` é a expressão que marca o começo de uma entrada (padrão `^### `); `unit` é `lines` (padrão) ou `chars`. Veio do `harness.config.json` (HN-29 T12).",
+      "type": "array",
+      "items": {
+        "anyOf": [
+          { "$ref": "#/$defs/caminho" },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path"],
+            "properties": {
+              "path": { "$ref": "#/$defs/caminho" },
+              "entry": { "type": "string", "minLength": 1 },
+              "unit": { "$ref": "#/$defs/unidade" }
+            }
+          }
+        ]
+      }
+    },
+    "lean_record_scopes": {
+      "description": "OPCIONAL: pastas de registro (um `.json` por entrada) que o `lean-entry-check.js` mede contra o teto do tipo, lido de `contract` (`properties.<campo>.maxLength`). `fields` padrão `[\"titulo\", \"corpo\"]`; `unit` padrão `chars`. Veio do `harness.config.json` (HN-29 T12).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["dir", "contract"],
+        "properties": {
+          "dir": { "$ref": "#/$defs/caminho" },
+          "contract": { "$ref": "#/$defs/caminho" },
+          "fields": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+          "unit": { "$ref": "#/$defs/unidade" }
+        }
+      }
+    },
+    "saidas_geradas": {
+      "description": "OPCIONAL: arquivos que um comando do projeto regera — caminho exato de arquivo (nunca glob nem pasta) e o comando que o regera. O `git-guard` libera o descarte deles por serem reproduzíveis, e a condução lê a mesma lista (`declaracao.mjs`, `saidasGeradas`). Sem o campo, a lista é vazia (HN-29 T42).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["caminho", "comando"],
+        "properties": {
+          "caminho": { "type": "string", "$ref": "#/$defs/caminho", "not": { "pattern": "[*?\\[\\]{}]|[\\\\/]$" } },
+          "comando": { "type": "string", "minLength": 1, "pattern": "\\S" }
+        }
+      }
+    },
+    "raiz_do_grafo": {
+      "description": "OPCIONAL: a pasta do grafo do projeto, relativa à raiz; o `auto-bump-updated.js` carimba `updated:` nos `.md` sob ela. Sem o campo, o hook não toca arquivo (HN-29 T42).",
+      "type": "string",
+      "$ref": "#/$defs/caminho",
+      "not": { "pattern": "[*?\\[\\]{}]|^\\.[\\\\/]*$" }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "papel": { "const": "fonte" } } },
+      "then": { "required": ["listas"], "properties": { "listas": true, "versao": false } }
+    },
+    {
+      "if": { "properties": { "papel": { "const": "consumidor" } } },
+      "then": { "required": ["versao"], "properties": { "versao": true, "listas": false } }
+    }
+  ],
+  "$defs": {
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    },
+    "unidade": {
+      "enum": ["lines", "chars"]
+    },
+    "caminho": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "not":{ "pattern": "(^[\\\\/])|(^[A-Za-z]:)|((^|[\\\\/])\\.\\.([\\\\/]|$))" }
+    }
+  }
+}
