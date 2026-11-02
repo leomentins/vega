@@ -85,6 +85,34 @@ export function varrer(raiz, arquivos, termos) {
   return achados;
 }
 
+// `import … from "x"`, `export … from "x"`, `import "x"` e `import("x")` com literal. Limite: não vê
+// `require`, `createRequire`, `new URL(…, import.meta.url)` nem `import()` de especificador
+// calculado, e lê o texto cru (import citado em comentário ou string conta, do lado seguro).
+const RE_IMPORT = /(?:\bimport\s*(?:[\w*{}\s,$]+?\s*from\s*)?|\bexport\s*[\w*{}\s,$]+?\s*from\s*|\bimport\s*\(\s*)(["'])([^"'\n]+)\1/g;
+const CODIGO = /\.(?:m?js|cjs)$/;
+
+/** Os especificadores relativos (`./`, `../`) que o texto importa, estáticos ou dinâmicos. */
+export function importsRelativos(texto) {
+  return [...texto.matchAll(RE_IMPORT)].map((m) => m[2]).filter((s) => s.startsWith("./") || s.startsWith("../"));
+}
+
+/**
+ * `origem -> especificador => destino` para cada import relativo de arquivo listado que não
+ * resolve, pelo destino dele, para o destino de outro arquivo listado. Vazio = fechado (T44).
+ */
+export function importsSoltos(pares, ler) {
+  const destinos = new Set(pares.map((p) => p.destino));
+  const soltos = [];
+  for (const { origem, destino } of pares) {
+    if (!CODIGO.test(origem)) continue;
+    for (const s of importsRelativos(ler(origem))) {
+      const alvo = path.posix.normalize(path.posix.join(path.posix.dirname(destino), s));
+      if (!destinos.has(alvo)) soltos.push(`${origem} -> ${s} => ${alvo}`);
+    }
+  }
+  return soltos;
+}
+
 /** Por que o caminho não pode sair, ou `null`. */
 export function recusaDeCaminho(caminho, lista) {
   if (PROIBIDO_PREFIXO.some((p) => caminho.startsWith(p))) return "lugar de dado de paciente";
@@ -141,6 +169,10 @@ describe("as listas do que sai, na fonte", { skip: fora }, () => {
       if (pagina) assert.ok(!caminhos.includes(pagina), `${pagina}: a página do projeto é camada do OS`);
     });
 
+    test(`${l}: todo import relativo de arquivo listado resolve para outro listado, pelos destinos`, () => {
+      assert.deepEqual(importsSoltos(dados[l].pares, (f) => readFileSync(path.join(RAIZ, f), "utf8")), []);
+    });
+
     test(`${l}: canário — nenhum arquivo contém termo do vocabulário proibido`, () => {
       const termos = linhasUteis(readFileSync(path.join(RAIZ, VOCABULARIO[l]), "utf8"));
       assert.ok(termos.length > 0, `vocabulário ${l} vazio`);
@@ -188,6 +220,28 @@ describe("as regras das listas, sem a fonte", () => {
       { origem: "r.md", destino: "s.md" },
     ]);
     assert.throws(() => expandir(lerLista("z/"), arv), /sem arquivo/);
+  });
+
+  test("o fechamento dos imports vê estático e dinâmico, resolve pelo destino e acusa o solto", () => {
+    // Montado por `q` para este arquivo, que está na lista, não casar o próprio fechamento.
+    const q = (s) => JSON.stringify(s);
+    const textos = {
+      "a/x.mjs": `import { f } from ${q("./y.mjs")};\nexport { g } from ${q("../b/z.mjs")};\nimport ${q("node:fs")};\nconst m = await import(${q("./w.mjs")});\n`,
+      "a/y.mjs": `import x from ${q("pacote")};\n`,
+      "b/z.mjs": "",
+      "c/leia.md": `import { nada } from ${q("./sumiu.mjs")};\n`,
+    };
+    const pares = [
+      { origem: "a/x.mjs", destino: "p/a/x.mjs" },
+      { origem: "a/y.mjs", destino: "p/a/y.mjs" },
+      { origem: "b/z.mjs", destino: "p/b/z.mjs" },
+      { origem: "c/leia.md", destino: "p/c/leia.md" },
+    ];
+    assert.deepEqual(importsRelativos(textos["a/x.mjs"]), ["./y.mjs", "../b/z.mjs", "./w.mjs"]);
+    assert.deepEqual(importsSoltos(pares, (f) => textos[f]), ["a/x.mjs -> ./w.mjs => p/a/w.mjs"]);
+    // Destino que muda o caminho relativo entre os dois também solta o import.
+    const torto = pares.map((p) => (p.origem === "b/z.mjs" ? { ...p, destino: "q/z.mjs" } : p));
+    assert.ok(importsSoltos(torto, (f) => textos[f]).includes("a/x.mjs -> ../b/z.mjs => p/b/z.mjs"));
   });
 
   test("o termo casa como palavra inteira e sem caixa", () => {

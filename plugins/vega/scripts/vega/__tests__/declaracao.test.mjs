@@ -27,7 +27,7 @@ const EXEMPLO = ler(path.join(DIR_EXEMPLO, ".vega", "declaracao.json"));
 const ADAPTADOR_DE_TESTE = ler(path.join(PLUGIN, "scripts", "conducao", "__tests__", "fixtures", "projeto-de-teste", ".altair", "adaptador.json"));
 
 const FONTE = { esquema: 1, papel: "fonte", decisoes: { destino: "banco" }, listas: { corpo: ".vega/lista-corpo.txt", empresa: ".vega/lista-empresa.txt" } };
-const CONSUMIDOR = { esquema: 1, papel: "consumidor", versao: { corpo: "1.2.3" }, decisoes: { destino: "git" } };
+const CONSUMIDOR = { esquema: 1, papel: "consumidor", versao: { corpo: "1.2.3" }, decisoes: { destino: "git", arquivo: ".vega/decisoes.jsonl" } };
 const VALIDAS = [
   FONTE,
   CONSUMIDOR,
@@ -104,6 +104,19 @@ describe("o esquema e o leitor recusam o mesmo", () => {
     recusa({ ...FONTE, papel: "Fonte" }, /^papel: /);
     for (const destino of ["Git", "gti", ""]) recusa({ ...FONTE, decisoes: { destino } }, /^decisoes\.destino: /);
     recusa((({ decisoes, ...r }) => r)(FONTE), /falta decisoes/);
+  });
+
+  test("o arquivo de decisões: obrigatório com git, recusado com banco; o layout das worktrees de ciclo (HN-29 T27)", () => {
+    recusa({ ...FONTE, decisoes: { destino: "git" } }, /decisoes\.arquivo: obrigatório com destino git/);
+    recusa({ ...FONTE, decisoes: { destino: "banco", arquivo: "d.jsonl" } }, /decisoes\.arquivo: só com destino git/);
+    recusa({ ...FONTE, decisoes: { destino: "git", arquivo: "../fora.jsonl" } }, /decisoes\.arquivo: caminho fora da raiz/);
+    recusa({ ...FONTE, worktrees_de_ciclo: { ramo: "ciclo-" } }, /worktrees_de_ciclo: falta pasta/);
+    recusa({ ...FONTE, worktrees_de_ciclo: { ramo: "ciclo-", pasta: "a/b" } }, /worktrees_de_ciclo\.pasta: /);
+    recusa({ ...FONTE, worktrees_de_ciclo: { ramo: " ", pasta: "wt" } }, /worktrees_de_ciclo\.ramo: /);
+    const d = validar({ ...FONTE, decisoes: { destino: "git", arquivo: "decisoes.jsonl" }, worktrees_de_ciclo: { ramo: "ciclo-", pasta: "wt" } });
+    assert.deepEqual(d.decisoes, { destino: "git", arquivo: "decisoes.jsonl" });
+    assert.deepEqual(d.worktrees_de_ciclo, { ramo: "ciclo-", pasta: "wt" });
+    assert.equal(validar(FONTE).worktrees_de_ciclo, null);
   });
 
   test("versão só no consumidor, listas só na fonte, cada um com a sua obrigatória", () => {

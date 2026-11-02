@@ -30,12 +30,17 @@
  * que a faixa descende do marcador da referência local.
  */
 import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { codigoDoAdaptador, lerAdaptador, nomeDoOperador, paginaDoProjeto } from "./adaptador.mjs";
 import { ENV_GIT, PRAZO_REDE_MS, git as rodar, tentarGit as tentar } from "./git-exec.mjs";
 import { ErroPlano, caminhoDoCanonico, lerPlanoCongelado, lerPlanoNoCommit } from "./ler-plano.mjs";
 import { RE, lerMarcas, ultimaAutorizacao } from "./marcas.mjs";
 import * as verbos from "./verbos.mjs";
+import { saidasGeradas } from "../vega/declaracao.mjs";
+
+/** Prazo do comando que regera uma saída gerada no `trazer` (HN-29 T23): `gen-types` e `next build` cabem. */
+export const PRAZO_REGENERAR_MS = 900_000;
 
 const { TASK_RE, SHA_PREFIXO_RE, exigir, perguntar, shaDoCherryPick } = verbos;
 
@@ -600,14 +605,24 @@ export function trazer({ repo, ciclo, task, tentativa, shaAvisado = null, sessao
   if (semAprovacao) return semAprovacao;
 
   const modo = verbos.modoDeTrazer({ head, paiMarcador });
+  let regeneradas = [];
+  let puladas = [];
   if (modo === "fast-forward") {
     rodar(repo, ["merge", "--ff-only", "--quiet", ponta]);
   } else {
-    const cp = tentar(repo, ["cherry-pick", "-x", "--allow-empty", `${marcador}..${ponta}`]);
+    const cp = cherryPickRegerando(repo, `${marcador}..${ponta}`, faixa.length);
     if (cp.status !== 0) {
       const ab = tentar(repo, ["cherry-pick", "--abort"]);
-      return perguntar("conflito", { ...base, detalhe: cp.erro.split("\n").slice(-3).join(" | "), abortado: ab.status === 0 });
+      return perguntar("conflito", {
+        ...base,
+        detalhe: cp.erro.split("\n").slice(-3).join(" | "),
+        abortado: ab.status === 0,
+        ...(cp.conflitos?.length ? { conflitos: cp.conflitos } : {}),
+        ...(cp.regeneradas?.length ? { regeneradasAntesDoAbort: cp.regeneradas } : {}),
+      });
     }
+    regeneradas = cp.regeneradas;
+    puladas = cp.puladas;
   }
   const ate = rodar(repo, ["rev-parse", "HEAD"]);
   // Só aviso: erro ao calculá-lo não pode deixar o cherry-pick aplicado sem o registro `trazida`.
@@ -622,7 +637,101 @@ export function trazer({ repo, ciclo, task, tentativa, shaAvisado = null, sessao
 
   const registro = gravarTrazida(repo, { ciclo, task, tentativa, nonce, marcador, ponta, sessao, base: head, ate, modo });
   const apagada = apagarTentativa(repo, ciclo, task, tentativa);
-  return comCopia(repo, ciclo, { acao: "trazida", ...base, modo, antes: head, depois: ate, ...(carimboOrfao ? { carimboOrfao } : {}), registro, apagada });
+  return comCopia(repo, ciclo, {
+    acao: "trazida",
+    ...base,
+    modo,
+    antes: head,
+    depois: ate,
+    ...(regeneradas.length ? { regeneradas } : {}),
+    ...(puladas.length ? { puladas } : {}),
+    ...(carimboOrfao ? { carimboOrfao } : {}),
+    registro,
+    apagada,
+  });
+}
+
+/**
+ * Os arquivos em conflito que são todos saída gerada declarada, ou null: basta
+ * um caminho fora da lista (ou nenhum conflito listado) para o conflito seguir
+ * sendo pergunta. Devolve as entradas `{ caminho, comando }` na ordem da lista.
+ */
+export function conflitoSoEmGeradas(conflitos, geradas) {
+  if (!conflitos.length) return null;
+  const porCaminho = new Map(geradas.map((s) => [s.caminho, s]));
+  if (!conflitos.every((c) => porCaminho.has(c))) return null;
+  return geradas.filter((s) => conflitos.includes(s.caminho));
+}
+
+/**
+ * `cherry-pick -x` da faixa em que conflito só em saída gerada declarada
+ * (`saidas_geradas` do `.vega/`, lidas por `saidasGeradas`; HN-29 T23) vira
+ * regeneração: roda o comando de cada uma na árvore da maestra, adiciona e
+ * segue o cherry-pick, que faz o commit. A lista é lida ANTES do cherry-pick,
+ * da árvore no HEAD da maestra: commit da filha que mexa no `.vega/` não
+ * escolhe o comando que a maestra roda. Conflito em outro caminho, comando
+ * que sai diferente de 0, saída ausente ou com marcador de conflito, comando
+ * que deixa outro arquivo sujo ou não rastreado, git que falha ao listar os
+ * conflitos, ou exceção ⇒ `status` diferente de 0, com `conflitos` e as
+ * `regeneradas` até ali, e quem chama aborta e pergunta. `limite` é o
+ * número de commits da faixa: cada `--continue` avança pelo menos um.
+ */
+function cherryPickRegerando(repo, faixa, limite) {
+  const regeneradas = [];
+  const puladas = [];
+  let conflitos = [];
+  const falha = (erro) => ({ status: 1, erro, conflitos, regeneradas });
+  const emConflito = () => {
+    const d = tentar(repo, [...SEM_ASPAS, "diff", "--name-only", "--diff-filter=U"]);
+    return d.status === 0 ? { lista: linhas(d.saida ?? "") } : { erro: `git diff --diff-filter=U saiu ${d.status ?? "sem status (prazo)"}: ${d.erro}` };
+  };
+  try {
+    const geradas = saidasGeradas(repo);
+    let cp = tentar(repo, ["cherry-pick", "-x", "--allow-empty", faixa]);
+    for (let i = 0; cp.status !== 0 && i < limite; i++) {
+      const c = emConflito();
+      if (c.erro) return falha(c.erro);
+      conflitos = c.lista;
+      const alvo = conflitoSoEmGeradas(conflitos, geradas);
+      if (!alvo) return { ...cp, conflitos, regeneradas };
+      for (const s of alvo) {
+        const r = spawnSync(s.comando, { cwd: repo, shell: true, encoding: "utf8", env: ENV_GIT, timeout: PRAZO_REGENERAR_MS, killSignal: "SIGKILL" });
+        if (r.status !== 0) {
+          const como = r.error ? (r.error.code ?? r.error.message) : r.signal ? `sinal ${r.signal}` : r.status;
+          return falha(`regenerar ${s.caminho} (\`${s.comando}\`) saiu ${como}: ${(r.stderr || r.stdout || "").trim()}`);
+        }
+        const arquivo = path.join(repo, s.caminho);
+        if (!existsSync(arquivo) || /^<{7} /m.test(readFileSync(arquivo, "utf8")))
+          return falha(`regenerar ${s.caminho} (\`${s.comando}\`) deixou o arquivo ausente ou com marcador de conflito`);
+        const add = tentar(repo, ["add", "--", s.caminho]);
+        if (add.status !== 0) return falha(`git add ${s.caminho}: ${add.erro}`);
+        if (!regeneradas.some((x) => x.caminho === s.caminho)) regeneradas.push({ caminho: s.caminho, comando: s.comando });
+      }
+      const resta = emConflito();
+      if (resta.erro) return falha(resta.erro);
+      if (resta.lista.length) {
+        conflitos = resta.lista;
+        return falha(`regerada, segue em conflito: ${resta.lista.join(", ")}`);
+      }
+      // O comando só mexe na saída que regera: arquivo sujo fora do índice ou não rastreado não
+      // entra calado no commit nem fica para trás (o ignorado fica, como o `.next/` do `next build`).
+      const fora = [];
+      for (const args of [["diff", "--name-only"], ["ls-files", "--others", "--exclude-standard"]]) {
+        const l = tentar(repo, [...SEM_ASPAS, ...args]);
+        if (l.status !== 0) return falha(`git ${args.join(" ")} saiu ${l.status ?? "sem status (prazo)"}: ${l.erro}`);
+        fora.push(...linhas(l.saida ?? ""));
+      }
+      if (fora.length) return falha(`regenerar deixou fora do índice: ${fora.join(", ")} — não limpo, conferir à mão`);
+      // Regerada igual ao HEAD, o commit da filha fica vazio e o `--continue` recusa: não há o que
+      // trazer dele, e ele sai da faixa (`puladas`) — o cherry-pick segue com os outros.
+      const vazio = tentar(repo, ["diff", "--cached", "--quiet"]).status === 0;
+      if (vazio) puladas.push(rodar(repo, ["rev-parse", "CHERRY_PICK_HEAD"]));
+      cp = vazio ? tentar(repo, ["cherry-pick", "--skip"]) : tentar(repo, ["-c", "core.editor=true", "cherry-pick", "--continue"]);
+    }
+    return cp.status === 0 ? { ...cp, regeneradas, puladas } : { ...cp, conflitos, regeneradas };
+  } catch (e) {
+    return falha(`regenerar: ${String(e?.message ?? e).split("\n")[0]}`);
+  }
 }
 
 // `core.quotePath=false`: caminho não-ASCII sai cru, não entre aspas — senão foge do `PROSA_RE` e da allowlist de carimbo.

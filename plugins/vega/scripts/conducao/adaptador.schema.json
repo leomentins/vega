@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "conducao/adaptador.schema.json",
   "title": "Declaração do adaptador da condução (campo conducao de .vega/declaracao.json, ou .altair/adaptador.json)",
-  "description": "Esquema versionado. Campo novo entra com versão nova, e a anterior segue aceita. A v5 acrescenta `tiers` (tier abstrato → modelo, texto opaco) e, em `sessao`, o contrato do host que o `pre-voo` confere (`cli`, `settings`, `variavelDoTrafego`, `ponte`, `instrucoes`); a v4 acrescenta `verificacao` (a marca que a Verificação embrulhada liga e as variáveis de produção que ela tira) e `guardas` (a pasta do `<guard>-mode`); a v3 acrescenta `pagina`; a v2 acrescenta `versao` e `codigo`; a v1 (só de dados, sem `versao`) segue aceita. O leitor sem dependência é `adaptador.mjs` (`validar`), que aplica a mesma regra; a forma do código apontado em `codigo` é conferida por `validarCodigo`.",
+  "description": "Esquema versionado. Campo novo entra com versão nova, e a anterior segue aceita. A v6 acrescenta `capacidade` (de onde vem a capacidade da máquina: `codigo`, a função `capacidade()` do código do adaptador, ou `padrao`, o teto padrão do núcleo); a v5 acrescenta `tiers` (tier abstrato → modelo, texto opaco) e, em `sessao`, o contrato do host que o `pre-voo` confere (`cli`, `settings`, `variavelDoTrafego`, `ponte`, `instrucoes`); a v4 acrescenta `verificacao` (a marca que a Verificação embrulhada liga e as variáveis de produção que ela tira) e `guardas` (a pasta do `<guard>-mode`); a v3 acrescenta `pagina`; a v2 acrescenta `versao` e `codigo`; a v1 (só de dados, sem `versao`) segue aceita. O leitor sem dependência é `adaptador.mjs` (`validar`), que aplica a mesma regra; a forma do código apontado em `codigo` é conferida por `validarCodigo`.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -19,7 +19,8 @@
         2,
         3,
         4,
-        5
+        5,
+        6
       ],
       "description": "Versão do esquema; ausente = 1."
     },
@@ -276,6 +277,13 @@
         }
       },
       "description": "Só na v5: o modelo de cada tier abstrato, texto opaco que o núcleo só repete no aviso do `pre-voo`."
+    },
+    "capacidade": {
+      "enum": [
+        "codigo",
+        "padrao"
+      ],
+      "description": "Só na v6, OPCIONAL (default `padrao`): de onde vem a capacidade da máquina que o `proximo` usa quando a entrada não traz `tetoPonte`. `codigo` ⇒ a função `capacidade()` do código do adaptador mede quantas filhas novas cabem (exige `codigo`); `padrao` ⇒ o teto padrão do núcleo."
     }
   },
   "allOf": [
@@ -295,7 +303,8 @@
               2,
               3,
               4,
-              5
+              5,
+              6
             ]
           }
         },
@@ -319,7 +328,8 @@
             "enum": [
               3,
               4,
-              5
+              5,
+              6
             ]
           }
         },
@@ -342,7 +352,8 @@
           "versao": {
             "enum": [
               4,
-              5
+              5,
+              6
             ]
           }
         },
@@ -365,7 +376,8 @@
           "versao": {
             "enum": [
               4,
-              5
+              5,
+              6
             ]
           }
         },
@@ -386,7 +398,10 @@
       "then": {
         "properties": {
           "versao": {
-            "const": 5
+            "enum": [
+              5,
+              6
+            ]
           }
         },
         "required": [
@@ -450,11 +465,51 @@
       "then": {
         "properties": {
           "versao": {
-            "const": 5
+            "enum": [
+              5,
+              6
+            ]
           }
         },
         "required": [
           "versao"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "capacidade": true
+        },
+        "required": [
+          "capacidade"
+        ]
+      },
+      "then": {
+        "properties": {
+          "versao": {
+            "const": 6
+          }
+        },
+        "required": [
+          "versao"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "capacidade": {
+            "const": "codigo"
+          }
+        },
+        "required": [
+          "capacidade"
+        ]
+      },
+      "then": {
+        "required": [
+          "codigo"
         ]
       }
     }

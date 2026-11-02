@@ -41,7 +41,7 @@ const TYPES = "packages/shared/src/supabase/types.ts";
 const NEXT_ENV = "apps/sistoli-os/next-env.d.ts";
 const HOJE = new Date().toISOString().slice(0, 10);
 
-const MINIMA = { esquema: 1, papel: "fonte", decisoes: { destino: "git" }, listas: { corpo: "a.txt", empresa: "b.txt" } };
+const MINIMA = { esquema: 1, papel: "fonte", decisoes: { destino: "git", arquivo: ".vega/decisoes.jsonl" }, listas: { corpo: "a.txt", empresa: "b.txt" } };
 
 function env(projeto) {
   const e = { ...process.env };

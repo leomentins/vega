@@ -42,7 +42,7 @@ function projeto({ declaracao = null, settings = {} } = {}) {
   return repo;
 }
 
-const consumidor = (corpo, empresa) => ({ esquema: 1, papel: "consumidor", versao: { corpo, ...(empresa ? { empresa } : {}) }, decisoes: { destino: "git" } });
+const consumidor = (corpo, empresa) => ({ esquema: 1, papel: "consumidor", versao: { corpo, ...(empresa ? { empresa } : {}) }, decisoes: { destino: "git", arquivo: ".vega/decisoes.jsonl" } });
 const FONTE = { esquema: 1, papel: "fonte", decisoes: { destino: "banco" }, listas: { corpo: ".vega/lista-corpo.txt", empresa: ".vega/lista-empresa.txt" } };
 
 /** Um `installPath` de cache com o `plugin.json` na versão dada (`null` = cache perdido). */

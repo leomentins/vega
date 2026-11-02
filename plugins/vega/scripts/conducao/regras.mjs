@@ -95,14 +95,23 @@ export function regraTrazer(ctx) {
   return null;
 }
 
+/** A filha está esperando a vez na fila de builds: `vez` é o último estado dela lá. */
+function naEsperaDaVez(f) {
+  return typeof f.vez === "string" && f.vez.trim().toLowerCase() === "esperando";
+}
+
 /**
  * Vagas para abrir: o menor entre a largura do ciclo menos as tentativas em
- * voo ativas e o teto da ponte menos as filhas vivas.
+ * voo ativas e o teto da ponte menos as filhas vivas. Filha cujo último estado
+ * é a espera da fila de builds (`vez: "esperando"`, de `vez-de-build.mjs`) não
+ * conta como viva (HN-29 T25): o build dela só roda quando a máquina cabe, e
+ * contá-la seguraria a vaga de uma task que não builda. A tentativa dela segue
+ * em voo: a largura e os Outputs continuam ocupados.
  *
  * Lê: `filhas`, `tetoPonte` (da entrada, ou null), `tetoPadrao`, `largura`, `vooAtivo`.
  */
 export function vagasDoTeto({ filhas, tetoPonte, tetoPadrao, largura, vooAtivo }) {
-  const vivas = filhas.filter((f) => f.estado !== "ARCHIVED").length;
+  const vivas = filhas.filter((f) => f.estado !== "ARCHIVED" && !naEsperaDaVez(f)).length;
   const teto = Number.isInteger(tetoPonte) ? tetoPonte : tetoPadrao;
   const vagas = Math.max(0, Math.min(largura - vooAtivo.length, teto - vivas));
   return { vivas, teto, vagas };

@@ -10,7 +10,9 @@
  *                                          a instala pelas vitrines
  *   versao    { corpo, empresa? }        — só no consumidor, obrigatório: a versão que ele instala,
  *                                          do corpo e, quando há, da camada da empresa (`x.y.z`)
- *   decisoes  { destino }                — onde o coletor grava as decisões: `banco` | `git`
+ *   decisoes  { destino, arquivo? }      — onde o coletor grava as decisões: `banco` | `git`;
+ *                                          `arquivo` (o arquivo de decisões, relativo à raiz) é
+ *                                          obrigatório com `git` e recusado com `banco` (HN-29 T27)
  *   listas    { corpo, empresa }         — só na fonte, obrigatório: onde estão as listas do que
  *                                          sai, relativas à raiz do repositório
  *   conducao  { … }                      — OPCIONAL: o adaptador da condução, conferido por
@@ -30,6 +32,9 @@
  *                                          conducao os le pela mesma `saidasGeradas` (HN-29 T42)
  *   raiz_do_grafo       caminho          — OPCIONAL: a pasta do grafo do projeto, onde o
  *                                          `auto-bump-updated.js` carimba `updated:` (HN-29 T42)
+ *   worktrees_de_ciclo  { ramo, pasta }  — OPCIONAL: o layout das worktrees de ciclo — o prefixo
+ *                                          do ramo e o nome da pasta (sem barra) onde elas moram;
+ *                                          o coletor de decisões infere o ciclo por ele (HN-29 T27)
  *
  * As três últimas vieram do `harness.config.json` (HN-29 T12) com o mesmo nome e a mesma
  * forma: mover antes de mudar. Ausentes saem como lista vazia; quem precisa de uma não vazia
@@ -164,6 +169,16 @@ function saidasDeclaradas(v) {
   return Object.freeze(saidas);
 }
 
+function worktreesDeclaradas(v) {
+  if (v === undefined) return null;
+  const w = objeto(v, "worktrees_de_ciclo");
+  soCampos(w, ["ramo", "pasta"], "worktrees_de_ciclo");
+  if (typeof w.ramo !== "string" || !w.ramo.trim()) throw new ErroDeclaracao("worktrees_de_ciclo.ramo: esperado o prefixo do ramo de ciclo");
+  if (typeof w.pasta !== "string" || !w.pasta.trim() || /[\\/]/.test(w.pasta) || w.pasta === "." || w.pasta === "..")
+    throw new ErroDeclaracao(`worktrees_de_ciclo.pasta: esperado o nome da pasta, sem barra (${JSON.stringify(w.pasta)})`);
+  return Object.freeze({ ramo: w.ramo, pasta: w.pasta });
+}
+
 function raizDeclarada(v) {
   if (v === undefined) return null;
   const bruto = caminho(v, "raiz_do_grafo");
@@ -175,14 +190,16 @@ function raizDeclarada(v) {
 /** Valida a declaração já parseada; devolve a forma normalizada, congelada. */
 export function validar(bruto) {
   const d = objeto(bruto, "declaração");
-  soCampos(d, ["esquema", "papel", "decisoes"], "declaração", ["versao", "listas", "conducao", "immutable_docs", "lean_scope_docs", "lean_record_scopes", "saidas_geradas", "raiz_do_grafo"]);
+  soCampos(d, ["esquema", "papel", "decisoes"], "declaração", ["versao", "listas", "conducao", "immutable_docs", "lean_scope_docs", "lean_record_scopes", "saidas_geradas", "raiz_do_grafo", "worktrees_de_ciclo"]);
   if (!ESQUEMAS.includes(d.esquema)) throw new ErroDeclaracao(`esquema: esperado ${ESQUEMAS.join(" ou ")} (veio ${JSON.stringify(d.esquema)})`);
   if (!PAPEIS.includes(d.papel)) throw new ErroDeclaracao(`papel: esperado ${PAPEIS.join(" ou ")} (veio ${JSON.stringify(d.papel)})`);
 
   const k = objeto(d.decisoes, "decisoes");
-  soCampos(k, ["destino"], "decisoes");
+  soCampos(k, ["destino"], "decisoes", ["arquivo"]);
   if (!DESTINOS.includes(k.destino)) throw new ErroDeclaracao(`decisoes.destino: esperado ${DESTINOS.join(" ou ")} (veio ${JSON.stringify(k.destino)})`);
-  const decisoes = Object.freeze({ destino: k.destino });
+  if (k.destino === "git" && k.arquivo === undefined) throw new ErroDeclaracao("decisoes.arquivo: obrigatório com destino git");
+  if (k.destino !== "git" && k.arquivo !== undefined) throw new ErroDeclaracao("decisoes.arquivo: só com destino git");
+  const decisoes = Object.freeze({ destino: k.destino, ...(k.arquivo !== undefined ? { arquivo: caminho(k.arquivo, "decisoes.arquivo") } : {}) });
 
   let versao = null;
   let listas = null;
@@ -213,6 +230,7 @@ export function validar(bruto) {
     lean_record_scopes: escoposDeRegistro(d.lean_record_scopes),
     saidas_geradas: saidasDeclaradas(d.saidas_geradas),
     raiz_do_grafo: raizDeclarada(d.raiz_do_grafo),
+    worktrees_de_ciclo: worktreesDeclaradas(d.worktrees_de_ciclo),
   });
 }
 

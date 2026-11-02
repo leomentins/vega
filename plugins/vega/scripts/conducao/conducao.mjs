@@ -57,6 +57,8 @@
  *   trazer T<k> --tentativa <n> [--sha <sha8>] [--sessao <id>] [--aprovado <sha>]
  *      aceita merge de origin/main na faixa (só por fast-forward; o que veio do main não pergunta) e
  *      caminho clínico de tela no segmento que os Steps nomeiam (C24 do VEGA-28, P21/P24 do ATRM-51)
+ *      conflito do cherry-pick só em saída gerada declarada (`saidas_geradas` do `.vega/`) é regerado
+ *      pelo comando dela e entra no commit, sem perguntar (`regeneradas`; HN-29 T23)
  *      `--aprovado` aceita o SHA inteiro ou prefixo único de 7+ caracteres da ponta;
  *      o que não confere sai `perguntar` com motivo `aprovado-nao-confere` (P24 do ATRM-51)
  *   conferir-carimbo T<k>
@@ -111,7 +113,7 @@
  * Entrada (JSON):
  *   { "filhas": [{ "sessao", "task", "tentativa", "nonce", "estado", "aviso", "arquivamentos" }],
  *     "agora": "<ISO>",
- *     "tetoPonte": 16,
+ *     "tetoPonte": 16,           (ausente ⇒ o `capacidade()` do adaptador, se declarado; senão o padrão)
  *     "ci": { "sha": "…", "veredito": "verde|vermelho", "run": <id> },
  *     "sessaoMaestra": "<id da sessão que chama>",
  *     "proposta": { "numero": <N>, "state": "OPEN|MERGED|CLOSED" },
@@ -148,6 +150,7 @@ import * as gitConducao from "./git-conducao.mjs";
 import * as logEventos from "./log-eventos.mjs";
 import * as pergunta from "./pergunta.mjs";
 import { preVoo } from "./pre-voo.mjs";
+import { saidasGeradas } from "../vega/declaracao.mjs";
 import { ErroGitPrazo, tentarGit } from "./git-exec.mjs";
 import { RE, lerMarcas } from "./marcas.mjs";
 import {
@@ -173,6 +176,7 @@ import {
   regraTrazidaSemConferencia,
   regraVigia,
   regraWorkstation,
+  vagasDoTeto,
 } from "./regras.mjs";
 import { casoDeConferencia, opcoesDaConferencia } from "./verbos.mjs";
 import {
@@ -441,11 +445,31 @@ export const ORDEM_DAS_REGRAS = Object.freeze([
 ]);
 
 /**
- * O contexto da decisão (regras.mjs `contextoDaDecisao`), com a fábrica de
- * ações `acao` e os auxiliares desta casa injetados. Os campos estão descritos lá.
+ * Saída gerada declarada (`saidas_geradas` do `.vega/`, a mesma lista do
+ * `git-guard`; HN-29 T23) não ocupa vaga: as tasks em voo e as prontas de
+ * servidor chegam à `regraAbrir` sem ela nos Outputs, e duas tasks que só
+ * dividem saída gerada abrem juntas — o conflito nela, no `trazer`, vira
+ * regeneração. O plano não muda: só a leitura da vaga.
  */
-export function contextoDoProximo({ ciclo, head, plano, planoBlob, planoHead, planoHeadBlob, diffPlano, autorizacoes, estado, entrada = {}, agora = null, reinicioEm = null, encerradas = new Set(), repo = null, replanos = null, reconhecer = parsePhaseCommit, autorizacaoDoCiclo = null, conferencia = [], temCi = true }, acao) {
-  return contextoDaDecisao(
+export function semSaidasGeradasNaVaga(ctx, geradas) {
+  if (!geradas.length) return ctx;
+  const gerada = new Set(geradas);
+  const sem = (t) => ({ ...t, outputs: t.outputs.filter((o) => !gerada.has(o)) });
+  const voo = Object.getOwnPropertyDescriptor(ctx, "vooAtivo").get;
+  const servidor = Object.getOwnPropertyDescriptor(ctx, "servidor").get;
+  return Object.defineProperties(ctx, {
+    vooAtivo: { get: () => voo.call(ctx).map((v) => ({ ...v, t: sem(v.t) })), enumerable: true, configurable: true },
+    servidor: { get: () => servidor.call(ctx).map(sem), enumerable: true, configurable: true },
+  });
+}
+
+/**
+ * O contexto da decisão (regras.mjs `contextoDaDecisao`), com a fábrica de
+ * ações `acao` e os auxiliares desta casa injetados. Os campos estão descritos lá;
+ * `geradas` são os caminhos das saídas geradas declaradas (`semSaidasGeradasNaVaga`).
+ */
+export function contextoDoProximo({ ciclo, head, plano, planoBlob, planoHead, planoHeadBlob, diffPlano, autorizacoes, estado, entrada = {}, agora = null, reinicioEm = null, encerradas = new Set(), repo = null, replanos = null, reconhecer = parsePhaseCommit, autorizacaoDoCiclo = null, conferencia = [], temCi = true, geradas = [] }, acao) {
+  const ctx = contextoDaDecisao(
     { ciclo, head, plano, planoBlob, planoHead, planoHeadBlob, diffPlano, autorizacoes, estado, entrada, agora, reinicioEm, encerradas, repo, replanos, reconhecer, autorizacaoDoCiclo, conferencia, temCi },
     {
       acao,
@@ -468,6 +492,7 @@ export function contextoDoProximo({ ciclo, head, plano, planoBlob, planoHead, pl
       epoch,
     },
   );
+  return semSaidasGeradasNaVaga(ctx, geradas);
 }
 
 /**
@@ -798,6 +823,23 @@ export function problemasDaEntrada(entrada, { nivel = null } = {}) {
 const CAMPOS_DA_ENTRADA = Object.freeze(["filhas", "aprovacoes", "ci", "proposta", "tetoPonte", "agora", "sessaoMaestra"]);
 
 /**
+ * A entrada com o teto da ponte medido pelo adaptador (HN-29 T24): sem
+ * `tetoPonte` na entrada e com a declaração `capacidade: "codigo"`, o teto é
+ * filhas vivas (a mesma conta de `vagasDoTeto`) + `filhasNovas` do
+ * `capacidade()` do adaptador. `tetoPonte` na entrada vence; medição `null`
+ * (ou declaração sem o campo) deixa a entrada como está, e vale o teto padrão.
+ */
+export function comTetoDoAdaptador(repo, entrada) {
+  if (Number.isInteger(entrada.tetoPonte)) return entrada;
+  const cap = adaptador.capacidadeDoProjeto(repo);
+  if (!cap) return entrada;
+  const { vivas } = vagasDoTeto({ filhas: Array.isArray(entrada.filhas) ? entrada.filhas : [], tetoPonte: 0, tetoPadrao: 0, largura: 0, vooAtivo: [] });
+  const tetoPonte = vivas + cap.filhasNovas;
+  process.stderr.write(`conducao: tetoPonte ${tetoPonte} = ${vivas} viva(s) + ${cap.filhasNovas} nova(s), medido pelo adaptador${cap.texto ? ` (${cap.texto})` : ""}\n`);
+  return { ...entrada, tetoPonte };
+}
+
+/**
  * `reinicio` é o registro que `reiniciar-ponte.sh` grava em todo reinício da
  * ponte (`ponte-reinicio.json`; vale o `quando`), já confirmado pela CLI
  * (`reinicioConfirmado`); a maestra o passa com `--reinicio <arquivo>`.
@@ -911,7 +953,7 @@ export function proximo({ repo, ciclo, entrada = {}, entradaErro = null, reinici
     diffPlano,
     autorizacoes,
     estado: estadoDasTasks(marcas, lerRefsLocais(repo, ciclo), gitConducao.lerTrazidas(repo, ciclo)),
-    entrada,
+    entrada: comTetoDoAdaptador(repo, entrada),
     agora: entrada.agora !== undefined ? epoch(entrada.agora) : Math.floor(Date.now() / 1000),
     reinicioEm: reinicio ? epoch(reinicio.quando) : null,
     encerradas,
@@ -921,6 +963,8 @@ export function proximo({ repo, ciclo, entrada = {}, entradaErro = null, reinici
     // projeto tem CI da proposta (T15, 5-a).
     conferencia: decl.conferencia,
     temCi: decl.ci,
+    // Saídas geradas declaradas não serializam tasks (HN-29 T23).
+    geradas: saidasGeradas(repo).map((s) => s.caminho),
   });
 }
 

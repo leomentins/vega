@@ -26,12 +26,33 @@
       }
     },
     "decisoes": {
-      "description": "Onde o coletor grava as decisões do operador: `banco` (o verbo do banco do harness) ou `git` (arquivo de decisões do projeto).",
+      "description": "Onde o coletor grava as decisões do operador: `banco` (o verbo do banco do harness) ou `git` (arquivo de decisões do projeto). `arquivo`, o arquivo de decisões relativo à raiz, é obrigatório com `git` e recusado com `banco` (HN-29 T27).",
       "type": "object",
       "additionalProperties": false,
       "required": ["destino"],
       "properties": {
-        "destino": { "enum": ["banco", "git"] }
+        "destino": { "enum": ["banco", "git"] },
+        "arquivo": { "$ref": "#/$defs/caminho" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "destino": { "const": "git" } } },
+          "then": { "required": ["arquivo"], "properties": { "arquivo": true } }
+        },
+        {
+          "if": { "properties": { "destino": { "const": "banco" } } },
+          "then": { "properties": { "arquivo": false } }
+        }
+      ]
+    },
+    "worktrees_de_ciclo": {
+      "description": "OPCIONAL: o layout das worktrees de ciclo — `ramo`, o prefixo do ramo de ciclo, e `pasta`, o nome da pasta (sem barra) onde as worktrees moram. O coletor de decisões infere o ciclo da conversa por ele; sem o campo, não infere do ramo nem da pasta (HN-29 T27).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ramo", "pasta"],
+      "properties": {
+        "ramo": { "type": "string", "minLength": 1, "pattern": "\\S" },
+        "pasta": { "type": "string", "minLength": 1, "pattern": "^(?!\\.{1,2}$)(?=.*\\S)[^\\\\/]+$" }
       }
     },
     "listas": {

@@ -10,7 +10,7 @@
  * versionado `adaptador.schema.json` (T20); este leitor é a mesma regra sem
  * dependência npm (o núcleo não carrega `ajv`):
  *
- *   versao      1 | 2 | 3 | 4 | 5       — OPCIONAL, default 1: a versão do esquema. A v1 é a
+ *   versao      1 | 2 | 3 | 4 | 5 | 6   — OPCIONAL, default 1: a versão do esquema. A v1 é a
  *                                         declaração da F2, só de dados, e segue aceita como está;
  *                                         campo novo entra com versão nova, e a anterior segue valendo
  *   codigo      "<arquivo>.mjs" | "<nome>" — a partir da v2, OPCIONAL: o código do adaptador, para o projeto
@@ -66,6 +66,11 @@
  *   tiers       { <tier>: "<modelo>" }  — só na v5, OPCIONAL (T30, D-VEGA29-15): o modelo de cada tier
  *                                         abstrato (`mecanico` · `parecer` · `critico` · `inherit`), texto
  *                                         opaco que o núcleo só repete no aviso do `pre-voo`
+ *   capacidade  "codigo" | "padrao"     — só na v6, OPCIONAL (HN-29 T24), default `"padrao"`: de onde vem
+ *                                         a capacidade da máquina que o `proximo` usa quando a entrada não
+ *                                         traz `tetoPonte`. `"codigo"` ⇒ a função `capacidade()` do código
+ *                                         do adaptador mede (exige `codigo`); `"padrao"` ⇒ o teto padrão do
+ *                                         núcleo (`tetoFilhasPadrao` de `botoes.mjs`)
  *
  * Campo desconhecido, em qualquer nível, é recusado: declaração que o leitor
  * não entende não é lida pela metade. Todo caminho que a declaração aponta
@@ -162,7 +167,7 @@ export function caminhoDoEmbutido(nome) {
 
 const CAMPOS = Object.freeze({
   raiz: ["projeto", "operadores", "estado", "log", "pergunta"],
-  opcionais: ["versao", "codigo", "pagina", "conferencia", "ci", "sessao", "publicacao", "verificacao", "guardas", "tiers"],
+  opcionais: ["versao", "codigo", "pagina", "conferencia", "ci", "sessao", "publicacao", "verificacao", "guardas", "tiers", "capacidade"],
   sessao: ["modosSemClique"],
   sessaoV5: ["cli", "settings", "variavelDoTrafego", "ponte", "instrucoes"],
   ponte: ["unidade"],
@@ -179,7 +184,11 @@ const CAMPOS = Object.freeze({
 const TOKEN = /^[A-Za-z0-9._-]{1,64}$/;
 
 /** Versões do esquema que este leitor aceita; a anterior segue valendo (T20). */
-export const VERSOES = Object.freeze([1, 2, 3, 4, 5]);
+export const VERSOES = Object.freeze([1, 2, 3, 4, 5, 6]);
+
+/** De onde vem a capacidade da máquina (v6, HN-29 T24); ausente ⇒ o padrão do núcleo. */
+export const FONTES_DE_CAPACIDADE = Object.freeze(["codigo", "padrao"]);
+export const CAPACIDADE_PADRAO = "padrao";
 
 function objeto(v, onde) {
   if (!v || typeof v !== "object" || Array.isArray(v)) throw new ErroAdaptador(`${onde}: esperado objeto`);
@@ -305,6 +314,7 @@ export function validar(bruto) {
   const verificacao = validarVerificacao(d.verificacao, versao);
   const guardas = validarGuardas(d.guardas, versao);
   const tiers = validarTiers(d.tiers, versao);
+  const capacidade = validarCapacidade(d.capacidade, versao, d.codigo);
   return Object.freeze({
     versao,
     ...(d.codigo === undefined ? {} : { codigo: d.codigo }),
@@ -321,7 +331,21 @@ export function validar(bruto) {
     verificacao,
     guardas,
     tiers,
+    capacidade,
   });
+}
+
+/**
+ * `capacidade` (v6, HN-29 T24): ausente ⇒ `"padrao"`. `"codigo"` sem `codigo`
+ * declarado recusa: o projeto diria que mede sem dizer com quê, e o núcleo
+ * cairia no código de outra árvore.
+ */
+function validarCapacidade(c, versao, codigo) {
+  if (c === undefined) return CAPACIDADE_PADRAO;
+  if (versao < 6) throw new ErroAdaptador("capacidade: só na versao 6 do esquema");
+  if (!FONTES_DE_CAPACIDADE.includes(c)) throw new ErroAdaptador(`capacidade: esperado ${FONTES_DE_CAPACIDADE.join(" ou ")} (veio ${JSON.stringify(c)})`);
+  if (c === "codigo" && codigo === undefined) throw new ErroAdaptador("capacidade: \"codigo\" exige o campo codigo (o adaptador que mede)");
+  return c;
 }
 
 /** O campo da dispensa de publicação e o papel que ele carrega (T16, AC-VEGA29-10): nunca o nome. */
@@ -618,7 +642,7 @@ function funcao(v, onde) {
 }
 
 const OBRIGATORIOS_DO_CODIGO = Object.freeze(["plano", "publicacao", "caminhosProtegidos", "telasProtegidasDosSteps", "foraDasTelasDosSteps", "carimbo", "ci"]);
-const OPCIONAIS_DO_CODIGO = Object.freeze(["marcasDeRodadas", "alcanceDosHooks", "fechamentoDoCiclo"]);
+const OPCIONAIS_DO_CODIGO = Object.freeze(["marcasDeRodadas", "alcanceDosHooks", "fechamentoDoCiclo", "capacidade"]);
 // Nome antigo → nome novo (HN-29 T41): lido até a migração dos adaptadores na F5.
 const NOMES_ANTIGOS_DO_CODIGO = Object.freeze([
   ["caminhosClinicos", "caminhosProtegidos"],
@@ -654,7 +678,9 @@ function comNomesNovos(c, onde) {
  * `marcasDeRodadas` (default `[]`); `alcanceDosHooks` (HN-29 T39: globs que
  * os hooks de commit do projeto executam, somados ao `baseAlcance` do núcleo;
  * default `[]`); `fechamentoDoCiclo` (HN-29 T39: o comando que abre a sessão
- * de fechamento do ciclo; default `null`, e o núcleo emite o texto neutro).
+ * de fechamento do ciclo; default `null`, e o núcleo emite o texto neutro);
+ * `capacidade` (HN-29 T24: a função que mede quantas filhas novas cabem agora,
+ * lida só quando a declaração diz `capacidade: "codigo"`; default `null`).
  * Ausente vale o default; presente com tipo errado recusa.
  * Nome antigo de campo (`NOMES_ANTIGOS_DO_CODIGO`) carrega com aviso (`comNomesNovos`).
  */
@@ -689,6 +715,7 @@ export function validarCodigo(bruto, onde = "código do adaptador") {
       throw new ErroAdaptador(`${onde}.fechamentoDoCiclo: esperado o comando, um texto sem espaço`);
     fechamentoDoCiclo = c.fechamentoDoCiclo;
   }
+  const capacidade = c.capacidade === undefined ? null : funcao(c.capacidade, `${onde}.capacidade`);
   return Object.freeze({
     plano: Object.freeze({ raiz: p.raiz, casa: funcao(p.casa, `${onde}.plano.casa`), ler: funcao(p.ler, `${onde}.plano.ler`), brief: funcao(p.brief, `${onde}.plano.brief`) }),
     publicacao: lista(c.publicacao, `${onde}.publicacao`),
@@ -700,6 +727,7 @@ export function validarCodigo(bruto, onde = "código do adaptador") {
     marcasDeRodadas: marcas,
     alcanceDosHooks,
     fechamentoDoCiclo,
+    capacidade,
   });
 }
 
@@ -762,4 +790,30 @@ export function codigoDoAdaptador(repo) {
   if (codigo) return carregarCodigo(caminhoDoCodigoDeclarado(raiz, codigo));
   if (raiz !== raizDoNucleo()) return codigoDoNucleo();
   throw new ErroAdaptador(`${declaracao.arquivo}: sem \`codigo\` — o núcleo não tem leitor de plano próprio`);
+}
+
+/**
+ * A capacidade da máquina pelo adaptador (HN-29 T24): quantas filhas novas
+ * cabem agora, medidas pelo `capacidade()` do código do adaptador quando a
+ * declaração diz `capacidade: "codigo"`. Devolve `{ filhasNovas, texto }` ou
+ * `null` — declaração `"padrao"` (ou sem o campo), ou medição que diz não ter
+ * o que medir (fora da máquina do projeto) — e com `null` o núcleo usa o teto
+ * padrão. O teto da ponte é de quem conta as filhas: vivas + `filhasNovas`.
+ * Declarada sem a função, função que lança ou resposta de forma errada recusa
+ * (`capacidade-ilegivel`): sem medição o núcleo não inventa número.
+ */
+export function capacidadeDoProjeto(repo) {
+  if (lerAdaptador(repo).capacidade !== "codigo") return null;
+  const medir = codigoDoAdaptador(repo).capacidade;
+  if (!medir) throw new ErroAdaptador('capacidade: a declaração diz "codigo", e o código do adaptador não tem a função capacidade', "capacidade-ilegivel");
+  let r;
+  try {
+    r = medir();
+  } catch (e) {
+    throw new ErroAdaptador(`capacidade: a medição do adaptador falhou (${e?.message ?? String(e)})`, "capacidade-ilegivel");
+  }
+  if (r === null) return null;
+  if (!r || typeof r !== "object" || !Number.isInteger(r.filhasNovas) || r.filhasNovas < 0 || (r.texto !== undefined && typeof r.texto !== "string"))
+    throw new ErroAdaptador(`capacidade: esperado null ou { filhasNovas: inteiro >= 0, texto? } (veio ${JSON.stringify(r)?.slice(0, 80)})`, "capacidade-ilegivel");
+  return Object.freeze({ filhasNovas: r.filhasNovas, texto: r.texto ?? null });
 }

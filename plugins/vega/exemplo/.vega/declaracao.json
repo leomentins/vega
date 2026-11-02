@@ -5,7 +5,8 @@
     "corpo": "0.1.1"
   },
   "decisoes": {
-    "destino": "git"
+    "destino": "git",
+    "arquivo": ".vega/decisoes.jsonl"
   },
   "conducao": {
     "versao": 5,
