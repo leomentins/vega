@@ -260,18 +260,25 @@ export const VERIFICACOES = new Set(["verde", "declarada-pos-merge"]);
  */
 export { TRAILER_DA_DISPENSA, PAPEL_DA_DISPENSA };
 export const PUBLICACOES = new Set(["feita", "nao-se-aplica"]);
+/**
+ * Estação de task feita por quem conduz: `condutora` e o nome antigo
+ * `maestra` (D-VEGA26-21). `lerPlano` já normaliza; o nome antigo fica aqui
+ * para quem chama a política com a task crua.
+ */
+export const ESTACOES_DA_CONDUTORA = new Set(["condutora", "maestra"]);
 
 /** O uso que se confere antes de ler o plano. */
 export function exigirUsoDaConferencia({ task, manual, maestra, publicacao }) {
   exigir(TASK_RE.test(task ?? ""), "uso", `task inválida: ${task}`);
-  exigir(!(manual && maestra), "uso", "--manual e --maestra são exclusivos");
+  exigir(!(manual && maestra), "uso", "--manual e --condutora são exclusivos");
   exigir(PUBLICACOES.has(publicacao), "uso", `--publicacao feita|nao-se-aplica (veio ${publicacao})`);
 }
 
 /**
  * O que a conferência grava, contra a task `t` do plano congelado. Com
  * `manual`, fecha task de estação workstation feita à mão (sem filha); com
- * `maestra`, fecha task de estação maestra feita pela própria maestra; sem os
+ * `maestra` (a flag `--condutora`, ou `--maestra`, o nome antigo), fecha task de
+ * estação condutora feita por quem conduz; sem os
  * dois (`via: "filha"`), a casca lê o registro `trazida` e completa os
  * trailers por `trailersDaFilha`. A Verificação e a publicação têm de bater
  * com o plano: pós-merge declarado ⇒ `declarada-pos-merge`; task que cita
@@ -354,28 +361,32 @@ export function politicaDaConferencia({ task, t, verificacao, publicacao, manual
     );
   } else if (caso && !temOperador) pendente = perguntaDaConferencia({ task, marca: caso.marca });
 
-  // Estação maestra: feita pela própria maestra na worktree do ciclo — sem
+  // Estação condutora: feita por quem conduz, na worktree do ciclo — sem
   // filha, sem referência de tentativa e sem trazida; a sessão gravada é a dela.
+  // O executor é a estação do plano, que `lerPlano` já lê normalizada
+  // (`maestra` → `condutora`, D-VEGA26-21): o trailer novo é `condutora`.
+  const daCondutora = ESTACOES_DA_CONDUTORA.has(t.estacao);
   if (maestra) {
-    exigir(t.estacao === "maestra", "maestra-fora-da-estacao", `${task} é de estação ${t.estacao} — --maestra é só para estação maestra`);
-    exigir(sessao, "sessao-ausente", "--maestra exige --sessao <id da sessão maestra>");
+    exigir(daCondutora, "maestra-fora-da-estacao", `${task} é de estação ${t.estacao} — --condutora é só para estação condutora`);
+    exigir(sessao, "sessao-ausente", "--condutora exige --sessao <id da sessão condutora>");
     if (pendente) return pendente;
+    const executor = t.estacao;
     return {
-      via: "maestra",
+      via: executor,
       subject,
       ...corpoDoSim,
       trailers: {
         "Conducao-Task": task,
-        "Conducao-Executor": "maestra",
+        "Conducao-Executor": executor,
         "Conducao-Sessao-Maestra": sessao,
         "Conducao-Verificacao": verificacao,
         "Conducao-Publicacao": publicacao,
         ...dispensa,
       },
-      saida: { executor: "maestra", verificacao, publicacao },
+      saida: { executor, verificacao, publicacao },
     };
   }
-  exigir(t.estacao !== "maestra", "maestra-sem-flag", `${task} é de estação maestra — fecha só com --maestra`);
+  exigir(!daCondutora, "maestra-sem-flag", `${task} é de estação condutora — fecha só com --condutora`);
   if (pendente) return pendente;
   return { via: "filha", subject, ...corpoDoSim, dispensa, saida: { verificacao, publicacao } };
 }

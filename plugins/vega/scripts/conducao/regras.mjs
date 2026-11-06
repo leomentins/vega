@@ -118,6 +118,21 @@ export function vagasDoTeto({ filhas, tetoPonte, tetoPadrao, largura, vooAtivo }
 }
 
 /**
+ * O modelo da filha: o que a declaração mapeia para o tier da task (`tiers`
+ * do adaptador), senão o `**Modelo:**` da fase. Task sem tier, em `inherit`
+ * ou em tier que o mapa não traz fica com o da fase; o núcleo só repete o
+ * texto declarado, nunca escolhe modelo. `semMapa` marca o tier declarado
+ * que o mapa não traz: o `abrir` avisa o operador.
+ */
+export function modeloDaTask(t, modeloDaFase, tiers = {}) {
+  const tier = t.tier;
+  if (!tier || tier === "inherit") return { modelo: modeloDaFase, semMapa: false };
+  const mapeado = typeof tiers?.[tier] === "string" && tiers[tier].trim() ? tiers[tier] : null;
+  if (!mapeado || mapeado === "inherit") return { modelo: modeloDaFase, semMapa: !mapeado };
+  return { modelo: mapeado, semMapa: false };
+}
+
+/**
  * Abrir as tasks de servidor prontas que cabem nas vagas, sem Outputs em
  * comum com as em voo nem entre si; as a reabrir vêm na frente de `servidor`.
  * Task sensível sem o sim da fase nem aprovação pelo nonce da tentativa
@@ -126,10 +141,11 @@ export function vagasDoTeto({ filhas, tetoPonte, tetoPadrao, largura, vooAtivo }
  * Lê: `plano` (`fases`, `porId`, `largura`), `fase`, `servidor`, `vooAtivo`,
  * `reabrir` (Map task → tentativa que caiu), `maxTent` (Map task → última
  * tentativa), `filhas`, `tetoPonte`, `tetoPadrao`, `cobertaPelaFase`,
- * `aprovacoes`, `ultimaAutorizacao`.
+ * `aprovacoes`, `ultimaAutorizacao`, `tiers` (o mapa tier → modelo da
+ * declaração; ausente ⇒ toda filha nasce com o modelo da fase).
  */
 export function regraAbrir(ctx) {
-  const { ciclo, head, acao, nonce, plano, fase, servidor, vooAtivo, reabrir, maxTent, cobertaPelaFase, aprovacoes, ultimaAutorizacao } = ctx;
+  const { ciclo, head, acao, nonce, plano, fase, servidor, vooAtivo, reabrir, maxTent, cobertaPelaFase, aprovacoes, ultimaAutorizacao, tiers = {} } = ctx;
   const { vivas, teto, vagas } = vagasDoTeto({ ...ctx, largura: plano.largura });
 
   const ocupados = vooAtivo.flatMap(({ t }) => t.outputs);
@@ -143,14 +159,17 @@ export function regraAbrir(ctx) {
   if (!selecionadas.length) return null;
 
   const fase0 = plano.fases.find((f) => f.id === fase.id);
+  const semMapa = [];
   const tarefas = selecionadas.map((t) => {
     const tentativa = (maxTent.get(t.id) ?? 0) + 1;
     const anterior = reabrir.get(t.id);
+    const m = modeloDaTask(t, fase0.modelo, tiers);
+    if (m.semMapa) semMapa.push(t);
     return {
       task: t.id,
       tentativa,
       nonce: nonce(ciclo, t.id, tentativa, head),
-      modelo: fase0.modelo,
+      modelo: m.modelo,
       prazoMin: t.prazoMin,
       posMerge: t.posMerge,
       classe: t.classe,
@@ -160,7 +179,8 @@ export function regraAbrir(ctx) {
   });
   const avisoOperador = tarefas
     .filter((x) => x.falhaAnterior?.coberta === "sim")
-    .map((x) => `${x.task} tentativa ${x.falhaAnterior.tentativa} caiu no reinício da ponte; reaberta como ${x.tentativa}, sem contar falha`);
+    .map((x) => `${x.task} tentativa ${x.falhaAnterior.tentativa} caiu no reinício da ponte; reaberta como ${x.tentativa}, sem contar falha`)
+    .concat(semMapa.map((t) => `${t.id} declara o tier ${t.tier}, que a declaração não mapeia; abre com o modelo da fase`));
   const pendente = cobertaPelaFase
     ? null
     : tarefas.find((x) => x.classe === "sensivel" && !aprovacoes.some((a) => a.task === x.task && a.nonce === x.nonce));
@@ -234,7 +254,7 @@ function fechamentoDaFase(plano, fase) {
  *
  * `reabrir` (task → `{ tentativa, coberta, motivo }` da tentativa que caiu)
  * nasce vazio e é a `regraVigia` que o preenche; `vooAtivo`, `servidor`,
- * `workstation` e `daMaestra` são lidos depois dela.
+ * `workstation` e `daCondutora` são lidos depois dela.
  */
 export function contextoDaDecisao(params, injetados) {
   const { estado, entrada, autorizacoes, plano, planoHead, planoHeadBlob, planoBlob, replanos, ciclo, reconhecer, autorizacaoDoCiclo, encerradas } = params;
@@ -330,8 +350,8 @@ export function contextoDaDecisao(params, injetados) {
     get workstation() {
       return prontas().filter((t) => t.estacao === "workstation");
     },
-    get daMaestra() {
-      return prontas().filter((t) => t.estacao === "maestra");
+    get daCondutora() {
+      return prontas().filter((t) => t.estacao === "condutora");
     },
   };
 }
@@ -530,7 +550,7 @@ export function regraAutorizarFase(ctx) {
  * que mexeu no canonico desde a autorização é de ruling —, sem task mudando
  * de classe e sem trazida pendente na fase, não reautoriza: a maestra grava a
  * autorização herdada e a condução segue. Qualquer outra mudança pergunta. A
- * classe não basta (review de segurança): task de estação maestra ou
+ * classe não basta (review de segurança): task de estação condutora ou
  * workstation tem a estação por classe, e task já sensível pode trocar o que
  * publica ou o caminho clínico que toca, ou entrar na fase vinda de outra.
  * Para a herança, toda mudança de publicação ou caminho clínico, e toda task
@@ -762,19 +782,19 @@ export function regraVigia(ctx) {
 }
 
 /**
- * Estação maestra: a própria maestra executa a task na worktree do ciclo
- * (push do ramo, proposta, leitura de CI — o que o contrato da filha
- * proíbe), roda a Verificação e registra com `--maestra`. Vem antes do
- * `abrir`: é ação curta da maestra, e as filhas abrem no turno seguinte.
+ * Estação condutora (`maestra` é o nome antigo, D-VEGA26-21): a própria
+ * condutora executa a task na worktree do ciclo, roda a Verificação e
+ * registra com `--condutora` (`--maestra` aceito). Vem antes do `abrir`: é
+ * ação curta de quem conduz, e as filhas abrem no turno seguinte.
  * `simParaPublicar`: o sim da fase não cobre a publicação (F4.17) — antes de
  * cada verbo de publicação, o sim do operador para esta task, num turno dele.
  *
- * Lê: `daMaestra`, `cobertaPelaFase`, `aprovacoes`.
+ * Lê: `daCondutora`, `cobertaPelaFase`, `aprovacoes`.
  */
-export function regraFazerMaestra(ctx) {
-  const { ciclo, head, acao, nonce, fase, daMaestra, cobertaPelaFase, aprovacoes } = ctx;
-  if (!emCurso(ctx) || !daMaestra.length) return null;
-  const t = daMaestra[0];
+export function regraFazerCondutora(ctx) {
+  const { ciclo, head, acao, nonce, fase, daCondutora, cobertaPelaFase, aprovacoes } = ctx;
+  if (!emCurso(ctx) || !daCondutora.length) return null;
+  const t = daCondutora[0];
   const sensivel = t.publicacao.length > 0 || t.protegida.length > 0;
   if (sensivel && !cobertaPelaFase && !aprovacoes.some((a) => a.task === t.id && a.nonce === nonce(ciclo, t.id, 0, head)))
     return acao("perguntar", t.id, 0, {
@@ -785,7 +805,7 @@ export function regraFazerMaestra(ctx) {
       publicacao: t.publicacao,
       caminhosProtegidos: t.protegida,
     });
-  return acao("fazer-maestra", t.id, 0, {
+  return acao("fazer-condutora", t.id, 0, {
     fase: fase.id,
     task: t.id,
     posMerge: t.posMerge,

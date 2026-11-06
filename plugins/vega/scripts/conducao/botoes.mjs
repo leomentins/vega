@@ -74,7 +74,7 @@ export const BOTOES = Object.freeze({
    * Minutos depois do push de fim de fase sem run do CI nascer para o
    * `conducao.mjs ci` decidir "sem run" e avisar o operador com o estado de
    * mesclagem da proposta (proposta `CONFLICTING` não gera run —
-   * `dev-discipline.md` §Veredito de CI item 1).
+   * `veredito-de-ci.md` item 1).
    * Origem: a F0 do plano de origem da condução mediu o run nascendo no mesmo minuto do push
    * (`minutos_ate_o_run_nascer: 0`, `notes/premissas-f0.md`); 15 é folga
    * para fila do GitHub, não medição.

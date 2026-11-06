@@ -169,6 +169,36 @@ test("regraAbrir — tentativa seguinte, falha anterior, aviso do reinício e co
   assert.deepEqual(r.largura, { prontas: 1, ciclo: 2, teto: 3, vivas: 0, emVoo: 0, abertas: 1 });
 });
 
+// O modelo da filha: o tier da task mapeado pela declaração, senão o `**Modelo:**` da fase.
+const TIERS = { mecanico: "m-leve", parecer: "m-medio", inherit: "inherit" };
+const MODELO = [
+  { caso: "tier mapeado", tier: "mecanico", espera: "m-leve", avisa: false },
+  { caso: "outro tier mapeado", tier: "parecer", espera: "m-medio", avisa: false },
+  { caso: "sem tier", tier: undefined, espera: "opus", avisa: false },
+  { caso: "inherit", tier: "inherit", espera: "opus", avisa: false },
+  { caso: "tier que a declaração não mapeia", tier: "critico", espera: "opus", avisa: true },
+];
+for (const c of MODELO)
+  test(`regraAbrir — modelo da filha, ${c.caso} ⇒ ${c.espera}`, () => {
+    const t = task("T1", c.tier ? { tier: c.tier } : {});
+    const r = regraAbrir({ ...abrirCtx({ tasks: [t] }), tiers: TIERS });
+    assert.equal(r.acao, "abrir");
+    assert.equal(r.tarefas[0].modelo, c.espera);
+    const aviso = (r.avisoOperador ?? []).filter((a) => a.includes("tier"));
+    assert.deepEqual(aviso, c.avisa ? [`T1 declara o tier ${c.tier}, que a declaração não mapeia; abre com o modelo da fase`] : []);
+  });
+
+test("regraAbrir — sem `tiers` no contexto, toda filha nasce com o modelo da fase", () => {
+  const r = regraAbrir(abrirCtx({ tasks: [task("T1", { tier: "mecanico" }), task("T2")] }));
+  assert.deepEqual(r.tarefas.map((x) => x.modelo), ["opus", "opus"]);
+});
+
+test("modeloDaTask — tier mapeado para `inherit` ou vazio cai na fase", () => {
+  assert.deepEqual(regras.modeloDaTask({ tier: "parecer" }, "f", { parecer: "inherit" }), { modelo: "f", semMapa: false });
+  assert.deepEqual(regras.modeloDaTask({ tier: "parecer" }, "f", { parecer: " " }), { modelo: "f", semMapa: true });
+  assert.deepEqual(regras.modeloDaTask({ tier: "parecer" }, null, {}), { modelo: null, semMapa: true });
+});
+
 test("vagasDoTeto — menor entre largura livre e teto livre, nunca negativo", () => {
   const v = (filhas, largura, emVoo, tetoPonte = null) => vagasDoTeto({ filhas, tetoPonte, tetoPadrao: 3, largura, vooAtivo: Array(emVoo).fill({}) }).vagas;
   assert.equal(v([], 2, 0), 2);
@@ -365,9 +395,9 @@ const TABELA = {
     { caso: "teto de falhas", ctx: { fases: [["F1", [task("T1")]]], estado: { falhas: [["T1", 2]], maxTent: [["T1", 2]] } }, espera: "perguntar:teto-de-falhas" },
     { caso: "teto de falhas de ambiente", ctx: { fases: [["F1", [task("T1")]]], estado: { falhasAmbiente: [["T1", 99]] } }, espera: "perguntar:teto-de-falhas-ambiente" },
   ],
-  regraFazerMaestra: [
-    { caso: "task da maestra", ctx: { fases: [["F1", [task("T1", { estacao: "maestra" })]]] }, espera: "fazer-maestra" },
-    { caso: "task da maestra sensível sem sim", ctx: { fases: [["F1", [task("T1", { estacao: "maestra", publicacao: ["db push"] })]]], autorizacoes: [AUT("F0"), AUT("F1", { herdada: "a".repeat(40) })] }, espera: "perguntar:task-sensivel" },
+  regraFazerCondutora: [
+    { caso: "task da condutora", ctx: { fases: [["F1", [task("T1", { estacao: "condutora" })]]] }, espera: "fazer-condutora" },
+    { caso: "task da condutora sensível sem sim", ctx: { fases: [["F1", [task("T1", { estacao: "condutora", publicacao: ["db push"] })]]], autorizacoes: [AUT("F0"), AUT("F1", { herdada: "a".repeat(40) })] }, espera: "perguntar:task-sensivel" },
     { caso: "só task de servidor", ctx: { fases: [["F1", [task("T1")]]] }, espera: null },
   ],
   regraEsperar: [

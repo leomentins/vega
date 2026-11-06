@@ -230,13 +230,13 @@ test("re-plano de ruling que muda a classe de uma task pergunta plano-mudou", (t
   assert.match(v.stderr, /heranca-recusada/);
 });
 
-test("re-plano de ruling que da publicacao a task de estacao maestra pergunta plano-mudou, mesmo sem mudar a classe", (t) => {
-  const r = novoRepo(t, canonico([{ id: "F1", tasks: [task("T1", { estacao: "maestra" }), task("T2")] }]));
+test("re-plano de ruling que da publicacao a task de estacao condutora pergunta plano-mudou, mesmo sem mudar a classe", (t) => {
+  const r = novoRepo(t, canonico([{ id: "F1", tasks: [task("T1", { estacao: "condutora" }), task("T2")] }]));
   r.autorizar("F1");
   r.replanejar("- **Steps:** faz\n- **Verificação:** `echo verificacao-T1`", "- **Steps:** publica com `vercel --prod`\n- **Verificação:** `echo verificacao-T1`", RULING);
   const p = r.proximo();
   assert.equal(p.motivo, "plano-mudou", JSON.stringify(p));
-  assert.deepEqual(p.mudaramDeClasse, [], "a classe da T1 segue maestra");
+  assert.deepEqual(p.mudaramDeClasse, [], "a classe da T1 segue condutora");
 });
 
 test("re-plano de ruling que troca o que uma task ja sensivel publica pergunta plano-mudou", (t) => {
@@ -268,9 +268,9 @@ test("re-plano de ruling que traz task sensivel de outra fase para a fase autori
 });
 
 test("registrar-conferencia --publicacao feita exige o sim de Rita para a publicacao da task", (t) => {
-  const r = novoRepo(t, canonico([{ id: "F1", tasks: [task("T1", { estacao: "maestra", steps: "publica com `vercel --prod`" })] }]));
+  const r = novoRepo(t, canonico([{ id: "F1", tasks: [task("T1", { estacao: "condutora", steps: "publica com `vercel --prod`" })] }]));
   r.autorizar("F1");
-  const base = ["registrar-conferencia", "T1", "--maestra", "--verificacao", "verde", "--publicacao", "feita", "--sessao", "m"];
+  const base = ["registrar-conferencia", "T1", "--condutora", "--verificacao", "verde", "--publicacao", "feita", "--sessao", "m"];
   const sem = r.cli(...base);
   assert.equal(sem.status, 1);
   assert.match(sem.stderr, /sim-da-publicacao-ausente/);
@@ -308,7 +308,7 @@ test("commit de plano que nao e de ruling pergunta plano-mudou, sozinho ou junto
 
 // ── 6. publicação segue pedindo o sim por task ────────────────────────────────
 
-test("publicacao continua pedindo o sim de Rita por task: trazer e fazer-maestra saem com simParaPublicar", (t) => {
+test("publicacao continua pedindo o sim de Rita por task: trazer e fazer-condutora saem com simParaPublicar", (t) => {
   const r = novoRepo(t);
   r.autorizar("F1");
   r.emVoo("T1", 1, "abc123");
@@ -318,14 +318,14 @@ test("publicacao continua pedindo o sim de Rita por task: trazer e fazer-maestra
   assert.deepEqual(tr.publicacao, ["db push", "db-publish"]);
   assert.equal(tr.simParaPublicar, true);
 
-  const m = novoRepo(t, canonico([{ id: "F1", tasks: [task("T1", { estacao: "maestra", steps: "publica com `vercel --prod`" })] }]));
+  const m = novoRepo(t, canonico([{ id: "F1", tasks: [task("T1", { estacao: "condutora", steps: "publica com `vercel --prod`" })] }]));
   m.autorizar("F1");
   const fm = m.proximo();
-  assert.equal(fm.acao, "fazer-maestra", JSON.stringify(fm));
+  assert.equal(fm.acao, "fazer-condutora", JSON.stringify(fm));
   assert.deepEqual(fm.publicacao, ["vercel --prod"]);
   assert.equal(fm.simParaPublicar, true);
 
-  const c = novoRepo(t, canonico([{ id: "F1", tasks: [task("T1", { estacao: "maestra" })] }]));
+  const c = novoRepo(t, canonico([{ id: "F1", tasks: [task("T1", { estacao: "condutora" })] }]));
   c.autorizar("F1");
   assert.equal(c.proximo().simParaPublicar, false);
 });

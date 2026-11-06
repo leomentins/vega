@@ -193,6 +193,14 @@ test("tentarGit no estouro nao lanca: status null, prazoEstourado e os locks", (
 
 test("marca gravada e copia recusada sai registrado-sem-copia com o que gravou, exit 1", () => {
   const repo = novoRepo();
+  // Origin alcançável que recusa o push: o `encerrar-sessao` confere a cópia
+  // remota antes de gravar, e origin inalcançável não grava marca (VEGA-26 T10).
+  const origin = mkdtempSync(path.join(TMP, "origin-que-recusa-"));
+  execFileSync("git", ["init", "-q", "--bare", origin]);
+  execFileSync("git", ["-C", origin, "config", "core.hooksPath", path.join(origin, "hooks")]);
+  writeFileSync(path.join(origin, "hooks", "pre-receive"), "#!/bin/sh\necho recusado >&2\nexit 1\n");
+  chmodSync(path.join(origin, "hooks", "pre-receive"), 0o755);
+  repo.g("remote", "set-url", "origin", origin);
   const antes = repo.g("rev-parse", "HEAD");
   const r = cli(["encerrar-sessao", "--repo", repo.dir, "--ciclo", CICLO, "--fase", "F1", "--nonce", "0123456789abcdef"]);
   assert.equal(r.status, 1, r.erro);

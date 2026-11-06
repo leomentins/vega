@@ -147,7 +147,9 @@ export const DECLARACOES_PADRAO = Object.freeze({
   verificacaoPosMerge: false,
   prazoMin: null, // null = prazo padrão da condução (`botoes.mjs`)
 });
-const ESTACOES = Object.freeze(["servidor", "workstation", "maestra"]);
+// `maestra` é o nome antigo de `condutora` (D-VEGA26-21): aceito e lido normalizado.
+const ESTACOES = Object.freeze(["servidor", "workstation", "condutora"]);
+const ESTACOES_LEGADAS = Object.freeze({ maestra: "condutora" });
 // Valor da declaração, com ou sem crase; o que vier depois de ` — ` é motivo.
 const DECL_VALOR_RE = /^`?([^`—]*?)`?(?:\s+—\s+.*)?\.?$/;
 const LARGURA_RE = /^\*\*Largura do ciclo:\*\*\s*(.*)$/m;
@@ -188,10 +190,11 @@ export function lerDeclaracoesConducao(parsed, tasks) {
       else if (!SLOT_PENDENTE_RE.test(v)) invalidas.push({ campo, valor: v, task: t.id });
       return true;
     };
-    if (!ler("Estação", (v) => ESTACOES.includes(v), (v) => (d.estacao = v))) ausentes.push({ campo: "Estação", task: t.id });
-    // Fechamento de fase roda pela filha (`fechar-fase`); a maestra só empurra e lê o CI depois.
-    if (d.estacao === "maestra" && /\(fechamento-de-fase\b/i.test(t.satisfiesRaw ?? ""))
-      invalidas.push({ campo: "Estação", valor: "maestra (fechamento de fase roda pela filha)", task: t.id });
+    const estacaoValida = (v) => ESTACOES.includes(v) || Object.hasOwn(ESTACOES_LEGADAS, v);
+    if (!ler("Estação", estacaoValida, (v) => (d.estacao = ESTACOES_LEGADAS[v] ?? v))) ausentes.push({ campo: "Estação", task: t.id });
+    // Fechamento de fase roda pela filha (`fechar-fase`); a condutora não o faz.
+    if (d.estacao === "condutora" && /\(fechamento-de-fase\b/i.test(t.satisfiesRaw ?? ""))
+      invalidas.push({ campo: "Estação", valor: "condutora (fechamento de fase roda pela filha)", task: t.id });
     ler("Independente", (v) => v === "sim", () => (d.independente = true));
     ler("Verificação pós-merge", (v) => v === "sim", () => (d.verificacaoPosMerge = true));
     ler("Prazo", (v) => PRAZO_RE.test(v), (v) => (d.prazoMin = Number(PRAZO_RE.exec(v)[1])));

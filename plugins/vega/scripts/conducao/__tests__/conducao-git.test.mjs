@@ -542,8 +542,8 @@ test("esperar-filha sem teto do chamador ou com prazo acima dele sai com exit 2"
   const acima = a.cli("esperar-filha", "T1", "--tentativa", "1", "--teto-chamador-min", "30", "--max-min", "60");
   assert.equal(acima.status, 2, acima.stdout);
   assert.match(acima.stderr, /--max-min 60 passa do teto do chamador \(30 min\)/);
-  // O padrão de 10 min também é medido contra o teto.
-  assert.equal(a.cli("esperar-filha", "T1", "--tentativa", "1", "--teto-chamador-min", "5").status, 2);
+  // O padrão de 4 min (abaixo do cache de 5 min) também é medido contra o teto.
+  assert.equal(a.cli("esperar-filha", "T1", "--tentativa", "1", "--teto-chamador-min", "3").status, 2);
   assert.equal(a.ok("esperar-filha", "T1", "--tentativa", "1", "--teto-chamador-min", "30", "--max-min", "30").desfecho, "andou");
 });
 
@@ -773,22 +773,23 @@ test("registrar-conferencia --manual fecha so task de estacao workstation, com o
 
 // ── limpar ──────────────────────────────────────────────────────────────────
 
-test("registrar-conferencia --maestra fecha so task de estacao maestra, com a sessao da maestra, e o auditar aceita", (t) => {
-  const a = ambiente(t, { tasks: [task("T1", { extra: ["**Estação:** maestra"] }), task("T2")] });
+test("registrar-conferencia --condutora fecha so task de estacao condutora, com a sessao dela, e o auditar aceita", (t) => {
+  const a = ambiente(t, { tasks: [task("T1", { extra: ["**Estação:** condutora"] }), task("T2")] });
   a.autorizar();
-  let r = a.cli("registrar-conferencia", "T2", "--maestra", "--verificacao", "verde", "--publicacao", "nao-se-aplica", "--sessao", "m1");
+  let r = a.cli("registrar-conferencia", "T2", "--condutora", "--verificacao", "verde", "--publicacao", "nao-se-aplica", "--sessao", "m1");
   assert.equal(r.status, 1);
   assert.match(r.stderr, /maestra-fora-da-estacao/);
   r = a.cli("registrar-conferencia", "T1", "--verificacao", "verde", "--publicacao", "nao-se-aplica", "--sessao", "m1");
   assert.match(r.stderr, /maestra-sem-flag/);
+  // `--maestra`, o nome antigo da flag, segue lido como `--condutora` (D-VEGA26-21).
   r = a.cli("registrar-conferencia", "T1", "--maestra", "--verificacao", "verde", "--publicacao", "nao-se-aplica");
   assert.match(r.stderr, /sessao-ausente/);
-  r = a.cli("registrar-conferencia", "T1", "--maestra", "--manual", "--sim", "x", "--publicacao", "nao-se-aplica", "--sessao", "m1");
+  r = a.cli("registrar-conferencia", "T1", "--condutora", "--manual", "--sim", "x", "--publicacao", "nao-se-aplica", "--sessao", "m1");
   assert.match(r.stderr, /exclusivos/);
-  const c = a.ok("registrar-conferencia", "T1", "--maestra", "--verificacao", "verde", "--publicacao", "nao-se-aplica", "--sessao", "m1");
-  assert.equal(c.executor, "maestra");
+  const c = a.ok("registrar-conferencia", "T1", "--condutora", "--verificacao", "verde", "--publicacao", "nao-se-aplica", "--sessao", "m1");
+  assert.equal(c.executor, "condutora");
   const tr = a.g("log", "-1", "--format=%(trailers:only=true,unfold=true)");
-  assert.match(tr, /^Conducao-Executor: maestra$/m);
+  assert.match(tr, /^Conducao-Executor: condutora$/m);
   assert.match(tr, /^Conducao-Sessao-Maestra: m1$/m);
   assert.doesNotMatch(tr, /Conducao-Sha-Filha/);
   assert.deepEqual(a.ok("retomar").feitas, ["T1"]);
@@ -799,8 +800,8 @@ test("registrar-conferencia --maestra fecha so task de estacao maestra, com a se
   assert.deepEqual(saida.violacoes.filter((v) => v.task === "T1"), [], JSON.stringify(saida.violacoes));
 });
 
-test("auditar acusa conferencia de filha em task de estacao maestra", (t) => {
-  const a = ambiente(t, { tasks: [task("T1", { extra: ["**Estação:** maestra"] })] });
+test("auditar acusa conferencia de filha em task de estacao condutora", (t) => {
+  const a = ambiente(t, { tasks: [task("T1", { extra: ["**Estação:** condutora"] })] });
   a.autorizar();
   a.g("commit", "-q", "--allow-empty", "-m", "Conducao: T1 conferida", "-m",
     ["Conducao-Task: T1", "Conducao-Sha-Filha: 0000000", "Conducao-Sessao-Filha: s1", "Conducao-Nonce: x", "Conducao-Verificacao: verde", "Conducao-Publicacao: nao-se-aplica"].join("\n"));

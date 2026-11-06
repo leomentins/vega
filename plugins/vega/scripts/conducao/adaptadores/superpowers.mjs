@@ -21,7 +21,7 @@
  *
  * e as anotações da tarefa, uma por linha, entre o título e o primeiro passo:
  *
- *   **Estação:** servidor | workstation | maestra   — OBRIGATÓRIA
+ *   **Estação:** servidor | workstation | condutora — OBRIGATÓRIA (`maestra`, o nome antigo, lê-se `condutora`)
  *   **Publicação:** sim | não                       — OBRIGATÓRIA
  *   **Sensível:** sim | não                         — OBRIGATÓRIA
  *   **Verificação:** `<comando>`                    — o único comando que a conferência roda
@@ -61,7 +61,9 @@ export const MARCA_PUBLICACAO = "altair:publicacao";
 export const MARCA_SENSIVEL = "altair:sensivel";
 export const A_PERGUNTAR = "sem anotação — a perguntar";
 
-const ESTACOES = Object.freeze(["servidor", "workstation", "maestra"]);
+// `maestra` é o nome antigo de `condutora` (D-VEGA26-21): aceito e lido normalizado.
+const ESTACOES = Object.freeze(["servidor", "workstation", "condutora", "maestra"]);
+const ESTACOES_LEGADAS = Object.freeze({ maestra: "condutora" });
 const OBRIGATORIAS = Object.freeze(["Estação", "Publicação", "Sensível"]);
 const PASTAS = Object.freeze(["docs/planos/", "docs/superpowers/plans/"]);
 
@@ -282,7 +284,7 @@ export function lerPlanoPublico(texto) {
         ausentes.push({ campo, task: t.id });
         perguntar(campo, A_PERGUNTAR);
       }
-    const estacao = a.has("Estação") && ESTACOES.includes(a.get("Estação")) ? a.get("Estação") : null;
+    const estacao = a.has("Estação") && ESTACOES.includes(a.get("Estação")) ? (ESTACOES_LEGADAS[a.get("Estação")] ?? a.get("Estação")) : null;
     if (a.has("Estação") && !estacao) perguntar("Estação", a.get("Estação"));
     const lado = (campo) => {
       if (!a.has(campo)) return null;
@@ -302,8 +304,8 @@ export function lerPlanoPublico(texto) {
     opcional("Independente", (v) => v === "sim" && (d.independente = true));
     opcional("Verificação pós-merge", (v) => v === "sim" && (d.verificacaoPosMerge = true));
     opcional("Prazo", (v) => PRAZO_RE.test(v) && (d.prazoMin = Number(PRAZO_RE.exec(v)[1])));
-    if (estacao === "maestra" && /\bfechamento-de-fase\b/.test(a.get("Marcas") ?? ""))
-      invalidas.push({ campo: "Estação", valor: "maestra (fechamento de fase roda pela filha)", task: t.id });
+    if (estacao === "condutora" && /\bfechamento-de-fase\b/.test(a.get("Marcas") ?? ""))
+      invalidas.push({ campo: "Estação", valor: `${a.get("Estação")} (fechamento de fase roda pela filha)`, task: t.id });
     porTask.set(t.id, d);
 
     const marcas = (a.get("Marcas") ?? "").split(/[\s,]+/).filter(Boolean);

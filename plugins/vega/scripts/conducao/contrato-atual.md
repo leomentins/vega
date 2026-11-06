@@ -22,7 +22,7 @@ Alcance de cada conjunto:
 | `perguntar` | leva a pergunta ao operador; o `motivo` diz qual |
 | `cutucar` | manda a `mensagem` à filha caída (`sessao`) e passa `cutucadaEm` nessa filha da entrada seguinte (T18); no nível da maestra, à condutora caída (T39). O `cutucadaEm` vale só para a queda em curso (T40): com `caidaEm` na filha (o instante em que quem conduz a leu `FAILED` pela primeira vez nesta queda, gravado uma vez e não regravado enquanto ela seguir `FAILED`; posterior a `agora` é `entrada-invalida`), `cutucadaEm` anterior a ele é de queda velha e não conta, e a sessão que voltou e caiu de novo recebe o seu `cutucar`; sem `caidaEm`, vale o `cutucadaEm` como veio |
 | `herdar-autorizacao` | grava a autorização herdada da fase (re-plano de ruling ou sim do ciclo), sem perguntar ao operador |
-| `fazer-maestra` | executa ela mesma a task de estação `maestra` e registra com `--maestra` |
+| `fazer-condutora` | executa ela mesma a task de estação `condutora` (`maestra`, o nome antigo, lido igual) e registra com `--condutora` (`--maestra` aceito), trailer `Conducao-Executor: condutora` |
 | `fechar-fase` | conduz a task de fechamento da fase |
 | `encerrar-sessao` | grava o encerramento da fase anterior e entrega o texto da próxima sessão |
 | `fechar-ciclo` | entrega o texto do `/close-cycle` em sessão limpa |
@@ -30,7 +30,7 @@ Alcance de cada conjunto:
 | `criar-condutora` | só no nível da maestra (`--nivel maestra`): cria a condutora da primeira fase sem `Conducao-Encerrada`, com `fase`, `modelo` do heading da fase e `texto` da sessão; inclusive a primeira fase do ciclo, sem condutora anterior a arquivar |
 | `criar-fechamento` | só no nível da maestra: depois de `Conducao-Encerrada: ciclo`, cria a sessão de fechamento com o `texto` do `/close-cycle` |
 
-A lista de ações do cabeçalho de `conducao.mjs` não cita `fazer-maestra`; o código a emite (task de estação `maestra`). Esta tabela segue o código.
+A lista de ações do cabeçalho de `conducao.mjs` não cita `fazer-condutora`; o código a emite (task de estação `condutora`). `fazer-maestra` é o nome antigo da mesma ação (D-VEGA26-21) e o código não o emite mais. Esta tabela segue o código.
 
 ## Motivos por ação
 

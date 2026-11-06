@@ -28,6 +28,19 @@ export function git(repo, args) {
   return gitExec(repo, args, { cru: true });
 }
 
+/**
+ * Estação de nome antigo → o valor de hoje (4-a da condução, D-VEGA26-21):
+ * `maestra` é o nome antigo de `condutora`, a sessão que conduz a fase e faz
+ * a task dela. O plano se lê normalizado, então plano congelado com `maestra`
+ * e relido com `condutora` não muda de estação nem de classe.
+ */
+export const ESTACOES_LEGADAS = Object.freeze({ maestra: "condutora" });
+
+/** A estação normalizada: o nome antigo vira o de hoje; o resto passa igual. */
+export function normalizarEstacao(v) {
+  return Object.hasOwn(ESTACOES_LEGADAS, v) ? ESTACOES_LEGADAS[v] : v;
+}
+
 /** Mesma regra do `plan-check` (`FECHA_FASE`): task que fecha fase não abre filha. */
 const FECHA_FASE_RE = /\b(fechamento-de-fase|review-gate)\b/;
 /**
@@ -114,13 +127,13 @@ export function casaAlgum(caminho, globs) {
 
 /**
  * Classe da task na regra do conjunto pronto (T6 passo 4): `workstation` sai
- * como `parar`; `maestra` sai como `fazer-maestra` (a maestra executa na
+ * como `parar`; `condutora` sai como `fazer-condutora` (a condutora executa na
  * worktree do ciclo, sem filha); `sensivel` (publicação ou caminho clínico)
  * pergunta antes de abrir; `fechamento` vira `fechar-fase`; `comum` abre direto.
  */
 function classificar(t) {
   if (t.estacao === "workstation") return "workstation";
-  if (t.estacao === "maestra") return "maestra";
+  if (t.estacao === "condutora") return "condutora";
   if (t.publicacao.length || t.protegida.length) return "sensivel";
   if (t.fechamento) return "fechamento";
   return "comum";
@@ -161,7 +174,7 @@ export function lerPlano(texto, codigo = codigoDoNucleo()) {
       fase: t.phase,
       deps,
       independente: d.independente,
-      estacao: d.estacao,
+      estacao: normalizarEstacao(d.estacao),
       posMerge: d.verificacaoPosMerge,
       prazoMin: d.prazoMin ?? BOTOES.prazoPadraoMin,
       outputs,

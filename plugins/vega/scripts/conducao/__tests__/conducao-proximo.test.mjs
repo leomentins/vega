@@ -141,6 +141,33 @@ test("proximo emite uma acao so e abre ate min(prontas, largura do ciclo, teto m
   }
 });
 
+test("proximo abre cada filha com o modelo do tier da task, pelo mapa da declaração; sem tier ou inherit, o da fase", (t) => {
+  const r = novoRepo();
+  t.after(r.limpar);
+  const ind = ["**Estação:** servidor", "**Independente:** sim"];
+  r.escrever(
+    canonico({
+      largura: 3,
+      fases: [{ id: "F1", tasks: [task("T1", { extra: [...ind, "**Tier:** mecanico"] }), task("T2", { extra: [...ind, "**Tier:** inherit"] }), task("T3", { extra: ind })] }],
+    }),
+  );
+  r.autorizar("F1");
+  const a = proximo(r.dir, { filhas: [] });
+  assert.equal(a.acao, "abrir");
+  // O mapa do projeto de teste: `mecanico` ⇒ `modelo-barato`; o `**Modelo:**` da fase é `sonnet`.
+  assert.deepEqual(a.tarefas.map((x) => [x.task, x.modelo]), [["T1", "modelo-barato"], ["T2", "sonnet"], ["T3", "sonnet"]]);
+});
+
+test("proximo com tier fora do vocabulário pergunta (declaracao-invalida), sem abrir filha", (t) => {
+  const r = novoRepo();
+  t.after(r.limpar);
+  r.escrever(canonico({ largura: 2, fases: [{ id: "F1", tasks: [task("T1", { extra: ["**Estação:** servidor", "**Independente:** sim", "**Tier:** turbo"] })] }] }));
+  r.autorizar("F1");
+  const a = proximo(r.dir, { filhas: [] });
+  assert.equal(a.acao, "perguntar");
+  assert.equal(a.motivo, "declaracao-invalida");
+});
+
 test("proximo repetido sobre o mesmo estado emite a mesma acao com o mesmo nonce", (t) => {
   const r = novoRepo();
   t.after(r.limpar);
@@ -267,48 +294,48 @@ test("task de estacao workstation pronta emite parar, depois das filhas em voo",
   assert.equal(a.task, "T2");
 });
 
-test("task de estacao maestra pronta emite fazer-maestra antes do abrir; conferida, as filhas abrem", (t) => {
+test("task de estacao condutora pronta emite fazer-condutora antes do abrir; conferida, as filhas abrem", (t) => {
   const r = novoRepo();
   t.after(r.limpar);
   r.escrever(
     canonico({
       largura: 2,
-      fases: [{ id: "F1", tasks: [task("T1", { extra: ["**Estação:** maestra"] }), task("T2", { inputs: "T1", extra: ["**Estação:** servidor"] }), task("T3", { extra: ["**Estação:** servidor", "**Independente:** sim"] })] }],
+      fases: [{ id: "F1", tasks: [task("T1", { extra: ["**Estação:** condutora"] }), task("T2", { inputs: "T1", extra: ["**Estação:** servidor"] }), task("T3", { extra: ["**Estação:** servidor", "**Independente:** sim"] })] }],
     }),
   );
   r.autorizar("F1");
   const a = proximo(r.dir);
-  assert.equal(a.acao, "fazer-maestra", "a task da maestra sai antes de abrir a T3 independente");
+  assert.equal(a.acao, "fazer-condutora", "a task da condutora sai antes de abrir a T3 independente");
   assert.equal(a.task, "T1");
   assert.equal(a.nonce, nonce(CICLO, "T1", 0, r.g("rev-parse", "HEAD")));
-  r.vazio("Conducao: T1 conferida", "Conducao-Task: T1\nConducao-Executor: maestra\nConducao-Sessao-Maestra: m\nConducao-Verificacao: verde\nConducao-Publicacao: nao-se-aplica");
+  r.vazio("Conducao: T1 conferida", "Conducao-Task: T1\nConducao-Executor: condutora\nConducao-Sessao-Maestra: m\nConducao-Verificacao: verde\nConducao-Publicacao: nao-se-aplica");
   const b = proximo(r.dir);
   assert.equal(b.acao, "abrir");
   assert.deepEqual(b.tarefas.map((x) => x.task).sort(), ["T2", "T3"]);
 });
 
-test("task de estacao maestra que publica: o sim da fase cobre o fazer-maestra; fora dela pergunta antes", (t) => {
+test("task de estacao condutora que publica: o sim da fase cobre o fazer-condutora; fora dela pergunta antes", (t) => {
   const r = novoRepo();
   t.after(r.limpar);
   r.escrever(
     canonico({
       largura: 1,
       fases: [
-        { id: "F1", tasks: [task("T1", { extra: ["**Estação:** maestra"], steps: "publica com `vercel --prod`" })] },
+        { id: "F1", tasks: [task("T1", { extra: ["**Estação:** condutora"], steps: "publica com `vercel --prod`" })] },
         { id: "F2", tasks: [task("T2", { extra: ["**Estação:** servidor"] })] },
       ],
     }),
   );
   r.autorizar("F1");
   const coberta = proximo(r.dir);
-  assert.equal(coberta.acao, "fazer-maestra");
+  assert.equal(coberta.acao, "fazer-condutora");
   assert.equal(coberta.simParaPublicar, true, "a publicação segue pedindo o sim por task");
   r.autorizar("F2");
   const p = proximo(r.dir);
   assert.equal(p.acao, "perguntar");
   assert.equal(p.motivo, "task-sensivel");
   const a = proximo(r.dir, { aprovacoes: [{ task: "T1", nonce: p.nonce }] });
-  assert.equal(a.acao, "fazer-maestra");
+  assert.equal(a.acao, "fazer-condutora");
   assert.deepEqual(a.publicacao, ["vercel --prod"]);
 });
 
@@ -414,16 +441,16 @@ test("review-gate com task dependendo dele e task comum: abre por filha e depois
   assert.equal(c.task, "T4");
 });
 
-test("review-gate do meio com Estacao maestra sai como fazer-maestra", (t) => {
+test("review-gate do meio com Estacao condutora sai como fazer-condutora", (t) => {
   const r = novoRepo();
   t.after(r.limpar);
   const tasks = faseUiHeavy();
-  tasks[1] = task("T2", { inputs: "T1", satisfies: "[—] (review-gate)", extra: ["**Estação:** maestra"] });
+  tasks[1] = task("T2", { inputs: "T1", satisfies: "[—] (review-gate)", extra: ["**Estação:** condutora"] });
   r.escrever(canonico({ largura: 1, fases: [{ id: "F1", tasks }] }));
   r.autorizar("F1");
   r.conferida("T1");
   const a = proximo(r.dir);
-  assert.equal(a.acao, "fazer-maestra", JSON.stringify(a));
+  assert.equal(a.acao, "fazer-condutora", JSON.stringify(a));
   assert.equal(a.task, "T2");
 });
 

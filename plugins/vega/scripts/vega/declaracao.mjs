@@ -35,6 +35,11 @@
  *   worktrees_de_ciclo  { ramo, pasta }  — OPCIONAL: o layout das worktrees de ciclo — o prefixo
  *                                          do ramo e o nome da pasta (sem barra) onde elas moram;
  *                                          o coletor de decisões infere o ciclo por ele (HN-29 T27)
+ *   posse               { comando }      — OPCIONAL: o comando (argv, rodado da raiz do projeto)
+ *                                          que diz se a árvore é a dona do ciclo; o `git-guard`
+ *                                          acrescenta `--arvore <raiz>` e lê uma linha JSON
+ *                                          `{ estado }`. Sem o campo, o guard não libera o
+ *                                          descarte da troca (VEGA-26 T34)
  *
  * As três últimas vieram do `harness.config.json` (HN-29 T12) com o mesmo nome e a mesma
  * forma: mover antes de mudar. Ausentes saem como lista vazia; quem precisa de uma não vazia
@@ -179,6 +184,15 @@ function worktreesDeclaradas(v) {
   return Object.freeze({ ramo: w.ramo, pasta: w.pasta });
 }
 
+function posseDeclarada(v) {
+  if (v === undefined) return null;
+  const o = objeto(v, "posse");
+  soCampos(o, ["comando"], "posse");
+  if (!Array.isArray(o.comando) || o.comando.length === 0 || o.comando.some((a) => typeof a !== "string" || !a.trim()))
+    throw new ErroDeclaracao("posse.comando: esperada lista não vazia de argumentos (o executável primeiro)");
+  return Object.freeze({ comando: Object.freeze([...o.comando]) });
+}
+
 function raizDeclarada(v) {
   if (v === undefined) return null;
   const bruto = caminho(v, "raiz_do_grafo");
@@ -190,7 +204,7 @@ function raizDeclarada(v) {
 /** Valida a declaração já parseada; devolve a forma normalizada, congelada. */
 export function validar(bruto) {
   const d = objeto(bruto, "declaração");
-  soCampos(d, ["esquema", "papel", "decisoes"], "declaração", ["versao", "listas", "conducao", "immutable_docs", "lean_scope_docs", "lean_record_scopes", "saidas_geradas", "raiz_do_grafo", "worktrees_de_ciclo"]);
+  soCampos(d, ["esquema", "papel", "decisoes"], "declaração", ["versao", "listas", "conducao", "immutable_docs", "lean_scope_docs", "lean_record_scopes", "saidas_geradas", "raiz_do_grafo", "worktrees_de_ciclo", "posse"]);
   if (!ESQUEMAS.includes(d.esquema)) throw new ErroDeclaracao(`esquema: esperado ${ESQUEMAS.join(" ou ")} (veio ${JSON.stringify(d.esquema)})`);
   if (!PAPEIS.includes(d.papel)) throw new ErroDeclaracao(`papel: esperado ${PAPEIS.join(" ou ")} (veio ${JSON.stringify(d.papel)})`);
 
@@ -231,6 +245,7 @@ export function validar(bruto) {
     saidas_geradas: saidasDeclaradas(d.saidas_geradas),
     raiz_do_grafo: raizDeclarada(d.raiz_do_grafo),
     worktrees_de_ciclo: worktreesDeclaradas(d.worktrees_de_ciclo),
+    posse: posseDeclarada(d.posse),
   });
 }
 
@@ -292,4 +307,13 @@ export function saidasGeradas(repo) {
 export function raizDoGrafo(repo) {
   if (!existe(repo)) return null;
   return lerDeclaracao(repo).declaracao.raiz_do_grafo;
+}
+
+/**
+ * O comando da posse que o projeto declara (`{ comando }`), ou `null` quando a declaração está
+ * ausente ou não traz o campo. Declaração presente e ilegível lança `ErroDeclaracao`.
+ */
+export function posseDoProjeto(repo) {
+  if (!existe(repo)) return null;
+  return lerDeclaracao(repo).declaracao.posse;
 }

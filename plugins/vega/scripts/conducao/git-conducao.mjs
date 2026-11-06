@@ -1172,7 +1172,10 @@ export function avisoConfere(linha, task, nonce) {
   return partes.length >= 3 && (partes[0] === `${task}-OK` || partes[0] === `${task}-FALHA`) && partes.at(-1) === nonce;
 }
 
-export function esperarFilha({ repo, ciclo, task, tentativa, maxMin = 10, tetoChamadorMin, intervaloS = 30, desde = null, avisoTratado = null, dormir = dormirSegundos }) {
+// Prazo padrao de 4 min: o cache de prompt e de 5 min (`FORCE_PROMPT_CACHING_5M`), e acordar a
+// condutora depois disso reescreve o contexto inteiro (1,25x a entrada) em vez de le-lo (0,1x).
+// Com 200k de contexto, 10 min custavam ~US$ 3,75 por acordar; 4 min, ~US$ 0,30 (hotfix 04/11/2026).
+export function esperarFilha({ repo, ciclo, task, tentativa, maxMin = 4, tetoChamadorMin, intervaloS = 30, desde = null, avisoTratado = null, dormir = dormirSegundos }) {
   exigir(TASK_RE.test(task ?? ""), "uso", `task inválida: ${task}`);
   // P25/P27 do ATRM-51, C18c do VEGA-28: rearmada, a espera voltava com o que a
   // maestra já tinha tratado. `--desde <sha>`: a ponta já vista não conta como

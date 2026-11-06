@@ -11,8 +11,8 @@ O núcleo decide abrir sessão, trazer, publicar e perguntar pelo que o plano **
 
 | anotação | valores | o que o núcleo faz com ela |
 | --- | --- | --- |
-| `Estação` | `servidor` · `workstation` · `maestra` | onde a tarefa roda: na sessão filha do servidor, na estação do operador, ou pela própria maestra |
-| `Publicação` | `sim` · `não` | `sim` ⇒ a tarefa publica (banco, deploy, envio para fora do repositório) e só a maestra publica, depois de trazer |
+| `Estação` | `servidor` · `workstation` · `condutora` | onde a tarefa roda: na sessão filha do servidor, na estação do operador, ou pela própria condutora (`maestra` é o nome antigo, lido como `condutora`) |
+| `Publicação` | `sim` · `não` | `sim` ⇒ a tarefa publica (banco, deploy, envio para fora do repositório) e só a condutora publica, depois de trazer |
 | `Sensível` | `sim` · `não` | `sim` ⇒ a tarefa toca dado ou caminho sensível do projeto e pede o sim de quem decide antes de abrir |
 | `Verificação` | um comando, entre crases | o único comando que a conferência roda depois de trazer; exit 0 é verde |
 | `Commit` | o subject do commit | o subject que a tarefa grava; no formato público, sem a anotação, vale o `-m "…"` do `git commit` do passo |
@@ -25,7 +25,7 @@ O núcleo decide abrir sessão, trazer, publicar e perguntar pelo que o plano **
 | `Independente` | `sim` | a tarefa não depende da anterior (§Dependência de dado e dependência de ordem) |
 | `Prazo` | `<n> min` | o prazo da sessão filha; ausente ⇒ o padrão do núcleo |
 | `Verificação pós-merge` | `sim` | a Verificação só fica verde depois do merge do ramo |
-| `Tier` | `mecanico` · `parecer` · `critico` · `inherit` | o tier da tarefa, acima do da fase; ausente ⇒ o da fase, e sem ele `inherit`. O adaptador mapeia tier → modelo; o pré-voo avisa a tarefa de julgamento (fechamento, gate, conferência do operador, sensível) em `mecanico` |
+| `Tier` | `mecanico` · `parecer` · `critico` · `inherit` | o tier da tarefa, acima do da fase; ausente ⇒ o da fase, e sem ele `inherit`. O adaptador mapeia tier → modelo, e a filha nasce com ele (sem mapa ou `inherit` ⇒ o `Modelo` da fase); o pré-voo avisa a tarefa de julgamento (fechamento, gate, conferência do operador, sensível) em `mecanico` |
 
 No topo do plano: `Fase` (`F<n>`, default `F1`), `Modelo`, `Tier` (o da fase) e `Largura do ciclo` (quantas tarefas correm ao mesmo tempo; ausente ⇒ o padrão do núcleo).
 

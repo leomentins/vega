@@ -52,7 +52,8 @@ do repositório do plugin). O mínimo do campo, com o plano no formato público:
   usuário da ponte) e `instrucoes` (globs dos arquivos de instrução do host). Sem eles o
   `pre-voo` diz o campo que falta; `exemplo/.vega/declaracao.json` traz os valores de um host.
 - `tiers` (versão 5) — o modelo de cada tier do plano (`mecanico` · `parecer` · `critico` ·
-  `inherit`), texto opaco que o `pre-voo` repete quando avisa tarefa de julgamento em `mecanico`.
+  `inherit`), texto opaco. O `abrir` o usa como o modelo da filha (tier sem mapa ou `inherit` ⇒ o
+  `Modelo` da fase); o `pre-voo` o repete quando avisa tarefa de julgamento em `mecanico`.
 
 ## O que cada hook faz
 

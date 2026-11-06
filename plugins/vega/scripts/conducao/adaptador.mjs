@@ -65,7 +65,8 @@
  *                                         sem o arquivo, o guard roda em `shadow`
  *   tiers       { <tier>: "<modelo>" }  — só na v5, OPCIONAL (T30, D-VEGA29-15): o modelo de cada tier
  *                                         abstrato (`mecanico` · `parecer` · `critico` · `inherit`), texto
- *                                         opaco que o núcleo só repete no aviso do `pre-voo`
+ *                                         opaco que o núcleo só repete: no aviso do `pre-voo` e no
+ *                                         `modelo` de cada item do `abrir` (tier sem mapa ⇒ o da fase)
  *   capacidade  "codigo" | "padrao"     — só na v6, OPCIONAL (HN-29 T24), default `"padrao"`: de onde vem
  *                                         a capacidade da máquina que o `proximo` usa quando a entrada não
  *                                         traz `tetoPonte`. `"codigo"` ⇒ a função `capacidade()` do código
@@ -470,7 +471,8 @@ function validarSessao(s, versao = 1) {
 
 /**
  * `tiers` (v5, T30): tier abstrato → modelo, texto opaco de uma linha. Ausente
- * ⇒ mapa vazio; o núcleo nunca escolhe modelo, só repete o declarado no aviso.
+ * ⇒ mapa vazio; o núcleo nunca escolhe modelo, só repete o declarado no aviso
+ * do `pre-voo` e no `abrir` (`modeloDaTask`, regras.mjs).
  */
 function validarTiers(t, versao) {
   if (t === undefined) return Object.freeze({});
@@ -642,7 +644,7 @@ function funcao(v, onde) {
 }
 
 const OBRIGATORIOS_DO_CODIGO = Object.freeze(["plano", "publicacao", "caminhosProtegidos", "telasProtegidasDosSteps", "foraDasTelasDosSteps", "carimbo", "ci"]);
-const OPCIONAIS_DO_CODIGO = Object.freeze(["marcasDeRodadas", "alcanceDosHooks", "fechamentoDoCiclo", "capacidade"]);
+const OPCIONAIS_DO_CODIGO = Object.freeze(["marcasDeRodadas", "alcanceDosHooks", "fechamentoDoCiclo", "capacidade", "esperandoAVez"]);
 // Nome antigo → nome novo (HN-29 T41): lido até a migração dos adaptadores na F5.
 const NOMES_ANTIGOS_DO_CODIGO = Object.freeze([
   ["caminhosClinicos", "caminhosProtegidos"],
@@ -680,7 +682,9 @@ function comNomesNovos(c, onde) {
  * default `[]`); `fechamentoDoCiclo` (HN-29 T39: o comando que abre a sessão
  * de fechamento do ciclo; default `null`, e o núcleo emite o texto neutro);
  * `capacidade` (HN-29 T24: a função que mede quantas filhas novas cabem agora,
- * lida só quando a declaração diz `capacidade: "codigo"`; default `null`).
+ * lida só quando a declaração diz `capacidade: "codigo"`; default `null`);
+ * `esperandoAVez` (HN-29 T52: a função que devolve as sessões com build
+ * esperando a vez na fila do projeto; default `null`).
  * Ausente vale o default; presente com tipo errado recusa.
  * Nome antigo de campo (`NOMES_ANTIGOS_DO_CODIGO`) carrega com aviso (`comNomesNovos`).
  */
@@ -716,6 +720,7 @@ export function validarCodigo(bruto, onde = "código do adaptador") {
     fechamentoDoCiclo = c.fechamentoDoCiclo;
   }
   const capacidade = c.capacidade === undefined ? null : funcao(c.capacidade, `${onde}.capacidade`);
+  const esperandoAVez = c.esperandoAVez === undefined ? null : funcao(c.esperandoAVez, `${onde}.esperandoAVez`);
   return Object.freeze({
     plano: Object.freeze({ raiz: p.raiz, casa: funcao(p.casa, `${onde}.plano.casa`), ler: funcao(p.ler, `${onde}.plano.ler`), brief: funcao(p.brief, `${onde}.plano.brief`) }),
     publicacao: lista(c.publicacao, `${onde}.publicacao`),
@@ -728,6 +733,7 @@ export function validarCodigo(bruto, onde = "código do adaptador") {
     alcanceDosHooks,
     fechamentoDoCiclo,
     capacidade,
+    esperandoAVez,
   });
 }
 
@@ -816,4 +822,25 @@ export function capacidadeDoProjeto(repo) {
   if (!r || typeof r !== "object" || !Number.isInteger(r.filhasNovas) || r.filhasNovas < 0 || (r.texto !== undefined && typeof r.texto !== "string"))
     throw new ErroAdaptador(`capacidade: esperado null ou { filhasNovas: inteiro >= 0, texto? } (veio ${JSON.stringify(r)?.slice(0, 80)})`, "capacidade-ilegivel");
   return Object.freeze({ filhasNovas: r.filhasNovas, texto: r.texto ?? null });
+}
+
+/**
+ * As sessões com build esperando a vez na fila do projeto (HN-29 T52), pela
+ * `esperandoAVez()` do código do adaptador: o núcleo marca a filha delas como
+ * `vez: "esperando"` (a regra da T25). Sem a função ⇒ `null`, e nada muda.
+ * Função que lança ou resposta que não é lista de textos recusa
+ * (`vez-ilegivel`); quem chama decide o lado seguro.
+ */
+export function esperandoAVezDoProjeto(repo) {
+  const ler = codigoDoAdaptador(repo).esperandoAVez;
+  if (!ler) return null;
+  let r;
+  try {
+    r = ler();
+  } catch (e) {
+    throw new ErroAdaptador(`esperandoAVez: a leitura do adaptador falhou (${e?.message ?? String(e)})`, "vez-ilegivel");
+  }
+  if (!Array.isArray(r) || !r.every((s) => typeof s === "string"))
+    throw new ErroAdaptador(`esperandoAVez: esperado lista de textos (veio ${JSON.stringify(r)?.slice(0, 80)})`, "vez-ilegivel");
+  return Object.freeze([...r]);
 }
