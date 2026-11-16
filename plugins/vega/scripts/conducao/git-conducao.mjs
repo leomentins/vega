@@ -30,12 +30,23 @@
  * que a faixa descende do marcador da referência local.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { codigoDoAdaptador, lerAdaptador, nomeDoOperador, paginaDoProjeto } from "./adaptador.mjs";
+import { codigoDoAdaptador, lerAdaptador, nomeDoOperador, paginaDoProjeto, posseDoProjeto } from "./adaptador.mjs";
 import { ENV_GIT, PRAZO_REDE_MS, git as rodar, tentarGit as tentar } from "./git-exec.mjs";
 import { ErroPlano, caminhoDoCanonico, lerPlanoCongelado, lerPlanoNoCommit } from "./ler-plano.mjs";
-import { RE, lerMarcas, ultimaAutorizacao } from "./marcas.mjs";
+import { RE, lerMarcas, trailers as lerTrailers, ultimaAutorizacao } from "./marcas.mjs";
+import {
+  CASOS,
+  devolverAosMotivos,
+  gateDaConferenciaPublicada,
+  gravarConsentimento,
+  gravarRegistrosDoTrazer,
+  lerConsentimentos,
+  registrosDoTrazer,
+  simDaPublicacaoDoCiclo,
+  simDoCorpo,
+} from "./consentimento.mjs";
 import * as verbos from "./verbos.mjs";
 import { saidasGeradas } from "../vega/declaracao.mjs";
 
@@ -86,13 +97,231 @@ export const refs = {
  * houver) e trailers no último parágrafo — `%(trailers)` do `lerMarcas` só
  * acha trailer no parágrafo final.
  */
-function commitVazio(repo, subject, { corpo, trailers = {} } = {}) {
+function commitVazio(repo, ciclo, subject, { corpo, trailers = {} } = {}) {
+  exigirPosse({ repo, ciclo });
   const args = ["commit", "-q", "--allow-empty", "-m", subject];
   if (corpo && corpo.trim()) args.push("-m", corpo.trim());
   const linhas = Object.entries(trailers).map(([k, v]) => `${k}: ${v}`);
   if (linhas.length) args.push("-m", linhas.join("\n"));
   rodar(repo, args);
   return rodar(repo, ["rev-parse", "HEAD"]);
+}
+
+// ── cerca do par da posse (VEGA-37 T15, D-VEGA37-17) ─────────────────────────
+
+/** O leitor da posse que a cerca usa; teste o troca por `trocarLeitorDaPosse`, nunca outro módulo. */
+let leitorDaPosse = (repo, ciclo = null) => posseDoProjeto(repo, { ciclo });
+
+/** A posse como a cerca a lê (o leitor da declaração, ou o do teste): a ordem da troca decide por ela (VEGA-37 T16). */
+export function lerPosseDaCerca(repo, ciclo = null) {
+  return leitorDaPosse(repo, ciclo);
+}
+
+/** Troca o leitor da posse (teste) e devolve o anterior; `null` volta ao da declaração. */
+export function trocarLeitorDaPosse(ler) {
+  const antes = leitorDaPosse;
+  leitorDaPosse = ler ?? ((repo, ciclo = null) => posseDoProjeto(repo, { ciclo }));
+  return antes;
+}
+
+/** As recusas da cerca: a escrita não acontece, e o verbo sai ≠ 0 com o motivo no stderr. */
+export const RECUSAS_DA_POSSE = Object.freeze(["posse-alheia", "posse-ilegivel", "posse-sem-epoca", "epoca-velha"]);
+
+function epocaValida(v) {
+  return Number.isSafeInteger(v) && v >= 1;
+}
+
+/**
+ * A cerca do motor (D-VEGA37-17): todo verbo que grava marca no ramo ou empurra
+ * a cópia lê a posse antes e recusa quando o par (`lock_id`, época) desta
+ * sessão difere do par da posse — por igualdade, nunca por "menor", porque a
+ * posse nova nascida por `reservar` recomeça em 1. O par da sessão é o que a
+ * árvore gravou ao tomar a posse (o leitor já conferiu o `lock_id` dela contra
+ * o do banco, e devolve a época gravada em `epoca_gravada`; sem a chave, a
+ * época gravada é 1, como no leitor); `sessao` o dá explícito.
+ *
+ * Fail-closed: posse de outra árvore, leitura que falha (banco fora), dona sem
+ * `lock_id` ou sem época, e par divergente lançam `ErroPlano` (exit ≠ 0, o
+ * motivo no stderr). Passam: `sem-posse` (o ciclo não tem posse, D-VEGA26-18) e
+ * projeto que não declara leitor (`null`), com o pulo na saída.
+ */
+export function exigirPosse({ repo, ciclo, posse = leitorDaPosse(repo, ciclo), sessao = null }) {
+  if (posse === null) return { estado: null, pulo: "projeto-sem-leitor-de-posse" };
+  if (posse.estado === "sem-posse") return { estado: "sem-posse" };
+  if (posse.estado === "outra")
+    throw new ErroPlano("posse-alheia", `esta árvore não é a dona da posse de ${ciclo} (${posse.motivo ?? "outra árvore"}) — a condução só grava da dona`);
+  if (posse.estado !== "dona")
+    throw new ErroPlano("posse-ilegivel", `a posse de ${ciclo} não se leu (${posse.motivo ?? posse.estado ?? "sem estado"}) — sem ela nada se grava`);
+  if (typeof posse.lock_id !== "string" || !posse.lock_id || !epocaValida(posse.epoca))
+    throw new ErroPlano("posse-sem-epoca", `a posse de ${ciclo} voltou sem o par (lock_id ${JSON.stringify(posse.lock_id ?? null)}, época ${JSON.stringify(posse.epoca ?? null)}) — sem ele a cerca não confere, e nada se grava`);
+  const daSessao = sessao ?? { lock_id: posse.lock_id, epoca: Object.hasOwn(posse, "epoca_gravada") ? posse.epoca_gravada : 1 };
+  if (daSessao.lock_id !== posse.lock_id || daSessao.epoca !== posse.epoca)
+    throw new ErroPlano(
+      "epoca-velha",
+      `o par desta sessão (lock_id ${String(daSessao.lock_id).slice(0, 8)}, época ${daSessao.epoca}) difere do da posse de ${ciclo} (lock_id ${posse.lock_id.slice(0, 8)}, época ${posse.epoca}) — a posse passou: esta sessão não grava mais`,
+    );
+  return { estado: "dona", lock_id: posse.lock_id, epoca: posse.epoca };
+}
+
+// ── estado "em passagem" (VEGA-37 T15) ───────────────────────────────────────
+
+/**
+ * A passagem aberta: a última marca `passagem` de `marcas` (de `lerMarcas`)
+ * sem `confirmada` nem `desistida` depois dela, ou `null`.
+ * Em passagem, `abrir` e a publicação recusam (`exigirForaDaPassagem`).
+ */
+export function passagemAberta(marcas) {
+  const ultima = marcas.findLast((m) => m.tipo === "passagem" || m.tipo === "confirmada" || m.tipo === "desistida");
+  return ultima?.tipo === "passagem" ? ultima : null;
+}
+
+function exigirForaDaPassagem(repo, oQue) {
+  const p = passagemAberta(lerMarcas(repo));
+  exigir(
+    !p,
+    "em-passagem",
+    `a condução está em passagem desde ${p?.sha.slice(0, 8)} (${p?.fase}, nota ${p?.nota ?? "?"}): ${oQue} recusa até a herdeira confirmar ou a anterior desistir (desistir-da-passagem)`,
+  );
+}
+
+/** Alvo da nota de passagem em tokens (4 caracteres por token): o 1–2 mil de D-VEGA37-10 contra a medição da T4. */
+export const ALVO_NOTA_TOKENS = 2000;
+export const CARACTERES_POR_TOKEN = 4;
+/** As seções do molde, na ordem: objetivo e próximo passo nas pontas (`references/nota-de-passagem.md`). */
+export const SECOES_DA_NOTA = Object.freeze(["Objetivo", "Estado", "Decisões da fase", "Tentado e descartado", "Ponteiros", "Próximo passo"]);
+
+/** Recusa (`nota-fora-do-molde`) o corpo sem as seções `## ` do molde, na ordem, sem outra de nível 2 nem frontmatter. */
+export function conferirMoldeDaNota(corpo) {
+  exigir(typeof corpo === "string" && corpo.trim(), "nota-vazia", "a nota de passagem veio vazia");
+  exigir(!/^---\s*$/m.test(corpo.split("\n")[0] ?? ""), "nota-fora-do-molde", "o corpo da nota não traz frontmatter: o passar o escreve (época, lock_id, ponta)");
+  const achadas = [...corpo.matchAll(/^## (.+?)\s*$/gm)].map((m) => m[1]);
+  exigir(
+    JSON.stringify(achadas) === JSON.stringify(SECOES_DA_NOTA),
+    "nota-fora-do-molde",
+    `as seções da nota são ${JSON.stringify(achadas)}; o molde pede ${JSON.stringify(SECOES_DA_NOTA)}, nessa ordem`,
+  );
+  const tokens = Math.ceil(corpo.length / CARACTERES_POR_TOKEN);
+  exigir(tokens <= ALVO_NOTA_TOKENS, "nota-acima-do-alvo", `a nota tem ~${tokens} tokens (${CARACTERES_POR_TOKEN} caracteres por token); o alvo é até ${ALVO_NOTA_TOKENS} — ponteiro no lugar do conteúdo`);
+  return tokens;
+}
+
+/** O `id:` do frontmatter do canonico no HEAD, ou `null`. */
+function idDoCanonico(repo, caminho) {
+  const r = tentar(repo, ["show", `HEAD:${caminho}`]);
+  const texto = r.status === 0 ? r.saida : "";
+  const fm = /^---\n([\s\S]*?)\n---/.exec(texto);
+  const m = fm && /^id:\s*(\S+)\s*$/m.exec(fm[1]);
+  return m ? m[1] : null;
+}
+
+/**
+ * `passar F<n> --nota <arquivo>`: grava a nota de passagem e põe a condutora em
+ * passagem (VEGA-37 T15). Só em fronteira limpa — nenhuma tentativa em voo,
+ * nenhuma trazida sem conferência, nenhuma filha viva (`vivas`, da entrada do
+ * chamador): a régua com operária viva primeiro fecha as abertas. Lê a posse
+ * pela cerca e grava o par dela na cabeça da nota, em
+ * `<pasta do canonico>/notes/passagem-<fase>-<k>.md`, junto com a ponta do
+ * ramo; a nota e a marca `Conducao: F<n> em passagem` saem num commit só, e a
+ * cópia sobe. A posse NÃO muda aqui: muda uma vez, no `passar-posse` da herdeira.
+ */
+export function passar({ repo, ciclo, fase, corpo, emVoo = [], trazidas = [], vivas = [], posse = undefined }) {
+  exigir(FASE_RE.test(fase ?? ""), "uso", `passar exige a fase F<n>, veio ${JSON.stringify(fase ?? null)}`);
+  exigirForaDaPassagem(repo, "uma passagem nova");
+  const sujas = [
+    ...emVoo.map((r) => `${r.task}/${r.tentativa} em voo`),
+    ...trazidas.map((r) => `${r.task}/${r.tentativa} trazida sem conferência`),
+    ...vivas.map((s) => `filha ${s} viva`),
+  ];
+  exigir(!sujas.length, "fronteira-suja", `passar só em fronteira limpa: ${sujas.join(", ")} — feche as abertas (traga e confira, ou registre a falha) e passe depois`);
+  const tokens = conferirMoldeDaNota(corpo);
+  exigir(tentar(repo, ["diff", "--cached", "--quiet"]).status === 0, "indice-sujo", "há mudança no índice: o commit da passagem leva só a nota");
+  const par = exigirPosse({ repo, ciclo, posse });
+  const ponta = rodar(repo, ["rev-parse", "HEAD"]);
+  const canonico = caminhoDoCanonico(repo, "HEAD", ciclo);
+  const pasta = path.posix.join(path.posix.dirname(canonico), "notes");
+  const existentes = linhas(tentar(repo, ["ls-tree", "--name-only", "HEAD", `${pasta}/`]).saida);
+  const re = new RegExp(`^passagem-${fase}-(\\d+)\\.md$`);
+  const k = 1 + Math.max(0, ...existentes.map((p) => Number(re.exec(path.posix.basename(p))?.[1] ?? 0)));
+  const nome = `passagem-${fase}-${k}`;
+  const relativo = `${pasta}/${nome}.md`;
+  const id = idDoCanonico(repo, canonico);
+  const epoca = par.estado === "dona" ? String(par.epoca) : par.estado ?? "sem-leitor";
+  const cabeca = [
+    "---",
+    ...(id ? [`id: ${id.split("/")[0]}/${ciclo}/notes/${nome}`] : []),
+    "type: ciclo-nota",
+    `cycle: ${ciclo}`,
+    `phase: ${fase}`,
+    `epoca: ${epoca}`,
+    `lock_id: ${par.lock_id ?? "nenhum"}`,
+    `ponta: ${ponta}`,
+    `opened: ${new Date().toISOString().slice(0, 10)}`,
+    "---",
+    "",
+    `# Passagem de ${fase} — ${ciclo}, época ${epoca}`,
+    "",
+    "",
+  ].join("\n");
+  const absoluto = path.join(repo, relativo);
+  mkdirSync(path.dirname(absoluto), { recursive: true });
+  writeFileSync(absoluto, `${cabeca}${corpo.replace(/\n*$/, "\n")}`);
+  rodar(repo, ["add", "--", relativo]);
+  // O ramo vai na marca (VEGA-37 T16): a anterior o desanexa depois, e a ordem da troca o lê dela.
+  const ramo = tentar(repo, ["symbolic-ref", "--short", "-q", "HEAD"]).saida || null;
+  const trailers = {
+    "Conducao-Passagem": fase,
+    "Conducao-Nota": relativo,
+    "Conducao-Epoca": epoca,
+    "Conducao-Ponta": ponta,
+    ...(par.lock_id ? { "Conducao-Lock": par.lock_id } : {}),
+    ...(ramo ? { "Conducao-Ramo": ramo } : {}),
+  };
+  rodar(repo, ["commit", "-q", "-m", `Conducao: ${fase} em passagem`, "-m", Object.entries(trailers).map(([c, v]) => `${c}: ${v}`).join("\n")]);
+  const sha = rodar(repo, ["rev-parse", "HEAD"]);
+  return comCopia(repo, ciclo, {
+    acao: "em-passagem",
+    ciclo,
+    fase,
+    sha,
+    nota: relativo,
+    tokens,
+    epoca: par.estado === "dona" ? par.epoca : null,
+    lock_id: par.lock_id ?? null,
+    ponta,
+    ...(par.pulo ? { pulos: [{ passo: "posse", motivo: par.pulo }] } : {}),
+  });
+}
+
+/**
+ * `desistir-da-passagem F<n> --motivo <texto>`: a anterior sai de "em passagem"
+ * e segue dona (a posse nunca saiu dela; a cerca recusa se saiu). Marca
+ * `Conducao: F<n> passagem desistida` com o sha da passagem desistida.
+ */
+export function desistirDaPassagem({ repo, ciclo, fase, motivo = null }) {
+  exigir(FASE_RE.test(fase ?? ""), "uso", `desistir-da-passagem exige a fase F<n>, veio ${JSON.stringify(fase ?? null)}`);
+  const p = passagemAberta(lerMarcas(repo));
+  exigir(p, "sem-passagem", "não há passagem aberta para desistir");
+  exigir(p.fase === fase, "fase-da-passagem", `a passagem aberta é de ${p.fase}, não de ${fase}`);
+  const sha = commitVazio(repo, ciclo, `Conducao: ${fase} passagem desistida`, { corpo: motivo, trailers: { "Conducao-Passagem": fase, "Conducao-Desistida": p.sha } });
+  return comCopia(repo, ciclo, { acao: "passagem-desistida", ciclo, fase, sha, passagem: p.sha });
+}
+
+/**
+ * `confirmar-passagem` (VEGA-37 T16): a herdeira, já dona com a época nova,
+ * fecha a passagem aberta com `Conducao: F<n> passagem confirmada` — o sha da
+ * passagem em `Conducao-Confirma`, a época da posse em `Conducao-Epoca` e,
+ * com a árvore da anterior suja, o caminho dela em `Conducao-Arvore-Suja`
+ * (o desmonte não acontece; o operador decide). A marca passa pela cerca da
+ * posse, como toda marca; a cópia sobe.
+ */
+export function confirmarPassagem({ repo, ciclo, passagem, epoca, arvoreSuja = null }) {
+  const p = passagemAberta(lerMarcas(repo));
+  exigir(p, "sem-passagem", "não há passagem aberta para confirmar");
+  exigir(p.sha === passagem, "passagem-trocada", `a passagem aberta é ${p.sha.slice(0, 8)}, não ${String(passagem ?? "").slice(0, 8)}`);
+  exigir(Number.isSafeInteger(epoca) && epoca > Number(p.epoca), "epoca-parada", `a época da posse (${epoca}) não subiu da época da nota (${p.epoca}): sem o passar-posse a herdeira não confirma`);
+  const trailers = { "Conducao-Passagem": p.fase, "Conducao-Confirma": p.sha, "Conducao-Epoca": String(epoca), ...(arvoreSuja ? { "Conducao-Arvore-Suja": arvoreSuja } : {}) };
+  const sha = commitVazio(repo, ciclo, `Conducao: ${p.fase} passagem confirmada`, { trailers });
+  return comCopia(repo, ciclo, { acao: "passagem-confirmada", ciclo, fase: p.fase, sha, passagem: p.sha, epoca, ...(arvoreSuja ? { arvoreSuja, avisar: "operador" } : {}) });
 }
 
 // ── cópia do ciclo ───────────────────────────────────────────────────────────
@@ -104,6 +333,7 @@ function commitVazio(repo, subject, { corpo, trailers = {} } = {}) {
  * a referência já existe no origin.
  */
 export function empurrarCopia({ repo, ciclo }) {
+  exigirPosse({ repo, ciclo });
   const head = rodar(repo, ["rev-parse", "HEAD"]);
   const anterior = revOuNull(repo, refs.copiaLocal(ciclo));
   if (anterior === head) return { copia: head, anterior, empurrada: false };
@@ -133,8 +363,76 @@ export function empurrarCopia({ repo, ciclo }) {
   return { copia: head, anterior, empurrada: true };
 }
 
+// ── ramo do ciclo (VEGA-37 T9) ───────────────────────────────────────────────
+
+/**
+ * A proposta aberta do ramo pelo `gh` (`gh pr view <ramo> --json number,state`),
+ * ou `null` quando o `gh` falha ou não acha — quem chama recusa.
+ */
+export function propostaNoGh({ repo, ramo }) {
+  const r = spawnSync("gh", ["pr", "view", ramo, "--json", "number,state"], { cwd: repo, encoding: "utf8", timeout: PRAZO_REDE_MS });
+  if (r.error || r.status !== 0) return null;
+  try {
+    const p = JSON.parse(r.stdout);
+    return Number.isInteger(p?.number) ? { number: p.number, state: p.state ?? null } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * O resumo dos pulos que o log de eventos grava (`motivo`, token da allowlist de
+ * `log-eventos.mjs`): `pulou:<passo>+<passo>`, ou `null` sem pulo. A lista inteira
+ * (`pulos`, com o motivo de cada um) fica na saída do verbo.
+ */
+export function motivoDosPulos(pulos) {
+  return Array.isArray(pulos) && pulos.length ? `pulou:${pulos.map((p) => p.passo).join("+")}` : null;
+}
+
+/** A ponta do ramo no origin pela referência de rastreio (`refs/remotes/origin/<ramo>`), sem rede; `null` sem ela. */
+export function ramoNoOrigin(repo) {
+  if (tentar(repo, ["remote", "get-url", "origin"]).status !== 0) return null;
+  const ramo = tentar(repo, ["symbolic-ref", "--short", "-q", "HEAD"]).saida;
+  if (!ramo) return null;
+  return { nome: ramo, noOrigin: revOuNull(repo, `refs/remotes/origin/${ramo}`) };
+}
+
+/**
+ * Empurra o ramo do ciclo para o origin no fechamento da fase (VEGA-37 T9,
+ * §2.2#3): a condutora deixa de pedir o push a uma sessão acima. Só da árvore
+ * dona da posse (`posse`, pelo `posse.comando` da declaração, §2.2#6 e D-VEGA37-26: `dona` ou
+ * `sem-posse` passam; `outra` e `nao-li` recusam), só com o HEAD igual ao que
+ * o `proximo` emitiu (`head`), só com a proposta aberta quando o projeto tem
+ * proposta (`temProposta`), e nunca forçado — o origin à frente recusa.
+ * Projeto sem o leitor de posse empurra sem a cerca; projeto sem proposta e
+ * sem CI (`ci: false` na declaração) pula a inscrição e a leitura do CI. Todo
+ * pulo sai em `pulos`, que o log de eventos grava.
+ */
+export function empurrarRamo({ repo, ciclo, head, posse = posseDoProjeto(repo, { ciclo }), temProposta = lerAdaptador(repo).ci !== false, lerProposta = propostaNoGh }) {
+  const ramo = tentar(repo, ["symbolic-ref", "--short", "-q", "HEAD"]).saida;
+  exigir(!!ramo, "ramo-destacado", "HEAD destacado: o empurrar-ramo roda na árvore do ciclo, no ramo dele");
+  const atual = rodar(repo, ["rev-parse", "HEAD"]);
+  exigir(typeof head === "string" && head.length >= 7 && atual.startsWith(head), "head-nao-conferido", `o HEAD ${atual.slice(0, 8)} não é o ${String(head ?? "(nenhum)").slice(0, 8)} que o proximo emitiu — rode o proximo de novo`);
+  const pulos = [];
+  if (posse === null) pulos.push({ passo: "posse", motivo: "projeto-sem-leitor-de-posse" });
+  else if (posse.estado === "outra")
+    throw new ErroPlano("posse-alheia", `esta árvore não é a dona da posse de ${ciclo} (${posse.motivo ?? "outra árvore"}) — o ramo só sobe da dona`);
+  else if (posse.estado !== "dona" && posse.estado !== "sem-posse")
+    throw new ErroPlano("posse-ilegivel", `a posse de ${ciclo} não se leu (${posse.motivo ?? posse.estado}) — sem ela o ramo não sobe`);
+  let proposta = null;
+  if (temProposta) {
+    proposta = lerProposta({ repo, ramo });
+    exigir(proposta?.state === "OPEN", "sem-proposta", `${ramo} sem proposta aberta (${proposta ? proposta.state : "nenhuma"}) — abra como rascunho (gh pr create --draft --fill --head ${ramo}) antes de empurrar`);
+  } else pulos.push({ passo: "inscrever-na-proposta", motivo: "projeto-sem-proposta" }, { passo: "ci", motivo: "projeto-sem-ci" });
+  const push = tentar(repo, ["push", "--porcelain", "origin", `${atual}:refs/heads/${ramo}`], { rede: true });
+  if (push.status !== 0)
+    throw new ErroPlano("ramo-push-recusado", `push de ${ramo} recusado: ${push.erro.split("\n").slice(-3).join(" | ")} — nada foi forçado; traga o origin para o ramo e rode o proximo de novo`);
+  rodar(repo, ["update-ref", `refs/remotes/origin/${ramo}`, atual]);
+  return { acao: "ramo-empurrado", ciclo, ramo, sha: atual, proposta: proposta?.number ?? null, posse: posse?.estado ?? null, pulos, motivo: motivoDosPulos(pulos) };
+}
+
 /** Recusas do `empurrarCopia` que deixam a escrita já feita no ramo de pé. */
-const RECUSAS_DA_COPIA = new Set(["copia-push-falhou", "copia-sem-proposta"]);
+const RECUSAS_DA_COPIA = new Set(["copia-push-falhou", "copia-sem-proposta", ...RECUSAS_DA_POSSE]);
 export const DESFECHO_SEM_COPIA = "registrado-sem-copia";
 
 /**
@@ -174,7 +472,7 @@ export function autorizarFase({ repo, ciclo, fase, sim, doCiclo = false }) {
   const { blob, plano } = lerPlanoNoCommit(repo, "HEAD", ciclo);
   exigir(plano.fases.some((f) => f.id === fase), "fase-ausente", `${fase} não está no plano ${blob}`);
   const trailers = { "Conducao-Plano": blob, ...(doCiclo ? { "Conducao-Ciclo": "sim" } : {}) };
-  const sha = commitVazio(repo, `Conducao: ${fase} autorizada`, { corpo: sim, trailers });
+  const sha = commitVazio(repo, ciclo, `Conducao: ${fase} autorizada`, { corpo: sim, trailers });
   return comCopia(repo, ciclo, { acao: "autorizada", ciclo, fase, sha, plano: blob, ...(doCiclo ? { doCiclo: true } : {}) });
 }
 
@@ -213,7 +511,7 @@ export function registrarHeranca({ repo, ciclo, fase, autorizacao, replanos, pla
     origem === "ciclo"
       ? `Autorizada pelo sim do ciclo de ${autorizacao.slice(0, 8)} (autorizar-ciclo, ruling de 27/10/2026)${lista ? `, re-plano ${lista}` : ""}: nenhuma task mudou de classe ou sensibilidade desde o sim. Task sensível desta fase segue pedindo o sim por task.`
       : `Herdada pelo re-plano ${lista}: o sim do operador de ${autorizacao.slice(0, 8)} segue valendo — nenhuma task mudou de classe e nenhuma trazida está pendente (F4.17).`;
-  const sha = commitVazio(repo, `Conducao: ${fase} autorizada`, {
+  const sha = commitVazio(repo, ciclo, `Conducao: ${fase} autorizada`, {
     corpo,
     trailers: {
       "Conducao-Plano": blob,
@@ -239,6 +537,9 @@ export function abrir({ repo, ciclo, task, tentativa, nonce, falhou = null }) {
   exigir(TASK_RE.test(task ?? ""), "uso", `task inválida: ${task}`);
   exigir(Number.isInteger(tentativa) && tentativa > 0, "uso", `tentativa inválida: ${tentativa}`);
   exigir(NONCE_RE.test(nonce ?? ""), "uso", `nonce inválido: ${nonce}`);
+  // Em passagem não abre operária (VEGA-37 T15); o marcador é marca: passa pela cerca da posse.
+  exigirForaDaPassagem(repo, "o abrir");
+  exigirPosse({ repo, ciclo });
   // Tentativa nova depois de falha decidida (T12): a falha da anterior entra
   // no ramo antes do marcador, para a contagem nunca depender da maestra.
   let falha = null;
@@ -429,7 +730,7 @@ export function partidaDoBrief(brief, { ciclo, task, tentativa, nonce, ref, refB
 
 // ── falha decidida (T12) ─────────────────────────────────────────────────────
 
-const COBERTAS = new Set(["sim", "nao", "ambiente"]);
+const COBERTAS = new Set(["sim", "nao", "ambiente", "pergunta"]);
 
 /**
  * Commit vazio `Conducao: T<k> tentativa <n> falhou` no ramo do ciclo, com
@@ -444,33 +745,92 @@ const COBERTAS = new Set(["sim", "nao", "ambiente"]);
  * conta no teto, como a queda coberta por reinício, mas é classe própria:
  * trailer `Conducao-Falha-Ambiente: sim` com `coberta-por-reinicio: nao`, e o
  * motivo é obrigatório — é o registro de por que não contou.
+ *
+ * `--coberta pergunta` (ATRM-54 F4): a filha avisou `T<k>-FALHA pergunta` e o
+ * operador respondeu com re-plano — a tentativa encerra sem ser falha de
+ * trabalho nem de ambiente. Não conta em teto nenhum: trailer
+ * `Conducao-Falha-Pergunta: sim` com `coberta-por-reinicio: nao`, e o motivo
+ * (a decisão que encerrou a tentativa) é obrigatório. A prova é o aviso da
+ * própria tentativa no git: o atual do origin (o último visto, `refs/conducao-local/…/aviso/…`, só com o origin ilegível)
+ * tem de ser `T<k>-FALHA pergunta <nonce da tentativa>`, e o sha
+ * dele vai no trailer `Conducao-Aviso`. Sem a prova, `perguntar
+ * pergunta-sem-aviso` e nada é gravado: sem isso a classe seria a porta para
+ * tirar falha de trabalho do teto.
+ *
+ * Idempotente pela tentativa, não pela classe: marca existente com outra
+ * `coberta` sai `perguntar coberta-diverge-da-marca` (a marca não se reclassifica).
  */
 export function registrarFalha({ repo, ciclo, task, tentativa, coberta, motivo = null }) {
   exigir(TASK_RE.test(task ?? ""), "uso", `task inválida: ${task}`);
   exigir(Number.isInteger(tentativa) && tentativa > 0, "uso", `tentativa inválida: ${tentativa}`);
-  exigir(COBERTAS.has(coberta), "uso", `--coberta sim|nao|ambiente, veio ${coberta}`);
+  exigir(COBERTAS.has(coberta), "uso", `--coberta sim|nao|ambiente|pergunta, veio ${coberta}`);
   const ambiente = coberta === "ambiente";
+  const pergunta = coberta === "pergunta";
   exigir(!ambiente || (motivo && motivo.trim()), "motivo-ausente", "--coberta ambiente exige --motivo com o que falhou no ambiente");
+  exigir(!pergunta || (motivo && motivo.trim()), "motivo-ausente", "--coberta pergunta exige --motivo com a decisão do operador que encerrou a tentativa");
   const subjectFalha = `Conducao: ${task} tentativa ${tentativa} falhou`;
-  const ja = rodar(repo, ["log", "--fixed-strings", `--grep=${subjectFalha}`, "--format=%H%x1f%s", "HEAD"])
-    .split("\n")
-    .map((l) => l.split("\x1f"))
+  const ja = rodar(repo, ["log", "--fixed-strings", `--grep=${subjectFalha}`, "--format=%H%x1f%s%x1f%(trailers:only=true,unfold=true)%x1e", "HEAD"])
+    .split("\x1e")
+    .map((l) => l.replace(/^\n/, "").split("\x1f"))
     .find(([, s]) => s === subjectFalha);
-  if (ja) return { acao: "falha-registrada", ciclo, task, tentativa, sha: ja[0], nova: false };
+  if (ja) {
+    const gravada = cobertaDaMarca(lerTrailers(ja[2] ?? ""));
+    if (gravada !== coberta) return perguntar("coberta-diverge-da-marca", { ciclo, task, tentativa, sha: ja[0], gravada, pedida: coberta });
+    return { acao: "falha-registrada", ciclo, task, tentativa, coberta: gravada, sha: ja[0], nova: false };
+  }
   const trazida = lerTrazidas(repo, ciclo).find((r) => r.task === task && r.tentativa === tentativa);
   if (trazida) return perguntar("trazida-sem-revert", { ciclo, task, tentativa, ref: trazida.ref });
   const local = revOuNull(repo, refs.tentativaLocal(ciclo, task, tentativa));
   const nonceTentativa = local ? RE.marcador.exec(subject(repo, local))?.[3] ?? null : null;
-  const sha = commitVazio(repo, subjectFalha, {
-    corpo: motivo,
+  let aviso = null;
+  if (pergunta) {
+    const prova = provaDaPergunta(repo, ciclo, task, tentativa, nonceTentativa);
+    if (!prova.ok) return perguntar("pergunta-sem-aviso", { ciclo, task, tentativa, ref: refs.aviso(ciclo, task, tentativa), encontrado: prova.encontrado });
+    aviso = prova.sha;
+  }
+  const sha = commitVazio(repo, ciclo, subjectFalha, {
+    corpo: motivo?.trim() || null,
     trailers: {
       "Conducao-Task": task,
       ...(nonceTentativa ? { "Conducao-Nonce": nonceTentativa } : {}),
-      "coberta-por-reinicio": ambiente ? "nao" : coberta,
+      "coberta-por-reinicio": ambiente || pergunta ? "nao" : coberta,
       ...(ambiente ? { "Conducao-Falha-Ambiente": "sim" } : {}),
+      ...(pergunta ? { "Conducao-Falha-Pergunta": "sim", "Conducao-Aviso": aviso } : {}),
     },
   });
   return comCopia(repo, ciclo, { acao: "falha-registrada", ciclo, task, tentativa, coberta, nonce: nonceTentativa, sha, nova: true });
+}
+
+/** A `coberta` que os trailers de uma marca `falhou` gravaram (a mesma leitura de `marcas.mjs`). */
+function cobertaDaMarca(tr) {
+  if (tr["Conducao-Falha-Pergunta"] === "sim") return "pergunta";
+  if (tr["Conducao-Falha-Ambiente"] === "sim") return "ambiente";
+  return tr["coberta-por-reinicio"] === "sim" ? "sim" : "nao";
+}
+
+/** A linha é o aviso `T<k>-FALHA pergunta <nonce>` desta tentativa. */
+function ehAvisoDePergunta(linha, task, nonce) {
+  return avisoConfere(linha, task, nonce) && String(linha).trim().split(/\s+/).slice(0, 2).join(" ") === `${task}-FALHA pergunta`;
+}
+
+/**
+ * Prova da `--coberta pergunta`: o aviso ATUAL da tentativa é a pergunta dela.
+ * O do origin manda quando se lê — um aviso posterior (a filha que perguntou e
+ * depois falhou) derruba a prova. O último visto pela espera só vale com o
+ * origin ilegível (rede fora, referência apagada): foi observação real, e é o
+ * limite declarado. Nunca lança.
+ */
+function provaDaPergunta(repo, ciclo, task, tentativa, nonce) {
+  if (!nonce) return { ok: false, encontrado: "tentativa sem marcador local legível: a prova não tem nonce com que conferir" };
+  const a = buscarAviso(repo, ciclo, task, tentativa);
+  if (a.ok)
+    return ehAvisoDePergunta(a.linha, task, nonce) ? { ok: true, sha: a.sha } : { ok: false, encontrado: `aviso atual no origin: ${JSON.stringify(a.linha.trim())}` };
+  const visto = revOuNull(repo, refs.avisoVisto(ciclo, task, tentativa));
+  const r = visto ? tentar(repo, ["log", "-1", "--format=%s", visto]) : null;
+  const linhaVista = r?.status === 0 ? r.saida.trim() : null;
+  if (linhaVista !== null && ehAvisoDePergunta(linhaVista, task, nonce)) return { ok: true, sha: visto };
+  const doVisto = linhaVista === null ? "nenhum aviso visto" : `último aviso visto: ${JSON.stringify(linhaVista)}`;
+  return { ok: false, encontrado: `aviso no origin não lido (${a.erro}); ${doVisto}` };
 }
 
 // ── 3. trazer ────────────────────────────────────────────────────────────────
@@ -515,6 +875,18 @@ function blobOuNull(repo, rev, caminho) {
 }
 
 const linhas = (s) => s.split("\n").filter(Boolean);
+// Saída `-z` do git: caminho separado por NUL, nunca entre aspas. Mesmo com
+// `core.quotePath=false` o git cita o nome com aspas, barra invertida ou
+// caractere de controle (`"a\"b"`), e o citado escapa de todo glob (D-VEGA37-44).
+const nulos = (s) => s.split("\0").filter(Boolean);
+
+/**
+ * Caminhos que mudaram de `de` a `ate`, lidos com `-z` (D-VEGA37-44): o nome
+ * que o git poria entre aspas sai cru e segue casando a lista do que pergunta.
+ */
+export function caminhosDoIntervalo(repo, de, ate) {
+  return nulos(rodar(repo, ["diff", "--name-only", "-z", "--no-renames", de, ate], { cru: true }));
+}
 
 /**
  * Traz a tentativa `<n>` da task. Recusa (`perguntar`) ponta que não descende
@@ -527,9 +899,11 @@ const linhas = (s) => s.split("\n").filter(Boolean);
  * tentativa (origin e local) e grava o registro `trazida`. Quem recusa e
  * quando: `verbos.mjs` (§ trazer); aqui, o git que alimenta cada decisão.
  */
-export function trazer({ repo, ciclo, task, tentativa, shaAvisado = null, sessao = null, aprovado = null }) {
+export function trazer({ repo, ciclo, task, tentativa, shaAvisado = null, sessao = null, aprovado = null, gravarRegistros = gravarRegistrosDoTrazer }) {
   exigir(TASK_RE.test(task ?? ""), "uso", `task inválida: ${task}`);
   exigir(Number.isInteger(tentativa) && tentativa > 0, "uso", `tentativa inválida: ${tentativa}`);
+  // O trazer grava no ramo: passa pela cerca da posse antes do primeiro commit (VEGA-37 T15).
+  exigirPosse({ repo, ciclo });
   const base = { ciclo, task, tentativa };
   const local = refs.tentativaLocal(ciclo, task, tentativa);
   const marcador = revOuNull(repo, local);
@@ -576,7 +950,7 @@ export function trazer({ repo, ciclo, task, tentativa, shaAvisado = null, sessao
   const naBase = verbos.conferirBase({ base, head, paiMarcador, baseNoRamo: ancestral(repo, paiMarcador, head), merges });
   if (naBase) return naBase;
 
-  const cru = linhas(rodar(repo, ["-c", "core.quotePath=false", "diff", "--name-only", "--no-renames", marcador, ponta]));
+  const cru = caminhosDoIntervalo(repo, marcador, ponta);
   let caminhos = verbos.caminhosDoDiff({
     cru,
     merges,
@@ -593,14 +967,31 @@ export function trazer({ repo, ciclo, task, tentativa, shaAvisado = null, sessao
   exigir(t, "task-ausente", `${task} não está no plano congelado`);
   const canonico = caminhoDoCanonico(repo, "HEAD", ciclo);
   caminhos = verbos.comCanonico({ cru, caminhos, canonico });
-  const motivos = verbos.motivosParaPerguntar({
+  // Os casos que o operador já decidiu seguem sem pergunta e ficam registrados (VEGA-37 T33):
+  // o texto de cada um é o corpo da decisão que o mapa do §1.5 do canonico do HEAD aponta
+  // (D-VEGA37-34/35) ou, na pergunta repetida, o corpo da marca de origem; sem ele, o caso pergunta.
+  const decidido = verbos.decidirNoTrazer({
     caminhos,
     canonico,
     outputs: t.outputs,
     passos: t.passos ?? [],
     codigo: codigoDoAdaptador(repo),
     instrucoes: lerAdaptador(repo).sessao.instrucoes,
+    consentimentos: lerConsentimentos(repo, { ciclo }),
+    ciclo,
+    fase: t.fase,
   });
+  const doCanonico = tentar(repo, ["show", `HEAD:${canonico}`]);
+  const doTrazer = registrosDoTrazer({
+    consentidos: decidido.consentidos,
+    canonico: doCanonico.status === 0 ? doCanonico.saida : "",
+    ciclo,
+    fase: t.fase,
+    task,
+    quem: nomeDoOperador(repo),
+    quando: new Date().toISOString(),
+  });
+  const motivos = devolverAosMotivos(decidido.motivos, doTrazer.voltam);
   const semAprovacao = verbos.exigirAprovacao({ base, ponta, aprovado, motivos, confere: () => aprovadoConfere(repo, aprovado, ponta) });
   if (semAprovacao) return semAprovacao;
 
@@ -635,10 +1026,11 @@ export function trazer({ repo, ciclo, task, tentativa, shaAvisado = null, sessao
     }
   }
 
-  const registro = gravarTrazida(repo, { ciclo, task, tentativa, nonce, marcador, ponta, sessao, base: head, ate, modo });
+  // Os casos a registrar viajam no `trazida`: é dele que o `regravar-consentimentos` os relê (D-VEGA37-36).
+  const consentidos = doTrazer.registros.map((r) => consentidoDoRegistro(r.registro));
+  const registro = gravarTrazida(repo, { ciclo, task, tentativa, nonce, marcador, ponta, sessao, base: head, ate, modo, consentidos });
   const apagada = apagarTentativa(repo, ciclo, task, tentativa);
-  return comCopia(repo, ciclo, {
-    acao: "trazida",
+  const trazida = {
     ...base,
     modo,
     antes: head,
@@ -648,7 +1040,115 @@ export function trazer({ repo, ciclo, task, tentativa, shaAvisado = null, sessao
     ...(carimboOrfao ? { carimboOrfao } : {}),
     registro,
     apagada,
+  };
+  // Depois de trazida: o trabalho fica (nunca reverte) e a falha do registro vira
+  // pergunta com o remédio, nunca só um campo da saída (D-VEGA37-36).
+  const gravados = gravarComPergunta({ repo, ciclo, registros: doTrazer.registros, gravarRegistros });
+  if (gravados.erro) return comCopia(repo, ciclo, perguntaSemRegistro(trazida, gravados.erro, consentidos.length));
+  return comCopia(repo, ciclo, {
+    acao: "trazida",
+    ...trazida,
+    ...(gravados.consentimentos.length ? { consentimentos: gravados.consentimentos } : {}),
   });
+}
+
+/** O caso a registrar como viaja no `trazida`: sem o sim, que o regravar relê do plano ou da marca de origem. */
+function consentidoDoRegistro(r) {
+  return {
+    fase: r.fase,
+    caso: r.caso,
+    motivo: r.motivo ?? null,
+    caminhos: [...(r.caminhos ?? [])],
+    quem: r.quem,
+    quando: r.quando,
+    ...(r.origem ? { origem: r.origem } : {}),
+  };
+}
+
+function gravarComPergunta({ repo, ciclo, registros, gravarRegistros }) {
+  try {
+    const g = gravarRegistros({ repo, registros, cerca: () => exigirPosse({ repo, ciclo }) });
+    return { consentimentos: g.map((x) => ({ sha: x.sha, caso: x.registro.caso, caminhos: x.registro.caminhos })) };
+  } catch (e) {
+    return { erro: String(e?.message ?? e).split("\n")[0] || "erro sem mensagem" };
+  }
+}
+
+function perguntaSemRegistro(campos, erro, total) {
+  return perguntar("consentimento-nao-gravado", {
+    ...campos,
+    trazido: true,
+    erro,
+    remedio: "regravar-consentimentos",
+    comando: `regravar-consentimentos ${campos.task} --tentativa ${campos.tentativa}`,
+    detalhe: `o trabalho da ${campos.task} foi trazido e fica; o registro de ${total} caso(s) que seguiram sem pergunta não se gravou (${erro}). Rodar o regravar-consentimentos antes de conferir a task.`,
+  });
+}
+
+const CHAVE_CONSENTIMENTO = (c) => JSON.stringify([c.fase, c.caso, c.motivo ?? null, [...(c.caminhos ?? [])].sort(), c.origem ?? null]);
+
+/**
+ * Os casos do `trazida` ainda sem registro no git (`lerConsentimentos` do HEAD,
+ * tipo `trazer`, mesma task). Puro. `consentidos` ilegíveis (`null`) ⇒ null:
+ * quem chama pergunta, porque não sabe o que falta.
+ */
+export function consentimentosEmFalta({ consentidos, gravados = [], task }) {
+  if (consentidos === null) return null;
+  const ja = new Set(gravados.filter((g) => g.task === task && g.tipo === "trazer").map(CHAVE_CONSENTIMENTO));
+  return (consentidos ?? []).filter((c) => !ja.has(CHAVE_CONSENTIMENTO(c)));
+}
+
+/** A falta de uma trazida no repo: os casos sem registro, ou null quando o registro dela não se lê. */
+export function faltaDaTrazida(repo, ciclo, trazida) {
+  if (Array.isArray(trazida.consentidos) && !trazida.consentidos.length) return [];
+  return consentimentosEmFalta({ consentidos: trazida.consentidos, gravados: lerConsentimentos(repo, { ciclo }), task: trazida.task });
+}
+
+/**
+ * `regravar-consentimentos T<k> --tentativa <n>` (D-VEGA37-36): o remédio da
+ * pergunta `consentimento-nao-gravado`. Relê os casos do registro `trazida`,
+ * grava só os que ainda não estão no git (idempotente: rodar de novo não grava
+ * nada) e sai com os SHAs — ou com a mesma pergunta. O sim de cada caso vem de
+ * onde o `trazer` o tirou: o corpo da decisão no canonico do HEAD, ou o da
+ * marca de origem da pergunta repetida. `canonicoTexto` e `gravarRegistros`
+ * são injetáveis para o teste.
+ */
+export function regravarConsentimentos({ repo, ciclo, task, tentativa, gravarRegistros = gravarRegistrosDoTrazer, canonicoTexto = null }) {
+  exigir(TASK_RE.test(task ?? ""), "uso", `task inválida: ${task}`);
+  exigir(Number.isInteger(tentativa) && tentativa > 0, "uso", `tentativa inválida: ${tentativa}`);
+  exigirPosse({ repo, ciclo });
+  const base = { ciclo, task, tentativa };
+  const t = lerTrazidas(repo, ciclo).find((r) => r.task === task && r.tentativa === tentativa);
+  if (!t) return perguntar("sem-trazida", { ...base, detalhe: `nenhum registro trazida pendente de ${task} tentativa ${tentativa}: nada a regravar` });
+  const gravados = lerConsentimentos(repo, { ciclo });
+  const falta = consentimentosEmFalta({ consentidos: t.consentidos, gravados, task });
+  if (falta === null) return perguntaSemRegistro({ ...base, registro: t.ref }, "os casos do registro trazida não se leem", 0);
+  if (!falta.length) return { acao: "regravados", ...base, registro: t.ref, consentimentos: [], jaGravados: t.consentidos.length };
+  let texto = canonicoTexto;
+  if (texto === null) {
+    const doHead = tentar(repo, ["show", `HEAD:${caminhoDoCanonico(repo, "HEAD", ciclo)}`]);
+    texto = doHead.status === 0 ? doHead.saida : "";
+  }
+  const porOrigem = new Map(gravados.map((g) => [g.sha, g]));
+  const registros = [];
+  const voltam = [];
+  for (const c of falta) {
+    const r = registrosDoTrazer({
+      consentidos: [{ ...c, sim: c.origem ? (porOrigem.get(c.origem)?.sim ?? null) : null }],
+      canonico: texto,
+      ciclo,
+      fase: c.fase,
+      task,
+      quem: c.quem,
+      quando: c.quando,
+    });
+    registros.push(...r.registros);
+    voltam.push(...r.voltam);
+  }
+  if (voltam.length) return perguntaSemRegistro({ ...base, registro: t.ref }, `${voltam.length} caso(s) sem o sim no canonico do HEAD nem na marca de origem`, falta.length);
+  const g = gravarComPergunta({ repo, ciclo, registros, gravarRegistros });
+  if (g.erro) return comCopia(repo, ciclo, perguntaSemRegistro({ ...base, registro: t.ref }, g.erro, falta.length));
+  return comCopia(repo, ciclo, { acao: "regravados", ...base, registro: t.ref, consentimentos: g.consentimentos, jaGravados: t.consentidos.length - falta.length });
 }
 
 /**
@@ -682,8 +1182,8 @@ function cherryPickRegerando(repo, faixa, limite) {
   let conflitos = [];
   const falha = (erro) => ({ status: 1, erro, conflitos, regeneradas });
   const emConflito = () => {
-    const d = tentar(repo, [...SEM_ASPAS, "diff", "--name-only", "--diff-filter=U"]);
-    return d.status === 0 ? { lista: linhas(d.saida ?? "") } : { erro: `git diff --diff-filter=U saiu ${d.status ?? "sem status (prazo)"}: ${d.erro}` };
+    const d = tentar(repo, ["diff", "--name-only", "-z", "--diff-filter=U"]);
+    return d.status === 0 ? { lista: nulos(d.saida ?? "") } : { erro: `git diff --diff-filter=U saiu ${d.status ?? "sem status (prazo)"}: ${d.erro}` };
   };
   try {
     const geradas = saidasGeradas(repo);
@@ -716,10 +1216,10 @@ function cherryPickRegerando(repo, faixa, limite) {
       // O comando só mexe na saída que regera: arquivo sujo fora do índice ou não rastreado não
       // entra calado no commit nem fica para trás (o ignorado fica, como o `.next/` do `next build`).
       const fora = [];
-      for (const args of [["diff", "--name-only"], ["ls-files", "--others", "--exclude-standard"]]) {
-        const l = tentar(repo, [...SEM_ASPAS, ...args]);
+      for (const args of [["diff", "--name-only", "-z"], ["ls-files", "-z", "--others", "--exclude-standard"]]) {
+        const l = tentar(repo, args);
         if (l.status !== 0) return falha(`git ${args.join(" ")} saiu ${l.status ?? "sem status (prazo)"}: ${l.erro}`);
-        fora.push(...linhas(l.saida ?? ""));
+        fora.push(...nulos(l.saida ?? ""));
       }
       if (fora.length) return falha(`regenerar deixou fora do índice: ${fora.join(", ")} — não limpo, conferir à mão`);
       // Regerada igual ao HEAD, o commit da filha fica vazio e o `--continue` recusa: não há o que
@@ -751,7 +1251,7 @@ function classeDoCommit(repo, arquivos) {
 }
 
 function arquivosDoCommit(repo, c) {
-  return rodar(repo, [...SEM_ASPAS, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", c]).split("\n").filter(Boolean);
+  return nulos(rodar(repo, ["diff-tree", "-z", "--no-commit-id", "--name-only", "-r", "--root", c], { cru: true }));
 }
 
 /** Último commit de código (`classeDoCommit`) da lista, do mais velho ao mais novo; null se só prosa. */
@@ -813,12 +1313,24 @@ function gravarTrazida(repo, d) {
       `Conducao-Base: ${d.base}`,
       `Conducao-Ate: ${d.ate}`,
       `Conducao-Modo: ${d.modo}`,
+      ...(d.consentidos?.length ? [`Conducao-Consentidos: ${Buffer.from(JSON.stringify(d.consentidos), "utf8").toString("base64url")}`] : []),
     ].join("\n"),
   ].join("\n");
   const obj = rodar(repo, ["commit-tree", vazia, "-p", d.ponta, "-m", msg]);
   const ref = refs.trazida(d.ciclo, d.task, d.tentativa);
   rodar(repo, ["update-ref", ref, obj, "0".repeat(40)]);
   return ref;
+}
+
+/** Os casos do trailer `Conducao-Consentidos`: [] sem ele, null quando não se lê. */
+function consentidosDoTrailer(v) {
+  if (v === undefined) return [];
+  try {
+    const lista = JSON.parse(Buffer.from(v, "base64url").toString("utf8"));
+    return Array.isArray(lista) && lista.every((c) => c && typeof c.caso === "string" && typeof c.fase === "string") ? lista : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Registros `trazida` pendentes do ciclo (sem conferência nem revert gravados). */
@@ -848,6 +1360,7 @@ export function lerTrazidas(repo, ciclo) {
       base: tr["Conducao-Base"] ?? null,
       ate: tr["Conducao-Ate"] ?? null,
       modo: tr["Conducao-Modo"] ?? null,
+      consentidos: consentidosDoTrailer(tr["Conducao-Consentidos"]),
     });
   }
   return out;
@@ -940,6 +1453,8 @@ function casoDaTask(repo, t) {
  */
 export function registrarConferencia({ repo, ciclo, task, verificacao, publicacao, manual = false, maestra = false, sim = null, sessao = null, operador = null }) {
   verbos.exigirUsoDaConferencia({ task, manual, maestra, publicacao });
+  // Em passagem a condutora não publica (VEGA-37 T15): a conferência que registra publicação feita recusa.
+  if (publicacao === "feita") exigirForaDaPassagem(repo, "a publicação");
   const t = taskDoPlano(repo, ciclo, task);
   const caso = casoDaTask(repo, t);
   const p = verbos.politicaDaConferencia({
@@ -954,6 +1469,8 @@ export function registrarConferencia({ repo, ciclo, task, verificacao, publicaca
     caso,
     operador,
     nomeDoOperador: nomeDoOperador(repo),
+    // O sim da primeira publicação do ciclo, já no git (D-VEGA37-52): cobre as seguintes.
+    simDoCiclo: simDaPublicacaoDoCiclo({ consentimentos: lerConsentimentos(repo, { ciclo }), ciclo }),
     approval: () => {
       const caminho = caminhoDoApproval(repo, ciclo, caso.arquivo);
       return { caminho, verdict: approvalNoHead(repo, caminho)?.verdict };
@@ -966,15 +1483,74 @@ export function registrarConferencia({ repo, ciclo, task, verificacao, publicaca
     return perguntar(p.motivo, { ...p, ciclo, ...(r ? { tentativa: r.tentativa, nonceTentativa: r.nonce, ref: r.ref } : {}) });
   }
   if (p.via !== "filha") {
-    const sha = commitVazio(repo, p.subject, { corpo: p.corpo, trailers: p.trailers });
-    return comCopia(repo, ciclo, { acao: "conferida", ciclo, task, sha, ...p.saida });
+    const sha = commitVazio(repo, ciclo, p.subject, { corpo: p.corpo, trailers: p.trailers });
+    const casoGravado = casoDaPublicacao({ repo, ciclo, task, p, sim, sha });
+    if (casoGravado.acao === "perguntar") return casoGravado;
+    return comCopia(repo, ciclo, { acao: "conferida", ciclo, task, sha, ...p.saida, ...casoGravado });
   }
   const r = trazidaDaTask(repo, ciclo, task);
+  // Caso consentido da trazida ainda sem registro (ou registro ilegível): a mesma
+  // pergunta do `proximo`, sem gravar a conferência nem apagar a trazida (D-VEGA37-37).
+  const falta = faltaDaTrazida(repo, ciclo, r);
+  if (falta === null || falta.length) {
+    return perguntar("consentimento-nao-gravado", {
+      ciclo,
+      task,
+      tentativa: r.tentativa,
+      trazido: true,
+      registro: r.ref,
+      faltam: falta === null ? null : falta.length,
+      remedio: "regravar-consentimentos",
+      comando: `regravar-consentimentos ${task} --tentativa ${r.tentativa}`,
+      detalhe: `o trabalho da ${task} foi trazido; ${falta === null ? "os casos do registro trazida não se leem" : `${falta.length} caso(s) que seguiram sem pergunta estão sem registro`}. Rodar o regravar-consentimentos antes de conferir a task.`,
+    });
+  }
   exigir(ancestral(repo, r.ate, "HEAD") === true, "trazido-fora-do-ramo", `${r.ate} (trazido de ${task}) não está no HEAD`);
   const sessaoFilha = verbos.sessaoDaFilha({ task, sessao, r });
-  const sha = commitVazio(repo, p.subject, { corpo: p.corpo, trailers: verbos.trailersDaFilha({ task, r, sessaoFilha, verificacao, publicacao, dispensa: p.dispensa }) });
+  const sha = commitVazio(repo, ciclo, p.subject, { corpo: p.corpo, trailers: verbos.trailersDaFilha({ task, r, sessaoFilha, verificacao, publicacao, dispensa: p.dispensa }) });
   rodar(repo, ["update-ref", "-d", r.ref]);
-  return comCopia(repo, ciclo, { acao: "conferida", ciclo, task, tentativa: r.tentativa, nonce: r.nonce, sha, ...p.saida });
+  const casoGravado = casoDaPublicacao({ repo, ciclo, task, p, sim, sha });
+  if (casoGravado.acao === "perguntar") return casoGravado;
+  return comCopia(repo, ciclo, { acao: "conferida", ciclo, task, tentativa: r.tentativa, nonce: r.nonce, sha, ...p.saida, ...casoGravado });
+}
+
+/**
+ * O caso `publicacao-do-ciclo` da primeira publicação do ciclo (D-VEGA37-52),
+ * gravado depois da marca `conferida` de `sha`: o sim é o da conferência, e o
+ * gate só aceita o texto que já está no corpo dela, no git — texto de
+ * mensagem nunca. Sem pedido ⇒ `{}`. Falha ⇒ a conferência fica (nunca se
+ * desfaz, D-VEGA37-36) e sai a pergunta `consentimento-nao-gravado`: a
+ * próxima publicação do ciclo volta a pedir o sim.
+ */
+function casoDaPublicacao({ repo, ciclo, task, p, sim, sha }) {
+  if (!p.consentimento) return {};
+  try {
+    const registro = {
+      ciclo,
+      fase: p.consentimento.fase,
+      caso: p.consentimento.caso,
+      quem: nomeDoOperador(repo),
+      quando: new Date().toISOString(),
+      sim: String(sim ?? "").trim(),
+      task,
+      tipo: "publicacao",
+      origem: sha,
+    };
+    const corpo = simDoCorpo(rodar(repo, ["log", "-1", "--format=%b", sha]));
+    const g = gravarConsentimento({ repo, registro, phi: gateDaConferenciaPublicada(corpo), cerca: () => exigirPosse({ repo, ciclo }) });
+    return { consentimento: { sha: g.sha, caso: g.registro.caso } };
+  } catch (e) {
+    const erro = String(e?.message ?? e).split("\n")[0] || "erro sem mensagem";
+    return perguntar("consentimento-nao-gravado", {
+      ciclo,
+      task,
+      conferida: sha,
+      conferido: true,
+      caso: CASOS.publicacaoDoCiclo,
+      erro,
+      detalhe: `a conferência da ${task} ficou gravada; o registro do sim da publicação do ciclo não (${erro}): a próxima publicação do ciclo volta a pedir o sim.`,
+    });
+  }
 }
 
 /** Approval no HEAD (`{ verdict, rodada }`) ou null quando o caminho não está lá; erro do git sobe. */
@@ -988,11 +1564,70 @@ function caminhoDoApproval(repo, ciclo, arquivo) {
   return path.posix.join(path.posix.dirname(caminhoDoCanonico(repo, "HEAD", ciclo)), arquivo);
 }
 
-/** Marcas `Conducao: T<k> tentativa <n> rodada` da task no HEAD (pelo subject). */
+/**
+ * Marcas `Conducao: T<k> tentativa <n> rodada` da task no HEAD (pelo subject),
+ * da mais nova à mais velha: `{ sha, replanoB }` (`replanoB` = valor do
+ * trailer da B por re-plano, ou null). Contar: `verbos.rodadasDasMarcas`.
+ */
 function marcasDeRodada(repo, task) {
-  return rodar(repo, ["log", "--format=%s", `--grep=^Conducao: ${task} tentativa `, "HEAD"])
+  const formato = `%H%x1f%s%x1f%(trailers:key=${verbos.TRAILER_RODADA_B_REPLANO},valueonly=true,unfold=true)%x1e`;
+  // `--topo-order`: a primeira é a última marca da linha, não a de data mais nova (a janela da B começa nela).
+  return rodar(repo, ["log", "--topo-order", `--format=${formato}`, `--grep=^Conducao: ${task} tentativa `, "HEAD"])
+    .split("\x1e")
+    .map((reg) => reg.replace(/^\n/, "").split("\x1f"))
+    .filter(([sha, subject]) => sha && RE.rodada.exec(subject ?? "")?.[1] === task)
+    .map(([sha, , replanoB = ""]) => ({ sha, replanoB: replanoB.trim() || null }));
+}
+
+/**
+ * A rodada B feita fora da task (casca de `verbos.replanoDaRodadaB`): os
+ * commits que mexeram no canonico, pela linha do ciclo (`--first-parent`),
+ * entre a última marca `rodada` da task e a abertura da tentativa atual (o
+ * pai do marcador dela), com as tasks que cada um criou e as dependências da
+ * task do gate no plano dele. Janela que não se fecha (sem marca anterior, sem
+ * marcador, marca fora da linha do marcador) não acha re-plano, e diz por quê.
+ */
+function replanoDaRodadaB({ repo, ciclo, task, r, ultima }) {
+  const nada = (aviso) => ({ replano: null, vistos: [], aviso });
+  if (!ultima) return nada(`${task} sem marca \`rodada\` anterior — não há rodada B pendente`);
+  if (!r.marcador) return nada(`registro ${r.ref} sem Conducao-Marcador — a abertura da tentativa não se lê`);
+  const fim = `${r.marcador}^`;
+  const naLinha = ancestral(repo, ultima, fim);
+  if (naLinha === null) return nada(`git não respondeu se a marca \`rodada\` ${ultima.slice(0, 8)} antecede ${fim} (objeto ausente?)`);
+  if (!naLinha)
+    return nada(`a marca \`rodada\` ${ultima.slice(0, 8)} não está na linha da abertura da tentativa ${r.tentativa} (${r.marcador.slice(0, 8)})`);
+  const canonico = caminhoDoCanonico(repo, "HEAD", ciclo);
+  const ids = (commit) => {
+    try {
+      return new Set(lerPlanoNoCommit(repo, commit, ciclo).plano.porId.keys());
+    } catch (e) {
+      // Canonico que nasceu no próprio commit: toda task dele é nova.
+      if (e instanceof ErroPlano && e.codigo === "canonico-ausente") return new Set();
+      throw e;
+    }
+  };
+  // Só sha e subject no log (subject não tem quebra); o corpo, livre, sai por sha — separador nenhum o corta.
+  const replanos = rodar(repo, ["log", "--first-parent", "--reverse", "--format=%H %s", `${ultima}..${fim}`, "--", canonico])
     .split("\n")
-    .filter((s) => RE.rodada.exec(s)?.[1] === task).length;
+    .filter(Boolean)
+    .map((l) => ({ sha: l.slice(0, l.indexOf(" ")), subject: l.slice(l.indexOf(" ") + 1) }));
+  return verbos.replanoDaRodadaB({
+    task,
+    ciclo,
+    // Plano e corpo só de quem é re-plano de ruling: os outros não contam e não pagam a leitura.
+    replanos: replanos.map((c) => {
+      if (!verbos.rulingDoReplano(c.subject, ciclo)) return { ...c, corpo: "", novas: [], depsDoGate: [] };
+      try {
+        const { plano } = lerPlanoNoCommit(repo, c.sha, ciclo);
+        const antes = ids(`${c.sha}^`);
+        const corpo = rodar(repo, ["log", "-1", "--format=%b", c.sha]);
+        return { ...c, corpo, novas: [...plano.porId.keys()].filter((id) => !antes.has(id)), depsDoGate: plano.porId.get(task)?.deps ?? [] };
+      } catch (e) {
+        // Plano ilegível num re-plano da janela não derruba o verbo: não conta como B, e a recusa diz qual e por quê.
+        return { ...c, corpo: "", novas: [], depsDoGate: [], ilegivel: e instanceof ErroPlano ? `${e.codigo}: ${e.message}` : String(e.message ?? e).split("\n")[0] };
+      }
+    }),
+  });
 }
 
 /**
@@ -1017,26 +1652,35 @@ export function registrarRodada({ repo, ciclo, task, rodada, sessao = null, oper
   const a = approvalNoHead(repo, approval);
   verbos.exigirApprovalDeRodada({ caminho: approval, a, caso });
   if (rodada === "carimbo") return registrarRodadaDeCarimbo({ repo, ciclo, task, r, sessao, approval, rodadaDoApproval: a.rodada });
-  const anteriores = marcasDeRodada(repo, task);
+  const marcas = marcasDeRodada(repo, task);
+  const anteriores = verbos.rodadasDasMarcas(marcas);
   const base = { ciclo, task, tentativa: r.tentativa, nonce: r.nonce, approval, rodadaDoApproval: a.rodada, rodadasRegistradas: anteriores };
-  const fora = verbos.conferirRodada({ base, anteriores, rodadaDoApproval: a.rodada, ref: r.ref });
-  if (fora) return fora;
+  const decisao = verbos.conferirRodada({
+    base,
+    anteriores,
+    rodadaDoApproval: a.rodada,
+    ref: r.ref,
+    replanoB: () => replanoDaRodadaB({ repo, ciclo, task, r, ultima: marcas[0]?.sha ?? null }),
+  });
+  if (decisao && decisao.acao !== "gravar-rodada") return decisao;
+  const replanoB = decisao?.replano ?? null;
   const sessaoFilha = verbos.sessaoDaFilha({ task, sessao, r });
-  const sha = commitVazio(repo, `Conducao: ${task} tentativa ${r.tentativa} rodada`, {
-    trailers: verbos.trailersDaRodada({ task, r, sessaoFilha, rodada, rodadaDoApproval: a.rodada }),
+  // Sem corpo: corpo na marca `rodada` é o não por pergunta (`Não, pelo operador:`); a B por re-plano vai só no trailer.
+  const sha = commitVazio(repo, ciclo, `Conducao: ${task} tentativa ${r.tentativa} rodada`, {
+    trailers: verbos.trailersDaRodada({ task, r, sessaoFilha, rodada, rodadaDoApproval: a.rodada, replanoB }),
   });
   rodar(repo, ["update-ref", "-d", r.ref]);
-  return comCopia(repo, ciclo, { acao: "rodada-registrada", ...base, rodada, sha });
+  return comCopia(repo, ciclo, { acao: "rodada-registrada", ...base, rodada, sha, ...(replanoB ? { rodadaBPorReplano: replanoB } : {}) });
 }
 
 /** O não por pergunta: o texto do operador vai no corpo da marca `rodada`. */
 function registrarRodadaPorPergunta({ repo, ciclo, task, r, sessao, rodada, operador }) {
-  const anteriores = marcasDeRodada(repo, task);
+  const anteriores = verbos.rodadasDasMarcas(marcasDeRodada(repo, task));
   const base = { ciclo, task, tentativa: r.tentativa, nonce: r.nonce, rodadasRegistradas: anteriores };
   const fora = verbos.conferirRodadaPorPergunta({ base, anteriores, ref: r.ref });
   if (fora) return fora;
   const sessaoFilha = verbos.sessaoDaFilha({ task, sessao, r });
-  const sha = commitVazio(repo, `Conducao: ${task} tentativa ${r.tentativa} rodada`, {
+  const sha = commitVazio(repo, ciclo, `Conducao: ${task} tentativa ${r.tentativa} rodada`, {
     corpo: `Não, pelo operador: ${operador.trim()}`,
     trailers: verbos.trailersDaRodada({ task, r, sessaoFilha, rodada }),
   });
@@ -1065,7 +1709,7 @@ function registrarRodadaDeCarimbo({ repo, ciclo, task, r, sessao, approval, roda
     : null;
   verbos.exigirCarimboDoConserto({ carimbos, conserto, cobre });
   const sessaoFilha = verbos.sessaoDaFilha({ task, sessao, r });
-  const sha = commitVazio(repo, `Conducao: ${task} tentativa ${r.tentativa} carimbo`, {
+  const sha = commitVazio(repo, ciclo, `Conducao: ${task} tentativa ${r.tentativa} carimbo`, {
     corpo: carimbos.map((c) => `Carimbo: ${c}`).join("\n"),
     trailers: verbos.trailersDaRodada({ task, r, sessaoFilha, rodada: "carimbo", rodadaDoApproval }),
   });
@@ -1087,7 +1731,7 @@ function registrarRodadaDeCarimbo({ repo, ciclo, task, r, sessao, approval, roda
 /** Publicação recusada no gate: `Conducao: T<k> publicacao recusada` — o `proximo` passa a emitir `parar`. */
 export function recusarPublicacao({ repo, ciclo, task, motivo }) {
   const r = trazidaDaTask(repo, ciclo, task);
-  const sha = commitVazio(repo, `Conducao: ${task} publicacao recusada`, {
+  const sha = commitVazio(repo, ciclo, `Conducao: ${task} publicacao recusada`, {
     corpo: motivo,
     trailers: { "Conducao-Task": task, "Conducao-Nonce": r.nonce },
   });
@@ -1111,7 +1755,7 @@ export function reverterTrazido({ repo, ciclo, task, motivo }) {
       return perguntar("revert-em-conflito", { ciclo, task, tentativa: r.tentativa, detalhe: rv.erro.split("\n").slice(-3).join(" | ") });
     }
   }
-  const sha = commitVazio(repo, `Conducao: ${task} tentativa ${r.tentativa} revertida`, {
+  const sha = commitVazio(repo, ciclo, `Conducao: ${task} tentativa ${r.tentativa} revertida`, {
     corpo: [motivo, ...comMudanca.map((c) => `Reverte ${c}`)].filter(Boolean).join("\n"),
     trailers: { "Conducao-Task": task, "Conducao-Nonce": r.nonce },
   });

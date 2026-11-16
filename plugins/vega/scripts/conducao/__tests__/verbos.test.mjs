@@ -90,8 +90,11 @@ test("motivosParaPerguntar: hooks fora dos Outputs, instrução, canonico e cami
   });
   assert.deepEqual(m.map((x) => x.motivo), ["alcance-dos-hooks", "canonico-do-ciclo"]);
   // hook declarado como arquivo nos Outputs não pergunta; diretório declarado não libera
-  assert.deepEqual(v.motivosParaPerguntar({ caminhos: [".husky/pre-commit"], canonico: "c", outputs: [".husky/pre-commit"], alcance }), []);
-  assert.equal(v.motivosParaPerguntar({ caminhos: [".husky/pre-commit"], canonico: "c", outputs: [".husky/"], alcance }).length, 1);
+  // (`.husky/**` segue perguntando mesmo declarado, D-VEGA37-41 — o exemplo é um hook comum)
+  const deHook = (cs) => cs.filter((c) => c.startsWith(".claude/hooks/"));
+  assert.deepEqual(v.motivosParaPerguntar({ caminhos: [".claude/hooks/x.js"], canonico: "c", outputs: [".claude/hooks/x.js"], alcance: deHook }), []);
+  assert.equal(v.motivosParaPerguntar({ caminhos: [".claude/hooks/x.js"], canonico: "c", outputs: [".claude/hooks/"], alcance: deHook }).length, 1);
+  assert.equal(v.motivosParaPerguntar({ caminhos: [".husky/pre-commit"], canonico: "c", outputs: [".husky/pre-commit"], alcance }).length, 1);
   assert.deepEqual(v.foraDosOutputs(["d/a.ts", "e/b.ts", "f.ts"], ["d", "f.ts"]), ["e/b.ts"]);
 });
 
@@ -143,7 +146,7 @@ test("desfechoDoCarimbo: só prosa, sem cherry-picked-from, sem carimbo, veredit
 
 // ── registrar-conferencia (com o modo da maestra) ────────────────────────────
 
-const task = (campos = {}) => ({ publicacao: [], estacao: "servidor", posMerge: false, marcas: [], ...campos });
+const task = (campos = {}) => ({ fase: "F1", publicacao: [], estacao: "servidor", posMerge: false, marcas: [], ...campos });
 /** O caso `(gate-de-ux)` como o projeto de teste o declara no adaptador (T14). */
 const GATE = { marca: "gate-de-ux", arquivo: "gate-de-ux-approval.md", sim: ["SHIP", "SHIP_WITH_DEBT"], nao: ["NEEDS_REWORK"] };
 const conf = (campos) => v.politicaDaConferencia({ task: "T3", verificacao: "verde", publicacao: "nao-se-aplica", approval: nunca("approval"), ...campos });
@@ -165,6 +168,13 @@ test("politicaDaConferencia: a publicação bate com o plano, o sim vai no corpo
   const publicada = conf({ t: task({ publicacao: ["db push"] }), publicacao: "feita", sim: "pode" });
   assert.equal(publicada.corpo, "Publicada com o sim do operador: pode");
   assert.deepEqual(publicada.dispensa, {});
+  // A primeira publicação do ciclo pede o registro do caso; com ele no ciclo, a seguinte fecha sem --sim (D-VEGA37-52).
+  assert.deepEqual({ ...publicada.consentimento }, { caso: "publicacao-do-ciclo", fase: "F1", origem: null, task: "T3", motivo: null, tasks: [] });
+  const simDoCiclo = { sim: "pode", origem: "a".repeat(40), sha: "b".repeat(40) };
+  const seguinte = conf({ t: task({ publicacao: ["db push"] }), publicacao: "feita", simDoCiclo });
+  assert.equal(seguinte.corpo, `Publicada com o sim do ciclo: pode (origem ${"a".repeat(40)})`);
+  assert.equal(seguinte.consentimento, undefined);
+  assert.equal(conf({ t: task({ publicacao: ["db push"] }), publicacao: "feita", sim: "pode", simDoCiclo }).consentimento, undefined);
   const filha = conf({ t: task() });
   assert.equal(filha.via, "filha");
   assert.equal(filha.subject, "Conducao: T3 conferida");
@@ -239,6 +249,82 @@ test("conferirRodada: floor(k/2)+1 contra o approval, com teto em 3 pelas marcas
   const teto = v.conferirRodada({ base: b, anteriores: 4, rodadaDoApproval: 1, ref: "r" });
   assert.equal(teto.motivo, "teto-de-rodadas");
   assert.equal(teto.teto, v.TETO_RODADAS_GATE);
+});
+
+test("conferirRodada: a B por re-plano só destrava approval que pulou a B, e só é lida quando a regra estrita recusa", () => {
+  const b = { ciclo: "X-1", task: "T3" };
+  const achado = { replano: { sha: "abc", ruling: "D-X1-2", novas: ["T9"], por: "dependencia", dependidas: ["T9"] }, vistos: [] };
+  let lidas = 0;
+  const replanoB = () => (lidas++, achado);
+  // Regra estrita passa: o git nem é lido.
+  assert.equal(v.conferirRodada({ base: b, anteriores: 1, rodadaDoApproval: 1, ref: "r", replanoB }), null);
+  assert.equal(lidas, 0);
+  // B pendente (1 marca) e approval já na C (2): o re-plano grava a rodada.
+  assert.deepEqual(v.conferirRodada({ base: b, anteriores: 1, rodadaDoApproval: 2, ref: "r", replanoB }), { acao: "gravar-rodada", replano: achado.replano });
+  assert.equal(lidas, 1);
+  // Sem B pendente (k par) o re-plano não afrouxa: approval que recuou segue recusando, sem ler o git.
+  const recuou = v.conferirRodada({ base: b, anteriores: 2, rodadaDoApproval: 1, ref: "r", replanoB });
+  assert.equal(recuou.motivo, "approval-fora-do-rito");
+  assert.equal(recuou.destrava, undefined);
+  // Approval no teto segue no teto, com ou sem re-plano.
+  assert.equal(v.conferirRodada({ base: b, anteriores: 1, rodadaDoApproval: 3, ref: "r", replanoB }).motivo, "teto-de-rodadas");
+  assert.equal(v.conferirRodada({ base: b, anteriores: 3, rodadaDoApproval: 3, ref: "r", replanoB }).motivo, "teto-de-rodadas");
+  assert.equal(lidas, 1);
+  // Sem re-plano achado: a recusa de sempre, com o que destravaria e o que foi visto.
+  const sem = v.conferirRodada({ base: b, anteriores: 1, rodadaDoApproval: 2, ref: "r", replanoB: () => ({ replano: null, vistos: [{ sha: "s", motivo: "sem-task-nova" }], aviso: "x" }) });
+  assert.equal(sem.motivo, "approval-fora-do-rito");
+  assert.equal(sem.rodadaEsperada, 1);
+  assert.match(sem.destrava, /T3/);
+  assert.deepEqual(sem.replanosVistos, [{ sha: "s", motivo: "sem-task-nova" }]);
+  assert.equal(sem.aviso, "x");
+  // Sem leitor injetado: recusa igual.
+  assert.equal(v.conferirRodada({ base: b, anteriores: 1, rodadaDoApproval: 2, ref: "r" }).motivo, "approval-fora-do-rito");
+});
+
+test("replanoDaRodadaB: conta o primeiro re-plano de ruling com task nova de que o gate depende, ou que cita o gate", () => {
+  const C = "X-1-teste";
+  const ruling = (n, resto) => `${C}-F1/D-X1-${n} — re-plano de ${resto}`;
+  const c = (sha, subject, novas, depsDoGate, corpo = "") => ({ sha, subject, corpo, novas, depsDoGate });
+  const r = v.replanoDaRodadaB({
+    task: "T2",
+    ciclo: C,
+    replanos: [
+      c("a", `${C}-F1/T5 — task comum`, [], []),
+      c("b", ruling(1, "F1: só dependência"), [], ["T1"]),
+      c("d", ruling(2, "F1: T7 sem relação, T20 também"), ["T7"], ["T1"]),
+      c("e", ruling(3, "F1: consertos em T8"), ["T8", "T9"], ["T1", "T9"]),
+    ],
+  });
+  assert.deepEqual(r.replano, { sha: "e", ruling: "D-X1-3", novas: ["T8", "T9"], por: "dependencia", dependidas: ["T9"] });
+  assert.deepEqual(r.vistos, [
+    { sha: "a", motivo: "nao-e-replano-de-ruling" },
+    { sha: "b", ruling: "D-X1-1", motivo: "sem-task-nova" },
+    { sha: "d", ruling: "D-X1-2", motivo: "T2-nao-depende-nem-e-citada" },
+  ]);
+  // Plano ilegível num re-plano não conta e é dito; o seguinte ainda conta.
+  const ileg = v.replanoDaRodadaB({
+    task: "T2",
+    ciclo: C,
+    replanos: [{ ...c("x", ruling(8, "F1: x"), [], []), ilegivel: "declaracao-invalida: y" }, c("z", ruling(9, "F1: x"), ["T7"], ["T7"])],
+  });
+  assert.equal(ileg.replano.sha, "z");
+  assert.deepEqual(ileg.vistos, [{ sha: "x", ruling: "D-X1-8", motivo: "plano-ilegivel", detalhe: "declaracao-invalida: y" }]);
+  // Citação no corpo vale; T20 não é T2.
+  const cita = v.replanoDaRodadaB({ task: "T2", ciclo: C, replanos: [c("f", ruling(4, "F1: x"), ["T7"], [], "A rodada B da T2 sai na T7.")] });
+  assert.equal(cita.replano.por, "citacao");
+  const t20 = v.replanoDaRodadaB({ task: "T2", ciclo: C, replanos: [c("g", ruling(5, "F1: T20 e T21"), ["T7"], [])] });
+  assert.equal(t20.replano, null);
+  // Re-plano de outro ciclo, ou com o reconhecedor desligado (contraprova), não conta.
+  assert.equal(v.replanoDaRodadaB({ task: "T2", ciclo: "Y-2-outro", replanos: [c("h", ruling(6, "F1: x"), ["T7"], ["T7"])] }).replano, null);
+  assert.equal(v.replanoDaRodadaB({ task: "T2", ciclo: C, replanos: [c("i", ruling(7, "F1: x"), ["T7"], ["T7"])], reconhecer: () => null }).replano, null);
+});
+
+test("rodadasDasMarcas: a marca da B por re-plano conta duas; trailer da B só quando há re-plano", () => {
+  assert.equal(v.rodadasDasMarcas([]), 0);
+  assert.equal(v.rodadasDasMarcas([{ sha: "a", replanoB: null }, { sha: "b", replanoB: "x" }]), 3);
+  const r = { ponta: "p", nonce: "n" };
+  assert.equal(v.trailersDaRodada({ task: "T1", r, sessaoFilha: "s", rodada: "nao", rodadaDoApproval: 2 })[v.TRAILER_RODADA_B_REPLANO], undefined);
+  assert.equal(v.trailersDaRodada({ task: "T1", r, sessaoFilha: "s", rodada: "nao", rodadaDoApproval: 2, replanoB: { sha: "x" } })[v.TRAILER_RODADA_B_REPLANO], "x");
 });
 
 test("lerApproval: verdict e rodada do frontmatter, rodada ausente conta 1", () => {

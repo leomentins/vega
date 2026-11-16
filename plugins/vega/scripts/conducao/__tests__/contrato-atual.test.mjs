@@ -125,15 +125,15 @@ const MASK_MARCAS = mascarar(MARCAS);
 const MASK_REGRAS = mascarar(REGRAS);
 
 /**
- * Onde moram as ações do `proximo`: em `conducao.mjs`, `decidir`, `decidirMaestra`
- * (o nível da maestra), `proximo` e `erroComoPergunta`; em `regras.mjs`, toda função declarada no topo — as
+ * Onde moram as ações do `proximo`: em `conducao.mjs`, `decidir`, `proximo` e
+ * `erroComoPergunta` (o nível da maestra, `decidirMaestra`, saiu na VEGA-37 T8); em `regras.mjs`, toda função declarada no topo — as
  * `regra…` que `decidir` chama em ordem e os auxiliares delas que montam
  * ação, como `perguntaDoPlano` (VEGA-29 T6 e T7, D-VEGA29-24).
  */
 const NOMES_REGRAS = [...MASK_REGRAS.matchAll(/^(?:export )?function (\w+)\(/gm)].map((m) => m[1]);
 assert.ok(NOMES_REGRAS.some((n) => n.startsWith("regra")), "regras.mjs sem `export function regra…` — o extrator não acharia as ações dela");
 const FONTES_DO_PROXIMO = [
-  { SRC: CONDUCAO, MASK: MASK_CONDUCAO, nomes: ["decidir", "decidirMaestra", "proximo", "erroComoPergunta"] },
+  { SRC: CONDUCAO, MASK: MASK_CONDUCAO, nomes: ["decidir", "proximo", "erroComoPergunta"] },
   { SRC: REGRAS, MASK: MASK_REGRAS, nomes: NOMES_REGRAS },
 ];
 
@@ -195,8 +195,8 @@ function acoesEMotivosDoCodigo() {
       for (const m of trecho.matchAll(/\bacao:\s*/g)) {
         const valor = ini + m.index + m[0].length;
         if (SRC[valor] !== '"') {
-          // Só a fábrica `acao: tipo` de `decidir` e de `decidirMaestra` é não literal; outra forma é ponto cego.
-          assert.ok((nome === "decidir" || nome === "decidirMaestra") && /^tipo\b/.test(SRC.slice(valor)), `${nome}: \`acao:\` com valor não literal: ${SRC.slice(valor, valor + 60)}`);
+          // Só a fábrica `acao: tipo` de `decidir` é não literal; outra forma é ponto cego.
+          assert.ok(nome === "decidir" &&/^tipo\b/.test(SRC.slice(valor)), `${nome}: \`acao:\` com valor não literal: ${SRC.slice(valor, valor + 60)}`);
           continue;
         }
         const tipo = literais(SRC.slice(valor, SRC.indexOf('"', valor + 1) + 1))[0];
@@ -385,4 +385,25 @@ test("extrator não sai vazio: cada classe acha ao menos um item no código", ()
   const { lerMarcas: trailers, ultima: trailersUltima } = trailersDoCodigo();
   for (const [nome, s] of Object.entries({ acoes, motivos, dinamicos, soltos, codigos: codigosDoCodigo(), marcas, ultima, trailers, trailersUltima }))
     assert.ok(s.size > 0, `extrator de ${nome} devolveu vazio — o código mudou de forma e o teste ficou cego`);
+});
+
+// VEGA-37 T25 (D-VEGA37-1): a skill e as três referências descrevem dois papéis.
+// Fora de crase, "maestra" só em linha que a declara aposentada ou antiga
+// (identificadores como `criar-fechamento` ou `sessaoMaestra` ficam entre crases).
+// A T45 estende a varredura ao `contrato-atual.md` (CONTRATO, nesta pasta).
+test("o contrato atual não descreve papel aposentado", () => {
+  const skill = new URL("../../../skills/conducao/", import.meta.url);
+  const arquivos = [
+    ...["SKILL.md", "references/contrato.md", "references/janela.md", "references/planejar.md"].map((rel) => [rel, new URL(rel, skill)]),
+    ["contrato-atual.md", CONTRATO],
+  ];
+  const achados = [];
+  for (const [rel, onde] of arquivos) {
+    const linhas = readFileSync(onde, "utf8").split("\n");
+    linhas.forEach((linha, i) => {
+      const semCrase = linha.replace(/`[^`]*`/g, "");
+      if (/maestra/i.test(semCrase) && !/aposentad|antig/i.test(semCrase)) achados.push(`${rel}:${i + 1}`);
+    });
+  }
+  assert.deepEqual(achados, [], `"maestra" fora de crase sem dizer aposentado/antigo: ${achados.join(", ")}`);
 });

@@ -108,12 +108,12 @@ const decidido = (contrato, pedido = "") =>
 const ilegivel = (motivo) => ({ estado: "ilegivel", motivo });
 
 /**
- * Pelo caminho do transcript, lendo só até o primeiro pedido:
- * `{ estado: "operaria", task, nonce[, ciclo, tentativa] }` · `{ estado: "comum" }` (leitura positiva, sem contrato) ·
- * `{ estado: "ilegivel", motivo: "sem-caminho" | "transcript-ilegivel" | "teto" }`.
- * `teto` (bytes) é ponto de troca para a suíte.
+ * O pedido de nascimento, lendo só até ele: `{ estado: "lido", pedido }` (`pedido` = `null` quando o
+ * transcript acaba sem pedido) ou `{ estado: "ilegivel", motivo: "sem-caminho" | "transcript-ilegivel" | "teto" }`.
+ * Quem quer outro papel que não o da operária (o sensor de janela reconhece a condutora pela
+ * partida dela, `papelDoPedido`) lê por aqui. `teto` (bytes) é ponto de troca para a suíte.
  */
-function lerSessao(caminho, { teto = TETO_BYTES } = {}) {
+function lerPedido(caminho, { teto = TETO_BYTES } = {}) {
   if (typeof caminho !== "string" || !caminho) return ilegivel("sem-caminho");
   let fd;
   try {
@@ -121,6 +121,7 @@ function lerSessao(caminho, { teto = TETO_BYTES } = {}) {
   } catch {
     return ilegivel("transcript-ilegivel");
   }
+  const lido = (p) => ({ estado: "lido", pedido: p === undefined ? null : p });
   try {
     const buf = Buffer.alloc(BLOCO);
     // O decoder guarda o caractere multibyte cortado na borda do bloco.
@@ -130,17 +131,14 @@ function lerSessao(caminho, { teto = TETO_BYTES } = {}) {
     for (;;) {
       if (lidos >= teto) return ilegivel("teto");
       const n = fs.readSync(fd, buf, 0, BLOCO, null);
-      if (n <= 0) {
-        const p = pedidoDaLinha(resto + dec.end());
-        return decidido(p === undefined ? null : contratoDoPedido(p), p);
-      }
+      if (n <= 0) return lido(pedidoDaLinha(resto + dec.end()));
       lidos += n;
       resto += dec.write(buf.subarray(0, n));
       const linhas = resto.split("\n");
       resto = linhas.pop();
       for (const l of linhas) {
         const p = pedidoDaLinha(l);
-        if (p !== undefined) return decidido(contratoDoPedido(p), p);
+        if (p !== undefined) return lido(p);
       }
     }
   } catch {
@@ -155,6 +153,36 @@ function lerSessao(caminho, { teto = TETO_BYTES } = {}) {
 }
 
 /**
+ * Pelo caminho do transcript, lendo só até o primeiro pedido:
+ * `{ estado: "operaria", task, nonce[, ciclo, tentativa] }` · `{ estado: "comum" }` (leitura positiva, sem contrato) ·
+ * `{ estado: "ilegivel", motivo: "sem-caminho" | "transcript-ilegivel" | "teto" }`.
+ * `teto` (bytes) é ponto de troca para a suíte.
+ */
+function lerSessao(caminho, opcoes) {
+  const r = lerPedido(caminho, opcoes);
+  if (r.estado !== "lido") return r;
+  return r.pedido === null ? decidido(null) : decidido(contratoDoPedido(r.pedido), r.pedido);
+}
+
+// PAPEL DE NASCIMENTO NOS DOIS MODOS (VEGA-37 T11, D-VEGA37-21). A condutora de fase nasce do
+// `textoDaProximaSessao` (`Conduzir <ciclo> — F<n>, pela skill …conducao/SKILL.md`), o mesmo texto
+// no modelo de três papéis (a maestra a criava) e no de dois (a condutora que fecha a fase cria a
+// seguinte). A condutora de fechamento nasce do `textoDoFechamento`, cuja segunda linha é
+// `Ciclo conduzido (worktree: …)` nos dois modos — antes a sessão de fechamento da maestra, agora a
+// condutora `fechamento`. A maestra não tem pedido próprio: o sensor de janela a reconhece pelo
+// comando que ela roda.
+const CONDUTORA_RE = /^\s*Conduzir \S+ — F\d{1,2}, pela skill \S*conducao\/SKILL\.md/;
+const FECHAMENTO_RE = /^[^\n]*\S[^\n]*\nCiclo conduzido \(worktree: /;
+
+/** Papel pelo pedido de nascimento (texto ou `null`): `operaria` · `condutora` · `comum`. */
+function papelDoPedido(pedido) {
+  if (typeof pedido !== "string") return "comum";
+  if (CONTRATO_RE.test(pedido)) return "operaria";
+  if (CONDUTORA_RE.test(pedido) || FECHAMENTO_RE.test(pedido)) return "condutora";
+  return "comum";
+}
+
+/**
  * Atalho: `{ task, nonce }` só com leitura positiva de operária; `null` em sessão comum E na
  * dúvida. Quem precisa separar "comum" de "não li" usa `lerSessao`.
  */
@@ -165,6 +193,10 @@ function contratoDaSessao(caminho, opcoes) {
 
 module.exports = {
   CONTRATO_RE,
+  CONDUTORA_RE,
+  FECHAMENTO_RE,
+  lerPedido,
+  papelDoPedido,
   contratoDoTranscript,
   contratoDaSessao,
   lerSessao,

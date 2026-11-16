@@ -413,6 +413,9 @@ const TABELA = {
     { caso: "só o fechamento resta", ctx: { fases: [["F1", [task("T1"), FECH]]], estado: { feitas: ["T1"] } }, espera: "fechar-fase" },
     { caso: "task comum pendente", ctx: { fases: [["F1", [task("T1"), FECH]]] }, espera: null },
   ],
+  // A ordem da troca (VEGA-37 T16): os casos com passagem estão em passagem-ordem.test.mjs.
+  regraPassagem: [{ caso: "sem passagem no resumo", ctx: { fases: [["F1", [task("T1")]]] }, espera: null }],
+  regraPassarNaFronteira: [{ caso: "sem passagem no resumo", ctx: { fases: [["F1", [task("T1")]]] }, espera: null }],
   regraSemSaida: [{ caso: "dependência que nunca fica pronta", ctx: { fases: [["F1", [task("T1", { deps: ["T0"] })]]] }, espera: "perguntar:sem-saida" }],
 };
 

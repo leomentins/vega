@@ -37,6 +37,15 @@ const TABELA = [
   ["Conducao: abrir T5 tentativa 1 nonce c5a4a731bb273601", {}, { tipo: "marcador", task: "T5", tentativa: 1, nonce: "c5a4a731bb273601" }],
   ["Conducao: F0 sessao encerrada", { "Conducao-Encerrada": "F0", "Conducao-Nonce": "n1" }, { tipo: "encerrada", fase: "F0", nonce: "n1" }],
   ["Conducao: ciclo sessao encerrada", { "Conducao-Encerrada": "ciclo" }, { tipo: "encerrada", fase: "ciclo", nonce: null }],
+  [
+    "Conducao: F2 em passagem",
+    { "Conducao-Passagem": "F2", "Conducao-Nota": "n/passagem-F2-1.md", "Conducao-Epoca": "3", "Conducao-Lock": "L", "Conducao-Ponta": "p" },
+    { tipo: "passagem", fase: "F2", nota: "n/passagem-F2-1.md", epoca: "3", lock: "L", ponta: "p" },
+  ],
+  ["Conducao: F2 passagem confirmada", { "Conducao-Passagem": "F2" }, { tipo: "confirmada", fase: "F2" }],
+  ["Conducao: F2 passagem desistida", { "Conducao-Passagem": "F2", "Conducao-Desistida": "s" }, { tipo: "desistida", fase: "F2", desistida: "s" }],
+  ["Conducao: F2 em passagem", {}, null],
+  ["Conducao: F2 passagem desistida", { "Conducao-Passagem": "F3" }, null],
   // Não são marca: subject a mais ou a menos, ou `encerrada` sem o trailer que a confirma.
   ["Conducao: F1 autorizada ", {}, null],
   ["Conducao: F100 autorizada", {}, null],

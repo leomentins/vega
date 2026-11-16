@@ -7,28 +7,37 @@
 
 Alcance de cada conjunto:
 
-- **Ações e motivos** — o caminho do `proximo`: as funções `decidir`, `decidirMaestra` (o nível da maestra, `--nivel maestra`), `proximo` e `erroComoPergunta` de `conducao.mjs`, e as regras de `regras.mjs`. Os verbos de git (`autorizar-ciclo`, `abrir`, `trazer`, …) também respondem `perguntar` com motivo próprio, mas ficam fora desta tabela.
+- **Ações e motivos** — o caminho do `proximo`: as funções `decidir`, `proximo` e `erroComoPergunta` de `conducao.mjs` (o antigo nível acima da condutora, `decidirMaestra` e `--nivel maestra`, saiu na VEGA-37 T8: o `--nivel` sai 2 com o motivo do papel aposentado), e as regras de `regras.mjs`. Os verbos de git (`autorizar-ciclo`, `abrir`, `trazer`, …) também respondem `perguntar` com motivo próprio, mas ficam fora desta tabela.
 - **Códigos de saída** — a função `main` de `conducao.mjs` (o CLI inteiro).
 - **Marcas e trailers** — `lerMarcas` (`conducao.mjs`) e `ultimaAutorizacao` (`git-conducao.mjs`). A marca `trazida` vive em referência local fora do ramo e é lida por `lerTrazidas`, não por estas duas.
 
 ## Ações do proximo
 
-| ação | o que a maestra faz |
+| ação | `o que a maestra faz` (cabeçalho antigo; hoje, o que a condutora faz) |
 | --- | --- |
-| `arquivar` | arquiva a sessão da filha cujo aviso já foi decidido; vem antes de toda outra ação e o nonce não depende do HEAD; no nível da maestra, a condutora cuja fase já tem `Conducao-Encerrada` (ou toda condutora, com o ciclo encerrado) |
+| `arquivar` | arquiva a sessão da filha cujo aviso já foi decidido; vem antes de toda outra ação e o nonce não depende do HEAD |
 | `abrir` | grava o marcador de cada task da leva (`abrir T<k>`) e cria a filha com a `partida` |
 | `trazer` | traz a tentativa avisada `OK` para o ramo do ciclo e confere |
 | `esperar` | não faz nada agora; o `motivo` diz pelo quê |
 | `perguntar` | leva a pergunta ao operador; o `motivo` diz qual |
-| `cutucar` | manda a `mensagem` à filha caída (`sessao`) e passa `cutucadaEm` nessa filha da entrada seguinte (T18); no nível da maestra, à condutora caída (T39). O `cutucadaEm` vale só para a queda em curso (T40): com `caidaEm` na filha (o instante em que quem conduz a leu `FAILED` pela primeira vez nesta queda, gravado uma vez e não regravado enquanto ela seguir `FAILED`; posterior a `agora` é `entrada-invalida`), `cutucadaEm` anterior a ele é de queda velha e não conta, e a sessão que voltou e caiu de novo recebe o seu `cutucar`; sem `caidaEm`, vale o `cutucadaEm` como veio |
+| `cutucar` | manda a `mensagem` à filha caída (`sessao`) e passa `cutucadaEm` nessa filha da entrada seguinte (T18). O `cutucadaEm` vale só para a queda em curso (T40): com `caidaEm` na filha (o instante em que quem conduz a leu `FAILED` pela primeira vez nesta queda, gravado uma vez e não regravado enquanto ela seguir `FAILED`; posterior a `agora` é `entrada-invalida`), `cutucadaEm` anterior a ele é de queda velha e não conta, e a sessão que voltou e caiu de novo recebe o seu `cutucar`; sem `caidaEm`, vale o `cutucadaEm` como veio |
 | `herdar-autorizacao` | grava a autorização herdada da fase (re-plano de ruling ou sim do ciclo), sem perguntar ao operador |
 | `fazer-condutora` | executa ela mesma a task de estação `condutora` (`maestra`, o nome antigo, lido igual) e registra com `--condutora` (`--maestra` aceito), trailer `Conducao-Executor: condutora` |
 | `fechar-fase` | conduz a task de fechamento da fase |
-| `encerrar-sessao` | grava o encerramento da fase anterior e entrega o texto da próxima sessão |
+| `encerrar-sessao` | grava o encerramento da fase anterior e, em `criar`, leva o `criar-condutora` da fase seguinte, que a própria condutora executa (VEGA-37 T8); `texto` é o prompt da sessão nova |
 | `fechar-ciclo` | entrega o texto do `/close-cycle` em sessão limpa |
 | `parar` | para a condução; o `motivo` diz por quê |
-| `criar-condutora` | só no nível da maestra (`--nivel maestra`): cria a condutora da primeira fase sem `Conducao-Encerrada`, com `fase`, `modelo` do heading da fase e `texto` da sessão; inclusive a primeira fase do ciclo, sem condutora anterior a arquivar |
-| `criar-fechamento` | só no nível da maestra: depois de `Conducao-Encerrada: ciclo`, cria a sessão de fechamento com o `texto` do `/close-cycle` |
+| `criar-condutora` | só dentro do `encerrar-sessao` (campo `criar`), com CI verde: a condutora que encerra cria a da fase seguinte, com `fase`, `nome` pela fase (`<ciclo> · F<n>`, D-VEGA37-2, D-VEGA37-18), `modelo` do heading da fase, `tentativa` e `texto` da sessão como prompt; CI vermelho ou pendente não cria |
+| `criar-fechamento` | `maestraCriarFechamento` (nome antigo), sem chamador no `proximo` desde a VEGA-37 T8 (a T10 a troca pelo `criar-condutora` de fase `fechamento`): depois de `Conducao-Encerrada: ciclo`, a sessão de fechamento com o `texto` do `/close-cycle` |
+| `passar` | ordem da troca (VEGA-37 T16), na fronteira: depois do encerramento gravado com `Conducao-Depois: passar`, a fase seguinte sem autorização e nenhuma passagem confirmada da fase anterior, a condutora escreve a nota no `molde` e roda `passar F<n> --nota`; `faseSeguinte` é a da herdeira, `tentativa` conta as desistências |
+| `desanexar-ramo` | a anterior em passagem com o ramo ainda anexado roda `desanexar-ramo --nonce` (`git switch --detach`) e fica com a posse |
+| `passar-posse` | a herdeira com o ramo trazido e a posse ainda alheia roda o verbo `passar-posse` do projeto com o `lock_id` e a `epoca` da nota: a época sobe nessa escrita |
+| `soltar-inscricao` | a anterior destituída (a época subiu) solta a inscrição na proposta (`unsubscribe_pr_activity`) |
+| `inscrever-na-proposta` | a condutora chama `subscribe_pr_activity` na proposta: no fechamento (`comPassosDoRamo`, T9) e, na ordem da troca, a herdeira dona antes de confirmar (`depois: "confirmar-passagem"`) |
+| `confirmar-passagem` | a herdeira dona e inscrita roda `confirmar-passagem --nonce`: marca `passagem confirmada`, com a árvore suja da anterior registrada (`arvoreSuja`) |
+| `retomar-da-passagem` | sem confirmação no prazo e época parada, na primeira falha: a anterior roda `retomar-da-passagem --nonce` (reanexa o ramo, grava a desistência) e arquiva a herdeira (`arquivar`), sem reabri-la |
+| `arquivar-se` | a anterior destituída vê a confirmação na ponta do ramo e se arquiva (`archive_session` da própria `sessao`) |
+| `desmontar-anterior` | a herdeira dona, depois da confirmação, com a anterior `ARCHIVED` e a árvore dela limpa, roda `desmontar-anterior --nonce --arquivadas <lista>`: o nome na lista da limpeza e `git worktree remove` sem `--force` |
 
 A lista de ações do cabeçalho de `conducao.mjs` não cita `fazer-condutora`; o código a emite (task de estação `condutora`). `fazer-maestra` é o nome antigo da mesma ação (D-VEGA26-21) e o código não o emite mais. Esta tabela segue o código.
 
@@ -37,7 +46,8 @@ A lista de ações do cabeçalho de `conducao.mjs` não cita `fazer-condutora`; 
 | ação | motivo | quando |
 | --- | --- | --- |
 | `perguntar` | `autorizar-ciclo` | fase seguinte sem autorização (ou nenhuma autorização ainda, com `sugestao`) e sem sim do ciclo que a cubra — inclusive task que mudou de classe ou de sensibilidade desde o sim; pede o sim do ciclo, porque o `autorizar-fase` foi aposentado (T13) |
-| `perguntar` | `entrada-invalida` | a entrada da maestra (`--entrada`) não se lê ou tem forma errada (`problemasDaEntrada`: campo desconhecido, lista que não é lista, tipo errado); vem antes de toda decisão, com `problemas` (T17) |
+| `perguntar` | `entrada-invalida` | a entrada de quem conduz (`--entrada`) não se lê ou tem forma errada (`problemasDaEntrada`: campo desconhecido, lista que não é lista, tipo errado); vem antes de toda decisão, com `problemas` (T17) |
+| `perguntar` | `consentimento-nao-gravado` | tentativa trazida com caso que seguiu sem pergunta ainda sem registro no git (o `trazer` não o gravou, ou o registro `trazida` não se lê); vem antes de toda decisão, com `remedio: regravar-consentimentos` — a task não segue enquanto faltar (D-VEGA37-36, VEGA-37 T34) |
 | `perguntar` | `plano-mudou` | o canonico no HEAD difere do plano congelado na autorização, sem herança possível |
 | `perguntar` | `fase-autorizada-fora-do-plano` | nenhuma fase autorizada existe no plano congelado |
 | `perguntar` | `fase-reaberta-sem-fechamento` | fase reaberta cujas tasks novas não terminam em fechamento, ou reautorizada com o fechamento velho já conferido |
@@ -48,7 +58,7 @@ A lista de ações do cabeçalho de `conducao.mjs` não cita `fazer-condutora`; 
 | `perguntar` | `task-sensivel` | task com publicação ou caminho clínico, sem sim da fase que a cubra nem aprovação pelo nonce |
 | `perguntar` | `sem-saida` | nenhuma regra decide: tasks pendentes com dependências não feitas |
 | `perguntar` | `marcador-invalido` | tentativa em voo sem nonce legível no marcador |
-| `perguntar` | `pergunta-da-filha` | a filha avisou `T<k>-FALHA pergunta <nonce>` |
+| `perguntar` | `pergunta-da-filha` | a filha avisou `T<k>-FALHA pergunta <nonce>`; resposta com re-plano encerra a tentativa por `registrar-falha --coberta pergunta --motivo`, fora de todo teto |
 | `perguntar` | `segunda-falha` | falha avisada, ou Verificação vermelha revertida, numa task que já tem 1 falha contada |
 | `perguntar` | `filha-sumiu` | as filhas da tentativa estão `ARCHIVED` sem aviso, fora do reinício da ponte |
 | `perguntar` | `tentativa-sem-filha` | tentativa em voo sem filha nenhuma na entrada, fora do reinício da ponte |
@@ -56,16 +66,20 @@ A lista de ações do cabeçalho de `conducao.mjs` não cita `fazer-condutora`; 
 | `perguntar` | `prazo-vencido` | tentativa aberta há mais que o `prazoMin` da task |
 | `perguntar` | `teto-de-falhas` | task com 2 falhas contadas |
 | `perguntar` | `teto-de-falhas-ambiente` | task no teto próprio de falhas de ambiente (`BOTOES.tetoFalhasAmbiente`) |
-| `perguntar` | `condutora-caida` | no nível da maestra, condutora viva que não anda (T39), com `situacao`: `bloqueada` (`statusBucket` `BLOCKED` ou estado `REQUIRES_ACTION`, já), `fase-fora-do-plano` (`fase` que o plano do HEAD não tem, ou o fechamento, `ciclo`, antes de `Conducao-Encerrada: ciclo`) ou `caida` (`FAILED` por `BOTOES.silencioCondutoraCaidaMin` depois do `cutucadaEm` desta queda, T40) |
 | `cutucar` | `filha-caida` | todas as filhas vivas da tentativa com `statusBucket` `FAILED`, sem aviso e sem `cutucadaEm` desta queda (T40): a mensagem vem antes de contar falha de ambiente (T18) |
-| `cutucar` | `condutora-falhou` | no nível da maestra, condutora viva com `statusBucket` (ou, sem ele, estado) `FAILED` e sem `cutucadaEm` desta queda (T40): a mensagem vem antes da pergunta (T39) |
 | `esperar` | `mesclado` | a proposta do ciclo está `MERGED`: depois do merge o `proximo` não emite nada |
 | `esperar` | `ci-pendente` | sem veredito de CI no HEAD antes do `encerrar-sessao` ou do `fechar-ciclo` |
 | `esperar` | `filhas-em-voo` | nada a abrir agora e há filhas em voo na fase |
-| `esperar` | `condutora-viva` | no nível da maestra: uma condutora (ou a sessão de fechamento) ainda vive e a vigia não a pegou (T39); a maestra espera o fim dela |
+| `esperar` | `condutora-viva` | `maestraCriarFechamento` (nome antigo, sem chamador desde a T8): a sessão de fechamento ainda vive |
 | `esperar` | `sem-vaga` | há task pronta no servidor e nenhuma vaga (largura do ciclo ou teto da ponte) |
 | `parar` | `publicacao-recusada` | a fase tem task com `Conducao: T<k> publicacao recusada` |
 | `parar` | `workstation` | só resta task de estação `workstation` |
+| `parar` | `passagem-epoca-subiu` | anterior destituída sem confirmação da herdeira no prazo: a dona é a herdeira; a anterior não retoma e avisa o operador |
+| `perguntar` | `passagem-sem-posse` | passagem aberta sem a época para decidir o papel (posse ilegível, sem posse, época torta) ou nota sem `Conducao-Lock` para a herdeira |
+| `perguntar` | `passagem-sem-fase-seguinte` | passagem de fronteira da última fase do plano: a fronteira dela é o fechamento do ciclo |
+| `perguntar` | `passagem-sem-confirmacao` | segunda falha de confirmação com a época parada na mesma fase |
+| `perguntar` | `arvore-da-anterior-suja` | a árvore da anterior arquivada ficou suja depois da confirmação: nada se apaga |
+| `esperar` | `passagem-em-curso` | a herdeira criada ainda dentro do prazo de confirmação (`prazoMin`) |
 
 ## Motivos não literais
 
@@ -73,7 +87,7 @@ A lista de ações do cabeçalho de `conducao.mjs` não cita `fazer-condutora`; 
 | --- | --- | --- |
 | `perguntar` | `e.codigo` | `erroComoPergunta`: o plano no HEAD ou o congelado não se lê; o motivo é o código do `ErroPlano` de `ler-plano.mjs` |
 | `perguntar` | `motivo` | `{ motivo, … }` abreviado em `decidir`: o 1º elemento da tupla de `perguntasDaVigia` (os literais estão em §Motivos por ação; o teste exige que a vigia só cresça por `push([…])` com motivo literal) |
-| `esperar` | `motivoDoCtx(ctx)` | `regraFecharCiclo` e `maestraCriarFechamento`, com o ciclo já marcado encerrado: o fechamento roda em outra sessão. `motivoDoFechamento` do `fechamentoDoCiclo` do adaptador — `<comando sem a barra>-em-sessao-limpa` (na Sistoli, `close-cycle-em-sessao-limpa`); sem o campo, `fechamento-em-sessao-limpa` |
+| `esperar` | `motivoDoCtx(ctx)` | `regraFecharCiclo` e `maestraCriarFechamento` (nome antigo), com o ciclo já marcado encerrado: o fechamento roda em outra sessão. `motivoDoFechamento` do `fechamentoDoCiclo` do adaptador — `<comando sem a barra>-em-sessao-limpa`; sem o campo, `fechamento-em-sessao-limpa` |
 
 ## Motivos da falha anterior
 
@@ -129,8 +143,11 @@ O subject inteiro casa a regex; o corpo não conta (o `--grep` do git só filtra
 | `recusada` | `^Conducao: (T\d{1,3}) publicacao recusada$` | lerMarcas |
 | `marcador` | `^Conducao: abrir (T\d{1,3}) tentativa (\d+) nonce (\S+)$` | lerMarcas |
 | `encerrada` | `^Conducao: (F\d{1,2}\|ciclo) sessao encerrada$` | lerMarcas |
+| `passagem` | `^Conducao: (F\d{1,2}) em passagem$` | lerMarcas |
+| `confirmada` | `^Conducao: (F\d{1,2}) passagem confirmada$` | lerMarcas |
+| `desistida` | `^Conducao: (F\d{1,2}) passagem desistida$` | lerMarcas |
 
-A marca `encerrada` só conta com o trailer `Conducao-Encerrada` igual à fase do subject.
+A marca `encerrada` só conta com o trailer `Conducao-Encerrada` igual à fase do subject. As três de passagem (VEGA-37 T15) só contam com o trailer `Conducao-Passagem` igual à fase do subject; a última das três ser `passagem` é o estado "em passagem", em que `abrir` e `registrar-conferencia --publicacao feita` recusam.
 
 ## Trailers lidos
 
@@ -139,10 +156,22 @@ A marca `encerrada` só conta com o trailer `Conducao-Encerrada` igual à fase d
 | `Conducao-Plano` | lerMarcas, ultimaAutorizacao | blob do canonico congelado na autorização |
 | `Conducao-Herdada` | lerMarcas | autorização herdada: aponta a marca com o sim do operador |
 | `Conducao-Ciclo` | lerMarcas | `sim` ⇒ a autorização é o sim do ciclo (`autorizar-ciclo`) |
+| `Conducao-Origem` | lerMarcas | origem da herança (`ciclo` ou `replano`), legível igual na marca gravada no modelo antigo de três papéis |
 | `coberta-por-reinicio` | lerMarcas | `sim` ⇒ a falha caiu no reinício da ponte e não conta no teto |
 | `Conducao-Falha-Ambiente` | lerMarcas | `sim` ⇒ falha de ambiente: não conta no teto de falhas, conta no próprio |
+| `Conducao-Falha-Pergunta` | lerMarcas | `sim` ⇒ tentativa encerrada por pergunta da filha respondida com re-plano: não conta em teto nenhum |
 | `Conducao-Rodada` | lerMarcas | o não do operador gravado na marca `rodada` (`nao`, ou `needs-rework` no caso `(live-ux-gate)`) |
 | `Conducao-Encerrada` | lerMarcas | precisa igualar a fase do subject para a marca `encerrada` valer |
+| `Conducao-Passagem` | lerMarcas | precisa igualar a fase do subject para as marcas `passagem`, `confirmada` e `desistida` valerem |
+| `Conducao-Nota` | lerMarcas | caminho da nota de passagem gravada com a marca `passagem` |
+| `Conducao-Epoca` | lerMarcas | a época da posse lida pela cerca no `passar`; na `confirmada`, a época nova da herdeira |
+| `Conducao-Lock` | lerMarcas | o `lock_id` da posse no `passar`, que a herdeira usa no `passar-posse` |
+| `Conducao-Ponta` | lerMarcas | o HEAD do ramo no momento da passagem |
+| `Conducao-Desistida` | lerMarcas | o sha da marca `passagem` desistida |
+| `Conducao-Ramo` | lerMarcas | o ramo da marca `passagem`, que a anterior desanexa e a herdeira traz (T16) |
+| `Conducao-Confirma` | lerMarcas | o sha da marca `passagem` que a marca `confirmada` fecha (T16) |
+| `Conducao-Arvore-Suja` | lerMarcas | na marca `confirmada`: a árvore da anterior estava suja e não se desmonta (T16) |
+| `Conducao-Depois` | lerMarcas | na marca `encerrada`: `passar` pede a passagem na fronteira; sem ele, a marca antiga segue lida como antes (T16) |
 | `Conducao-Nonce` | lerMarcas | nonce da ação `encerrar-sessao` que gravou a marca `encerrada` |
 
 `lerMarcas` guarda também o bloco inteiro de trailers em `conferida`, `falhou`, `revertida`, `rodada` e `carimbo`, para o `auditar` ler (`Conducao-Task`, `Conducao-Verificacao`, `Conducao-Publicacao`, `Conducao-Executor`, e `Conducao-Publicacao-Dispensada: operador` — a dispensa de publicação de task `nao-se-aplica` que o plano liga a publicação, T16; commit antigo sem ele vale pela frase que o adaptador lista em `publicacao.frasesLegadas`); a tabela lista só o que `lerMarcas` e `ultimaAutorizacao` consultam por nome.

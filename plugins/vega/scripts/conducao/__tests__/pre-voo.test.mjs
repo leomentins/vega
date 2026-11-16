@@ -10,7 +10,7 @@
  */
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, describe, test } from "node:test";
@@ -294,6 +294,47 @@ describe("pré-voo: uma falha por conferência", () => {
     assert.equal(r.status, 1);
     assert.deepEqual(r.saida.falhas.map((f) => f.encontrado), ["sessao.cli não declarado", "sessao.settings não declarado", "sessao.variavelDoTrafego não declarado"]);
     assert.ok(r.saida.falhas.every((f) => /declarar sessao\./.test(f.remedio)));
+  });
+});
+
+/**
+ * Fora da raiz do projeto (VEGA-37 T50, D-VEGA37-55, achado 3 da T28): a lista do
+ * host é da máquina e não traz o plugin; o que prova que ele chegou à sessão é o
+ * argv do processo da sessão. O host falso é o `node` por um link no PATH (o
+ * executável da sessão é o binário de `sessao.cli[0]`), a lista sai por `-e`, e a
+ * "sessão" é um processo desse binário que roda o pré-voo como filho, com ou sem
+ * a raiz do plugin no argv.
+ */
+describe("pré-voo: plugin que chegou à sessão fora da raiz do projeto (T50)", () => {
+  const RAIZ_DO_PLUGIN = path.resolve(NUCLEO, "..", "..");
+  const SEM_VEGA = [{ id: "outro@marketplace-de-teste", scope: "user", enabled: true }];
+
+  function naSessao({ comPlugin }) {
+    const cli = [BINARIO, "-e", `process.stdout.write(${JSON.stringify(JSON.stringify(SEM_VEGA))})`];
+    const p = projeto({ comBinario: false, declaracao: { sessao: { ...DECLARACAO.sessao, cli } } });
+    symlinkSync(process.execPath, path.join(p.bin, BINARIO));
+    const filho = `const r=require("node:child_process").spawnSync(process.execPath,${JSON.stringify([CLI, "pre-voo", "--repo", p.repo])},{encoding:"utf8"});process.stdout.write(r.stdout);process.stderr.write(r.stderr);process.exit(r.status??9)`;
+    const argv = ["-e", filho, "--", ...(comPlugin ? ["--plugin-dir", RAIZ_DO_PLUGIN] : ["--sem-plugin"])];
+    const r = spawnSync(path.join(p.bin, BINARIO), argv, { encoding: "utf8", env: p.env, cwd: p.repo });
+    const linhas = r.stdout.split("\n").filter(Boolean);
+    assert.equal(linhas.length, 1, `uma linha JSON: ${r.stdout}\n${r.stderr}`);
+    return { p, r: { status: r.status, saida: JSON.parse(linhas[0]), stderr: r.stderr } };
+  }
+
+  test("plugin que chegou à sessão fora da raiz do projeto passa no pré-voo", { skip: process.platform !== "linux" && "sem /proc" }, () => {
+    const { r } = naSessao({ comPlugin: true });
+    assert.equal(r.status, 0, JSON.stringify(r.saida));
+    const c = r.saida.conferencias.find((x) => x.conferencia === "plugin-carregado");
+    assert.equal(c.estado, "ok");
+    assert.match(c.encontrado, /chegou à sessão do host/);
+  });
+
+  test("fora da raiz sem o plugin na sessão o pré-voo segue reprovando", { skip: process.platform !== "linux" && "sem /proc" }, () => {
+    const { p, r } = naSessao({ comPlugin: false });
+    falhouSo(p, r, "plugin-carregado", /vega fora da lista/);
+    const [f] = r.saida.falhas;
+    assert.match(f.remedio, /fora da raiz do projeto, passar a pasta do plugin/);
+    assert.match(f.remedio, /não recebeu/);
   });
 });
 

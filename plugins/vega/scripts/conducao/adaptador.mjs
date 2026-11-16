@@ -84,6 +84,7 @@
  * recusa; sob `node --test` é a do projeto de teste das suítes (`raizDoNucleo`).
  * O default continua sendo dado, nunca literal no código.
  */
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir, tmpdir } from "node:os";
@@ -796,6 +797,60 @@ export function codigoDoAdaptador(repo) {
   if (codigo) return carregarCodigo(caminhoDoCodigoDeclarado(raiz, codigo));
   if (raiz !== raizDoNucleo()) return codigoDoNucleo();
   throw new ErroAdaptador(`${declaracao.arquivo}: sem \`codigo\` — o núcleo não tem leitor de plano próprio`);
+}
+
+/** Os estados que o leitor da posse devolve (`posse.mjs dona` na Sistoli, D-VEGA26-15). */
+export const ESTADOS_DA_POSSE = Object.freeze(["dona", "sem-posse", "outra", "nao-li"]);
+/** Prazo do leitor da posse: uma consulta ao banco do harness, com folga para a rede. */
+export const PRAZO_DA_POSSE_MS = 30_000;
+
+/**
+ * A posse do ciclo do HEAD de `repo` (VEGA-37 T9, §2.2#6) pelo `posse.comando`
+ * da declaração (`.vega/declaracao.json`), o mesmo leitor da dona que o
+ * `git-guard` usa (D-VEGA26-15, D-VEGA37-26) — nunca por campo do `codigo`,
+ * para o adaptador do ramo seguir válido sob o `validarCodigo` de `main`.
+ * `null` quando o projeto não declara o comando: roda sem cerca de posse, e
+ * quem chama registra o pulo. Senão roda `<comando> --arvore <raiz>` da raiz,
+ * com prazo, e lê a última linha JSON `{ estado, ciclo?, motivo? }` num dos
+ * `ESTADOS_DA_POSSE`. Processo que falha, sai ≠ 0, passa do prazo ou imprime
+ * outra coisa vira `nao-li` com o motivo (nunca "sem posse": não ter lido não
+ * abre a cerca). `rodar` troca o processo nos testes. Com `ciclo`, o comando leva
+ * `--ciclo <id>` (VEGA-37 T17, D-VEGA37-30): a árvore desanexada pela ordem da
+ * troca segue lendo a própria posse.
+ */
+export function posseDoProjeto(repo, { rodar = spawnSync, prazoMs = PRAZO_DA_POSSE_MS, ciclo = null } = {}) {
+  const raiz = path.resolve(repo ?? process.cwd());
+  const declarada = vega.posseDoProjeto(raiz);
+  if (!declarada) return null;
+  const [exe, ...resto] = declarada.comando;
+  const r = rodar(exe === "node" ? process.execPath : exe, [...resto, "--arvore", raiz, ...(ciclo ? ["--ciclo", ciclo] : [])], {
+    cwd: raiz,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: prazoMs,
+    windowsHide: true,
+  });
+  if (r.error) return { estado: "nao-li", motivo: `o leitor da posse falhou (${r.error.code ?? r.error.message})` };
+  if (r.status !== 0) return { estado: "nao-li", motivo: `o leitor da posse saiu ${r.status}` };
+  let l;
+  try {
+    l = JSON.parse(String(r.stdout ?? "").trim().split("\n").at(-1));
+  } catch {
+    return { estado: "nao-li", motivo: "o leitor da posse imprimiu linha que não é JSON" };
+  }
+  if (!l || typeof l !== "object" || !ESTADOS_DA_POSSE.includes(l.estado))
+    return { estado: "nao-li", motivo: `o leitor da posse devolveu ${JSON.stringify(l)?.slice(0, 80)}` };
+  // O par da posse (`lock_id`, `epoca`) e a época gravada na árvore passam como vieram: quem
+  // compara é a cerca do motor (`exigirPosse` de git-conducao.mjs, VEGA-37 T15), que recusa
+  // par torto ou ausente na dona.
+  return Object.freeze({
+    estado: l.estado,
+    ...(l.ciclo ? { ciclo: l.ciclo } : {}),
+    ...(l.motivo ? { motivo: l.motivo } : {}),
+    ...(Object.hasOwn(l, "lock_id") ? { lock_id: l.lock_id } : {}),
+    ...(Object.hasOwn(l, "epoca") ? { epoca: l.epoca } : {}),
+    ...(Object.hasOwn(l, "epoca_gravada") ? { epoca_gravada: l.epoca_gravada } : {}),
+  });
 }
 
 /**

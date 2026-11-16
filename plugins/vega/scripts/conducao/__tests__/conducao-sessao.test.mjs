@@ -72,6 +72,17 @@ const CANONICO = [
 ].join("\n");
 
 /** Origin bare + árvore da maestra no ramo do ciclo, com a F1 conduzida até o fechamento conferido. */
+/**
+ * A passagem da fronteira confirmada à mão (VEGA-37 T16): as marcas `em passagem` e `passagem
+ * confirmada` que a ordem da troca grava, sem a troca de sessão — o que estes casos medem é o
+ * laço depois dela.
+ */
+function confirmarPassagemNaMao(a, fase) {
+  a.g("commit", "-q", "--allow-empty", "-m", `Conducao: ${fase} em passagem`, "-m", `Conducao-Passagem: ${fase}\nConducao-Epoca: 1`);
+  const sha = a.head();
+  a.g("commit", "-q", "--allow-empty", "-m", `Conducao: ${fase} passagem confirmada`, "-m", `Conducao-Passagem: ${fase}\nConducao-Confirma: ${sha}\nConducao-Epoca: 2`);
+}
+
 function ambiente(t) {
   const raiz = mkdtempSync(path.join(tmpdir(), "conducao-sessao-"));
   t.after(() => rmSync(raiz, { recursive: true, force: true }));
@@ -99,8 +110,12 @@ function ambiente(t) {
   autorizar("F1");
   for (const id of ["T1", "T2"]) conferida(id);
   const cli = (...args) => spawnSync(process.execPath, [SCRIPT, ...args, "--repo", dir, "--ciclo", CICLO], { encoding: "utf8" });
+  // Os passos do ramo no fechamento (VEGA-37 T9) já dados: o ramo no origin no HEAD e a
+  // condutora inscrita na proposta — o que estes testes provam é o estado do CI depois deles.
   const proximo = (entrada) => {
-    const r = cli("proximo", ...(entrada ? ["--entrada", JSON.stringify(entrada)] : []));
+    g("push", "-q", "origin", "HEAD:refs/heads/ciclo-teste");
+    const comInscricao = { inscrita: true, ...(entrada ?? {}) };
+    const r = cli("proximo", "--entrada", JSON.stringify(comInscricao));
     assert.equal(r.status, 0, r.stderr);
     return JSON.parse(r.stdout.trim());
   };
@@ -137,7 +152,7 @@ test("fase fechada com CI verde no HEAD e sem marca de encerramento emite encerr
   // O caminho é o da raiz do plugin: `<raiz>/skills/conducao/SKILL.md` e `<raiz>/scripts/conducao/conducao.mjs`.
   assert.match(e.texto, /pela skill \S+\/skills\/conducao\/SKILL\.md /);
   assert.match(e.texto, /node \S+\/scripts\/conducao\/conducao\.mjs retomar /);
-  assert.match(e.texto, /archive_session da maestra anterior session_maestra_f1 antes do retomar/);
+  assert.match(e.texto, /archive_session da condutora anterior session_maestra_f1 antes do retomar/);
   assert.match(e.texto, / retomar --repo /);
   assert.match(e.texto, /autorizar-ciclo F2: pedir o sim do ciclo a Rita/);
   // sha abreviado do HEAD também vale; mesmo estado, mesmo nonce.
@@ -163,6 +178,10 @@ test("com a marca de encerramento da fase o proximo pede o sim do ciclo seja qua
   const a = ambiente(t);
   const n = a.proximo({ ci: { sha: a.head(), veredito: "verde", run: 7 } }).nonce;
   assert.equal(a.cli("encerrar-sessao", "--fase", "F1", "--nonce", n).status, 0);
+  // Encerrada a F1 pela marca nova (`Conducao-Depois: passar`), a seguinte nasce pela ordem da troca
+  // (VEGA-37 T16): a passagem confirmada é o que deixa o laço pedir o sim da F2.
+  assert.equal(a.proximo().acao, "passar");
+  confirmarPassagemNaMao(a, "F1");
   // Qualquer sessão, qualquer CI (ou nenhum): a marca vive no ramo, não na conversa.
   for (const entrada of [undefined, { sessaoMaestra: "session_nova" }, { sessaoMaestra: "session_maestra_f1", ci: { sha: a.head(), veredito: "verde", run: 7 } }, { ci: { sha: "deadbeef", veredito: "vermelho", run: 8 } }]) {
     const p = a.proximo(entrada);
@@ -503,6 +522,7 @@ test("fase ja encerrada, task removida ou so dependencia mudada nao reabrem a fa
   const a = ambiente(t);
   const n = a.proximo({ ci: { sha: a.head(), veredito: "verde", run: 100 } }).nonce;
   assert.equal(a.cli("encerrar-sessao", "--fase", "F1", "--nonce", n).status, 0);
+  confirmarPassagemNaMao(a, "F1");
   a.replanejar(ANTES_DA_F2, T5 + T6 + ANTES_DA_F2);
   const enc = a.proximo();
   assert.equal(enc.motivo, "autorizar-ciclo");

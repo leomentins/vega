@@ -59,7 +59,7 @@ do repositório do plugin). O mínimo do campo, com o plano no formato público:
 
 | Hook | Evento | Onde age | Efeito |
 | --- | --- | --- | --- |
-| `operaria-alcance-guard.js` | `PreToolUse` em `archive_session`, `send_message` do conector remoto e `Bash` | toda sessão | Decide a permissão: a operária arquiva só a si mesma, escreve só para `@parent` e empurra só a referência de aviso dela; dentro disso `allow`, fora `ask`. Sem modo: nunca fica calado. |
+| `operaria-alcance-guard.js` | `PreToolUse` em `archive_session`, `send_message` do conector remoto e `Bash` | toda sessão | Decide a permissão: a operária arquiva só a si mesma, escreve só para `@parent` ou para quem já lhe escreveu, e empurra só a referência de aviso dela; a sessão comum arquiva e escreve para qualquer uma (`priority` aceito); dentro disso `allow`, fora `deny` com a forma que passa — nunca `ask`, para não parar no operador. Sem modo: nunca fica calado. |
 | `conducao-nonce-guard.js` | `PreToolUse` em `create_session`, `send_message`, `archive_session` | toda sessão que não nasceu de brief da condução | Compara o nonce citado na chamada com a última ação que `conducao.mjs proximo` emitiu (log de eventos). Grava `ok`, `divergencia`, `forma-desconhecida` ou `erro`. **Shadow:** sai 0 sempre. |
 | `operaria-stop-guard.js` | `Stop` | só sessão cujo pedido de nascimento é o contrato da operária | Recusa encerrar sem commit da task depois do marcador da tentativa e sem aviso `T<k>-FALHA … <nonce>` na primeira linha da resposta final. Recusa no máximo 3 vezes por sessão; a 4ª libera com `liberado-teto`. **Só em `hard`.** **Shadow:** o fim que recusaria vira `teria-bloqueado` no log e sai 0. |
 

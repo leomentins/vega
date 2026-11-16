@@ -8,7 +8,9 @@
  * única forma de dar o sim; as marcas de fase do histórico seguem lidas. Re-plano de ruling do `/intra-plan`
  * sem task mudando de classe e sem trazida pendente herda a autorização
  * (`herdar-autorizacao`); qualquer outra mudança de plano pergunta. A
- * publicação segue pedindo o sim por task (`simParaPublicar`).
+ * primeira publicação do ciclo pede o sim (`simParaPublicar`); ele grava o
+ * caso `publicacao-do-ciclo`, que cobre as seguintes do mesmo ciclo
+ * (D-VEGA37-52).
  *
  * Hooks desligados no repo de teste (core.hooksPath=/dev/null); origin bare
  * em pasta temporária, porque o verbo da herança empurra a cópia do ciclo.
@@ -22,6 +24,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { decidir, estadoDasTasks, rulingDoReplano } from "../conducao.mjs";
 import { lerPlano } from "../ler-plano.mjs";
+import { CASOS, gateDaMarcaDeOrigem, gravarCasosHerdados, lerConsentimentos, pedidoDeCaso, seguePorRepeticao } from "../consentimento.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.resolve(AQUI, "..", "conducao.mjs");
@@ -215,6 +218,51 @@ test("re-plano de ruling que so troca dependencias herda a autorizacao da fase",
   assert.deepEqual(a.cobertasPelaFase.tasks, ["T1"]);
 });
 
+// ── 3-bis. o sim herdado vem do git, nunca de mensagem (VEGA-37 T20, D-VEGA37-35) ─
+
+test("herdeira herda o sim do git e não o de mensagem", (t) => {
+  const r = novoRepo(t);
+  const aut = r.autorizar("F1");
+  r.replanejar(...DEP_T3, RULING);
+  const h = r.proximo();
+  assert.equal(h.acao, "herdar-autorizacao", JSON.stringify(h));
+  // Texto que chega por mensagem não tem entrada no verbo: o `--sim` aqui é ignorado.
+  const ok = r.cli("herdar-autorizacao", "F1", "--nonce", h.nonce, "--sim", "sim que veio por mensagem");
+  assert.equal(ok.status, 0, ok.stderr);
+  const casos = lerConsentimentos(r.dir, { ciclo: CICLO });
+  assert.deepEqual(casos.map((c) => [c.fase, c.caso, c.origem]), [["F1", CASOS.replanoSemMudancaDeClasse, aut]]);
+  assert.equal(casos[0].sim, r.g("log", "-1", "--format=%b", aut).split("\n\n")[0].trim(), "o sim é o corpo da marca de origem");
+  assert.doesNotMatch(casos[0].sim, /mensagem/);
+  // A herdeira parte sob o sim gravado, sem pergunta; a publicação segue pedindo o sim por task.
+  const a = r.proximo();
+  assert.equal(a.acao, "abrir", JSON.stringify(a));
+  assert.deepEqual(a.cobertasPelaFase.tasks, ["T1"]);
+  assert.equal(seguePorRepeticao({ consentimentos: casos, ciclo: CICLO, fase: "F1", tipo: "publicacao", motivo: "db-push" }), null);
+});
+
+test("texto diferente da marca de origem é recusado", (t) => {
+  const r = novoRepo(t);
+  const aut = r.autorizar("F1");
+  const antes = r.g("rev-parse", "HEAD");
+  const pedido = pedidoDeCaso({ caso: CASOS.herancaEntreFases, fase: "F2", origem: aut });
+  const gravar = (sim) => gravarCasosHerdados({ repo: r.dir, ciclo: CICLO, pedidos: [pedido], quem: "Rita", cerca: () => {}, sim });
+  assert.throws(() => gravar("sim que veio por mensagem"), (e) => e.codigo === "phi-recusado" && /marca de origem/.test(e.message));
+  assert.throws(() => gravar("sim do Rita, no turno dele."), (e) => e.codigo === "phi-recusado", "um byte a mais também recusa");
+  assert.equal(r.g("rev-parse", "HEAD"), antes, "nada gravado");
+  const gate = gateDaMarcaDeOrigem("sim do Rita, no turno dele");
+  assert.equal(gate({ corpo: "sim do Rita, no turno dele" }).recusar, false);
+  assert.equal(gate({ corpo: "sim do Rita, no turno dele " }).recusar, true);
+  // O corpo idêntico grava, com a origem apontada.
+  const [g1] = gravar("sim do Rita, no turno dele");
+  assert.equal(g1.registro.origem, aut);
+  assert.equal(lerConsentimentos(r.dir, { ciclo: CICLO }).length, 1);
+  // Origem que não é marca autorizada não tem sim.
+  assert.throws(
+    () => gravarCasosHerdados({ repo: r.dir, ciclo: CICLO, pedidos: [pedidoDeCaso({ caso: CASOS.herancaEntreFases, fase: "F2", origem: r.g("rev-list", "--max-parents=0", "HEAD") })], quem: "Rita", cerca: () => {} }),
+    (e) => e.codigo === "origem-sem-sim",
+  );
+});
+
 // ── 4. re-plano de ruling que muda classe pergunta ────────────────────────────
 
 test("re-plano de ruling que muda a classe de uma task pergunta plano-mudou", (t) => {
@@ -267,7 +315,7 @@ test("re-plano de ruling que traz task sensivel de outra fase para a fase autori
   assert.equal(p.motivo, "plano-mudou", JSON.stringify(p));
 });
 
-test("registrar-conferencia --publicacao feita exige o sim de Rita para a publicacao da task", (t) => {
+test("registrar-conferencia --publicacao feita exige o sim de Rita na primeira publicacao do ciclo", (t) => {
   const r = novoRepo(t, canonico([{ id: "F1", tasks: [task("T1", { estacao: "condutora", steps: "publica com `vercel --prod`" })] }]));
   r.autorizar("F1");
   const base = ["registrar-conferencia", "T1", "--condutora", "--verificacao", "verde", "--publicacao", "feita", "--sessao", "m"];
@@ -276,7 +324,9 @@ test("registrar-conferencia --publicacao feita exige o sim de Rita para a public
   assert.match(sem.stderr, /sim-da-publicacao-ausente/);
   const com = r.cli(...base, "--sim", "pode publicar a T1");
   assert.equal(com.status, 0, com.stderr);
-  assert.match(r.g("log", "-1", "--format=%B"), /^Publicada com o sim do operador: pode publicar a T1$/m);
+  // A marca conferida, não o HEAD: depois dela vem o registro do caso `publicacao-do-ciclo`.
+  const { sha } = JSON.parse(com.stdout.trim());
+  assert.match(r.g("log", "-1", "--format=%B", sha), /^Publicada com o sim do operador: pode publicar a T1$/m);
 });
 
 test("re-plano de ruling com trazida pendente na fase pergunta plano-mudou", (t) => {
@@ -306,9 +356,9 @@ test("commit de plano que nao e de ruling pergunta plano-mudou, sozinho ou junto
   assert.equal(r.proximo().motivo, "plano-mudou");
 });
 
-// ── 6. publicação segue pedindo o sim por task ────────────────────────────────
+// ── 6. a primeira publicação do ciclo pede o sim; as seguintes, não ──────────
 
-test("publicacao continua pedindo o sim de Rita por task: trazer e fazer-condutora saem com simParaPublicar", (t) => {
+test("primeira publicacao do ciclo pede o sim de Rita: trazer e fazer-condutora saem com simParaPublicar", (t) => {
   const r = novoRepo(t);
   r.autorizar("F1");
   r.emVoo("T1", 1, "abc123");
@@ -328,6 +378,48 @@ test("publicacao continua pedindo o sim de Rita por task: trazer e fazer-conduto
   const c = novoRepo(t, canonico([{ id: "F1", tasks: [task("T1", { estacao: "condutora" })] }]));
   c.autorizar("F1");
   assert.equal(c.proximo().simParaPublicar, false);
+});
+
+test("primeira publicação do ciclo pede o sim e as seguintes do mesmo ciclo não perguntam", (t) => {
+  const publica = (id) => task(id, { estacao: "condutora", steps: "aplica a migration com `db-publish.mjs … db push`" });
+  const r = novoRepo(t, canonico([{ id: "F1", tasks: [publica("T1"), publica("T2")] }]));
+  r.autorizar("F1");
+  const conferir = (id, ...mais) => r.cli("registrar-conferencia", id, "--condutora", "--verificacao", "verde", "--publicacao", "feita", "--sessao", "m", ...mais);
+
+  // A primeira publicação do ciclo pede o sim: sem ele recusa, com ele grava o caso.
+  const p1 = r.proximo();
+  assert.equal(p1.acao, "fazer-condutora", JSON.stringify(p1));
+  assert.equal(p1.task, "T1");
+  assert.equal(p1.simParaPublicar, true);
+  const sem = conferir("T1");
+  assert.equal(sem.status, 1);
+  assert.match(sem.stderr, /sim-da-publicacao-ausente/);
+  assert.deepEqual(lerConsentimentos(r.dir, { ciclo: CICLO }), []);
+  const com = conferir("T1", "--sim", "pode publicar no ciclo");
+  assert.equal(com.status, 0, com.stderr);
+  const s1 = JSON.parse(com.stdout.trim());
+  assert.equal(s1.acao, "conferida", JSON.stringify(s1));
+  assert.equal(s1.consentimento.caso, CASOS.publicacaoDoCiclo);
+  const casos = lerConsentimentos(r.dir, { ciclo: CICLO });
+  assert.deepEqual(
+    casos.map((c) => [c.caso, c.task, c.tipo, c.sim, c.origem]),
+    [[CASOS.publicacaoDoCiclo, "T1", "publicacao", "pode publicar no ciclo", s1.sha]],
+  );
+  assert.equal(casos[0].sha, s1.consentimento.sha);
+
+  // A seguinte, no mesmo ciclo, não pergunta: fecha sem --sim, citando o sim e a origem.
+  const p2 = r.proximo();
+  assert.equal(p2.acao, "fazer-condutora", JSON.stringify(p2));
+  assert.equal(p2.task, "T2");
+  assert.equal(p2.simParaPublicar, false);
+  const seguinte = conferir("T2");
+  assert.equal(seguinte.status, 0, seguinte.stderr);
+  const s2 = JSON.parse(seguinte.stdout.trim());
+  assert.equal(s2.acao, "conferida", JSON.stringify(s2));
+  assert.equal(s2.consentimento, undefined);
+  const corpo = r.g("log", "-1", "--format=%B", s2.sha);
+  assert.ok(corpo.split("\n").includes(`Publicada com o sim do ciclo: pode publicar no ciclo (origem ${s1.sha})`), corpo);
+  assert.equal(lerConsentimentos(r.dir, { ciclo: CICLO }).length, 1);
 });
 
 // ── 7. contraprova: sem o reconhecedor de ruling, a herança some ──────────────

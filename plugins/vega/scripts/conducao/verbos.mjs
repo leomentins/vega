@@ -15,8 +15,25 @@ import { BOTOES } from "./botoes.mjs";
 import { alcanca } from "./hooks-alcance.mjs";
 import { ErroPlano, casaAlgum } from "./ler-plano.mjs";
 import { perguntar as construirPergunta } from "./pergunta.mjs";
+import { CASOS, SEGUEM_PERGUNTANDO, consentidoNoTrazer, pedidoDeCaso, seguePorRepeticao } from "./consentimento.mjs";
+import { createRequire } from "node:module";
+
+const { parsePhaseCommit, sameCycle } = createRequire(import.meta.url)("../../hooks/lib/phase-commit-regex.js");
 
 export const TASK_RE = /^T\d{1,3}$/;
+
+/**
+ * Re-plano de ruling do `/intra-plan` (F4.17): subject
+ * `<ciclo>-F<n>/D-<CICLO>-<N> — re-plano de <alvo>: …`, reconhecido pelo
+ * `phase-commit-regex.js` do harness, do mesmo ciclo. Devolve o id do ruling
+ * ou null. `reconhecer` existe para a contraprova (regex desligado ⇒ null).
+ * Lido pela herança da autorização (`conducao.mjs`) e pela rodada B por re-plano.
+ */
+export function rulingDoReplano(subject, ciclo, reconhecer = parsePhaseCommit) {
+  const p = reconhecer(subject);
+  if (!p || !p.ruling || !sameCycle(p.cycleId, ciclo)) return null;
+  return p.description.startsWith(`${p.ruling} — re-plano de `) ? p.ruling : null;
+}
 
 export function exigir(cond, codigo, msg) {
   if (!cond) throw new ErroPlano(codigo, msg);
@@ -65,27 +82,64 @@ export function segmentosDosSteps(passos = [], codigo = codigoDoNucleo()) {
  * Caminho clínico e tela dos Steps vêm do código do adaptador (`codigo`, T20);
  * os arquivos de instrução do host, da declaração (`instrucoes`, T30).
  */
-export function motivosParaPerguntar({ caminhos, canonico, outputs, passos = [], alcance = alcanca, codigo = codigoDoNucleo(), instrucoes = [] }) {
+export function motivosParaPerguntar(args) {
+  return decidirNoTrazer(args).motivos;
+}
+
+/**
+ * `motivosParaPerguntar` com o que deixou de perguntar por consentimento
+ * (VEGA-37 T19): `{ motivos, consentidos }`, cada consentido
+ * `{ caso, motivo, caminhos }` de `consentimento.mjs` — a casca de I/O grava
+ * o registro por `gravarConsentimento`. Seguem sem pergunta: tela dos Steps
+ * (já coberta, agora registrada), superfície de instrução ou hook que é
+ * arquivo declarado em Outputs (D-VEGA37-22; `SEGUEM_PERGUNTANDO` segue
+ * perguntando, inclusive declarado; as instruções de sessão do adaptador,
+ * `instrucoes`, também, e nunca por repetição: D-VEGA37-45), teste ou contrato do motor que acompanha
+ * o código declarado (D-VEGA37-27), e motivo já respondido na fase
+ * (`consentimentos` + `fase`, pergunta repetida).
+ */
+export function decidirNoTrazer({ caminhos, canonico, outputs, passos = [], alcance = alcanca, codigo = codigoDoNucleo(), instrucoes = [], consentimentos = [], ciclo = null, fase = null }) {
   const motivos = [];
+  const consentidos = [];
+  const pelaRegra = (motivo, lista) => {
+    const { restantes, consentidos: c } = consentidoNoTrazer({ motivo, caminhos: lista, outputs, instrucoes });
+    consentidos.push(...c);
+    return restantes;
+  };
   // Só Output declarado como ARQUIVO libera: diretório declarado (a pasta do host,
   // `.husky/`) liberaria todo hook embaixo dele sem pergunta.
   // O alcance efetivo: a base do núcleo somada ao que o adaptador declara (`alcanceDosHooks`, HN-29 T39).
-  const hooks = alcance(caminhos, [...BOTOES.baseAlcance, ...(codigo.alcanceDosHooks ?? [])]).filter((c) => !outputs.includes(c));
+  // D-VEGA37-42 (decisão 28 da condução da F3): o que segue perguntando
+  // pergunta mesmo fora do alcance e das superfícies de instrução — registro de
+  // hook de outro host, runner do CI, `settings*.json` fora da pasta do host.
+  const noAlcance = alcance(caminhos, [...BOTOES.baseAlcance, ...(codigo.alcanceDosHooks ?? [])]);
+  const superficies = [...BOTOES.superficiesDeInstrucao, ...instrucoes];
+  const foraDoAlcance = caminhos.filter((c) => !noAlcance.includes(c) && !casaAlgum(c, superficies) && casaAlgum(c, SEGUEM_PERGUNTANDO));
+  const hooks = pelaRegra("alcance-dos-hooks", [...noAlcance, ...foraDoAlcance]);
   if (hooks.length) motivos.push({ motivo: "alcance-dos-hooks", caminhos: hooks });
-  const instrucao = caminhos.filter((c) => casaAlgum(c, [...BOTOES.superficiesDeInstrucao, ...instrucoes]));
+  const instrucao = pelaRegra(
+    "superficie-de-instrucao",
+    caminhos.filter((c) => casaAlgum(c, [...BOTOES.superficiesDeInstrucao, ...instrucoes])),
+  );
   if (instrucao.length) motivos.push({ motivo: "superficie-de-instrucao", caminhos: instrucao });
   if (caminhos.includes(canonico)) motivos.push({ motivo: "canonico-do-ciclo", caminhos: [canonico] });
   const segmentos = segmentosDosSteps(passos, codigo);
-  const clinicos = foraDosOutputs(caminhos.filter((c) => casaAlgum(c, codigo.caminhosProtegidos)), outputs).filter(
-    (c) =>
-      !(
-        casaAlgum(c, codigo.telasProtegidasDosSteps) &&
-        !casaAlgum(c, codigo.foraDasTelasDosSteps) &&
-        segmentos.some((s) => c.startsWith(`${s}/`))
-      ),
-  );
+  const foraDeclarados = foraDosOutputs(caminhos.filter((c) => casaAlgum(c, codigo.caminhosProtegidos)), outputs);
+  const daTela = (c) =>
+    casaAlgum(c, codigo.telasProtegidasDosSteps) && !casaAlgum(c, codigo.foraDasTelasDosSteps) && segmentos.some((s) => c.startsWith(`${s}/`));
+  const clinicos = foraDeclarados.filter((c) => !daTela(c));
+  const pelaTela = foraDeclarados.filter(daTela);
+  if (pelaTela.length) consentidos.push({ caso: CASOS.telaDosSteps, motivo: "caminho-clinico-fora-dos-outputs", caminhos: pelaTela });
   if (clinicos.length) motivos.push({ motivo: "caminho-clinico-fora-dos-outputs", caminhos: clinicos });
-  return motivos;
+  // Pergunta repetida: o mesmo motivo do `trazer` já respondido pelo operador nesta fase.
+  // As instruções de sessão do adaptador (`instrucoes`) nunca seguem por repetição (D-VEGA37-45).
+  const ficam = [];
+  for (const m of motivos) {
+    const origem = fase ? seguePorRepeticao({ consentimentos, ciclo, fase, tipo: "trazer", motivo: m.motivo, caminhos: m.caminhos, instrucoes }) : null;
+    if (origem) consentidos.push({ caso: CASOS.perguntaRepetida, motivo: m.motivo, caminhos: m.caminhos, origem: origem.sha ?? null, sim: origem.sim, quem: origem.quem });
+    else ficam.push(m);
+  }
+  return { motivos: ficam, consentidos };
 }
 
 export const SHA_PREFIXO_RE = /^[0-9a-f]{7,40}$/;
@@ -133,7 +187,9 @@ export function precisaDoMain({ faixa, caminho, merges }) {
  * commit de fora segue recusado, e merge só quando todo pai além do primeiro
  * está no main.
  *
- * Marca da condução só a maestra escreve: `lerMarcas` e `ultimaAutorizacao`
+ * Marca da condução só quem conduz escreve (a condutora; a maestra no modelo
+ * de três papéis, aposentado na VEGA-37 T8 — as marcas dela seguem lidas
+ * iguais), nunca a neta: `lerMarcas` e `ultimaAutorizacao`
  * leem o histórico do HEAD, então uma marca trazida da filha (no subject ou
  * em linha do corpo) valeria como autorização ou conferência forjada. Do
  * main, conta o commit cujo SUBJECT é marca: é o que o `lerMarcas` leria.
@@ -286,9 +342,14 @@ export function exigirUsoDaConferencia({ task, manual, maestra, publicacao }) {
  * turno dele, dizendo que a task não publica — a citação vem de texto do
  * plano e pega também passo que só *menciona* o verbo (T7 do NODUS-4 imprime
  * a dica do deploy; ruling 18.7, T18). O texto vai no corpo do commit de
- * conferência. `feita` exige `sim` = o texto do operador, num turno dele,
- * autorizando a publicação daquela task: o sim da fase não cobre publicação
- * (F4.17), e é aqui que isso se confere.
+ * conferência. `feita` na primeira publicação do ciclo exige `sim` = o texto
+ * do operador, num turno dele, autorizando a publicação: o sim da fase não
+ * cobre publicação (F4.17), e é aqui que isso se confere. Essa conferência
+ * devolve também o pedido do caso `publicacao-do-ciclo` (`consentimento`),
+ * que a casca grava depois da marca; com o caso gravado no ciclo
+ * (`simDoCiclo`, de `simDaPublicacaoDoCiclo`), as publicações seguintes do
+ * mesmo ciclo fecham sem `--sim`, citando o sim e a marca de origem no corpo
+ * (D-VEGA37-52).
  *
  * Conferência do operador (`caso`, de `casoDeConferencia`): com resposta por
  * arquivo, `approval()` devolve `{ caminho, verdict }` do arquivo no HEAD (ou
@@ -296,7 +357,7 @@ export function exigirUsoDaConferencia({ task, manual, maestra, publicacao }) {
  * pergunta, sem `operador` (o texto do operador dizendo sim) a conferência
  * não grava e devolve a pergunta `conferencia-do-operador`.
  */
-export function politicaDaConferencia({ task, t, verificacao, publicacao, manual = false, maestra = false, sim = null, sessao = null, approval, caso = null, operador = null, nomeDoOperador = "o operador" }) {
+export function politicaDaConferencia({ task, t, verificacao, publicacao, manual = false, maestra = false, sim = null, sessao = null, approval, caso = null, operador = null, nomeDoOperador = "o operador", simDoCiclo = null }) {
   const temPublicacao = t.publicacao.length > 0;
   const semPublicacaoComSim = temPublicacao && publicacao === "nao-se-aplica" && !manual && Boolean(sim && sim.trim());
   if (temPublicacao && publicacao !== "feita" && !semPublicacaoComSim)
@@ -307,11 +368,16 @@ export function politicaDaConferencia({ task, t, verificacao, publicacao, manual
   if (!temPublicacao && publicacao === "feita")
     throw new ErroPlano("publicacao-fora-do-plano", `${task} não cita publicação no plano congelado`);
   const publicadaComSim = publicacao === "feita" && Boolean(sim && sim.trim());
-  if (publicacao === "feita" && !manual && !publicadaComSim)
+  // O sim da primeira publicação do ciclo cobre as seguintes dele (D-VEGA37-52).
+  const publicadaPeloCiclo = publicacao === "feita" && !manual && !publicadaComSim && Boolean(simDoCiclo);
+  if (publicacao === "feita" && !manual && !publicadaComSim && !publicadaPeloCiclo)
     throw new ErroPlano(
       "sim-da-publicacao-ausente",
-      `${task} publicou — --publicacao feita exige --sim <texto de ${nomeDoOperador} autorizando a publicação desta task> (o sim da fase não cobre publicação)`,
+      `${task} publicou — a primeira publicação do ciclo exige --sim <texto de ${nomeDoOperador} autorizando a publicação> (o sim da fase não cobre publicação)`,
     );
+  // A primeira publicação com sim registra o caso; a casca completa quem, quando, o sim e a origem.
+  const pedido = () =>
+    publicadaComSim && !manual && !simDoCiclo ? { consentimento: pedidoDeCaso({ caso: CASOS.publicacaoDoCiclo, fase: t.fase, origem: null, task }) } : {};
   const temOperador = textoDoOperador(operador);
   exigir(
     !temOperador || (caso && !caso.arquivo),
@@ -319,7 +385,13 @@ export function politicaDaConferencia({ task, t, verificacao, publicacao, manual
     `${task} não é conferência do operador por pergunta — --operador é só para ela`,
   );
   const linhasDoCorpo = [
-    semPublicacaoComSim ? `Sem publicação: ${sim.trim()}` : publicadaComSim ? `Publicada com o sim do operador: ${sim.trim()}` : null,
+    semPublicacaoComSim
+      ? `Sem publicação: ${sim.trim()}`
+      : publicadaComSim
+        ? `Publicada com o sim do operador: ${sim.trim()}`
+        : publicadaPeloCiclo
+          ? `Publicada com o sim do ciclo: ${simDoCiclo.sim} (origem ${simDoCiclo.origem ?? simDoCiclo.sha})`
+          : null,
     temOperador ? `Conferida pelo operador: ${operador.trim()}` : null,
   ].filter(Boolean);
   const corpoDoSim = linhasDoCorpo.length ? { corpo: linhasDoCorpo.join("\n\n") } : {};
@@ -384,11 +456,12 @@ export function politicaDaConferencia({ task, t, verificacao, publicacao, manual
         ...dispensa,
       },
       saida: { executor, verificacao, publicacao },
+      ...pedido(),
     };
   }
   exigir(!daCondutora, "maestra-sem-flag", `${task} é de estação condutora — fecha só com --condutora`);
   if (pendente) return pendente;
-  return { via: "filha", subject, ...corpoDoSim, dispensa, saida: { verificacao, publicacao } };
+  return { via: "filha", subject, ...corpoDoSim, dispensa, saida: { verificacao, publicacao }, ...pedido() };
 }
 
 /** Sessão da filha: a passada agora, ou a gravada no `trazer`; nenhuma ⇒ erro. */
@@ -517,18 +590,91 @@ export function exigirApprovalDeRodada({ caminho, a, caso }) {
 }
 
 /**
- * `needs-rework` contra o rito: contador independente do approval — A e C
- * emitem rodada, B não; depois de k marcas `rodada` da task (`anteriores`),
- * o approval da vez tem de dizer floor(k/2)+1. Approval que não andou (C sem
- * regravar) ou que recuou pergunta ao operador, e o teto conta pelas marcas mesmo
- * se o approval mentir. null ⇒ a rodada se grava.
+ * Trailer da marca `rodada` cuja rodada B foi feita fora da task, por re-plano
+ * de decisão registrada (valor: o sha do re-plano). A marca conta como duas
+ * (`anteriores`): a B do re-plano e a própria.
  */
-export function conferirRodada({ base, anteriores, rodadaDoApproval, ref }) {
+export const TRAILER_RODADA_B_REPLANO = "Conducao-Rodada-B-Replano";
+
+/** Rodadas que as marcas `rodada` da task contam: 1 por marca, 2 na que traz o trailer da B por re-plano. */
+export function rodadasDasMarcas(marcas) {
+  return marcas.reduce((n, m) => n + (m.replanoB ? 2 : 1), 0);
+}
+
+/**
+ * A rodada B feita fora da task do gate: consertos da rodada A em tasks novas
+ * criadas por re-plano de decisão registrada. `replanos` são os commits que
+ * mexeram no canonico entre a marca `rodada` anterior e a abertura da
+ * tentativa atual, cada um `{ sha, subject, corpo, novas, depsDoGate }`
+ * (`novas`: tasks que o commit criou no plano; `depsDoGate`: as dependências
+ * da task do gate no plano do commit). Conta o primeiro que é re-plano de
+ * ruling, cria task(s) e (a task do gate passa a depender de uma delas, ou o
+ * re-plano cita a task do gate). `vistos` diz por que cada um não contou.
+ */
+export function replanoDaRodadaB({ task, ciclo, replanos, reconhecer = parsePhaseCommit }) {
+  const vistos = [];
+  const citaGate = new RegExp(`(^|[^A-Za-z0-9_])${task}(?![0-9])`);
+  for (const c of replanos) {
+    const ruling = rulingDoReplano(c.subject, ciclo, reconhecer);
+    if (!ruling) {
+      vistos.push({ sha: c.sha, motivo: "nao-e-replano-de-ruling" });
+      continue;
+    }
+    if (c.ilegivel) {
+      vistos.push({ sha: c.sha, ruling, motivo: "plano-ilegivel", detalhe: c.ilegivel });
+      continue;
+    }
+    if (!c.novas.length) {
+      vistos.push({ sha: c.sha, ruling, motivo: "sem-task-nova" });
+      continue;
+    }
+    const dependidas = c.novas.filter((id) => c.depsDoGate.includes(id));
+    if (dependidas.length) return { replano: { sha: c.sha, ruling, novas: c.novas, por: "dependencia", dependidas }, vistos };
+    if (citaGate.test(`${c.subject}\n${c.corpo ?? ""}`)) return { replano: { sha: c.sha, ruling, novas: c.novas, por: "citacao", dependidas: [] }, vistos };
+    vistos.push({ sha: c.sha, ruling, motivo: `${task}-nao-depende-nem-e-citada` });
+  }
+  return { replano: null, vistos };
+}
+
+/** O que destrava a recusa de approval que pulou a B: dito na pergunta, nunca feito pelo script. */
+function destravaPorReplano(task) {
+  return `um re-plano de decisão registrada (\`<ciclo>-F<n>/D-<…> — re-plano de …\`), commitado entre a marca \`rodada\` anterior de ${task} e a abertura desta tentativa, que crie task(s) de que ${task} passe a depender (ou que cite ${task}), conta como a rodada B e destravaria esta rodada`;
+}
+
+/**
+ * `needs-rework` contra o rito: contador independente do approval — A e C
+ * emitem rodada, B não; depois de k rodadas contadas pelas marcas `rodada`
+ * da task (`anteriores`, `rodadasDasMarcas`), o approval da vez tem de dizer
+ * floor(k/2)+1. Approval que não andou (C sem regravar) ou que recuou pergunta
+ * ao operador, e o teto conta pelas marcas mesmo se o approval mentir.
+ *
+ * Única folga: com a B pendente (k ímpar), approval já na rodada seguinte
+ * (a C) vale se a B foi feita fora da task, por re-plano de decisão
+ * registrada — `replanoB()` (lazy: só lê o git quando a regra estrita já
+ * recusou) devolve `{ replano, vistos }` de `replanoDaRodadaB`. Sem esse
+ * re-plano, a recusa é a mesma de sempre e diz o que a destravaria.
+ *
+ * null ⇒ a rodada se grava; `{ acao: "gravar-rodada", replano }` ⇒ grava
+ * com a B por re-plano; senão, a pergunta.
+ */
+export function conferirRodada({ base, anteriores, rodadaDoApproval, ref, replanoB = null }) {
   const esperada = Math.floor(anteriores / 2) + 1;
   if (rodadaDoApproval >= TETO_RODADAS_GATE || esperada >= TETO_RODADAS_GATE)
     return perguntar("teto-de-rodadas", { ...base, teto: TETO_RODADAS_GATE, ref });
-  if (rodadaDoApproval !== esperada) return perguntar("approval-fora-do-rito", { ...base, rodadaEsperada: esperada, ref });
-  return null;
+  if (rodadaDoApproval === esperada) return null;
+  // Abaixo do teto de 3 isso só acontece com k = 1 e approval 2; a forma geral fica para teto maior.
+  const pulouB = anteriores % 2 === 1 && rodadaDoApproval === esperada + 1;
+  if (!pulouB) return perguntar("approval-fora-do-rito", { ...base, rodadaEsperada: esperada, ref });
+  const achado = replanoB ? replanoB() : { replano: null, vistos: [] };
+  if (achado.replano) return { acao: "gravar-rodada", replano: achado.replano };
+  return perguntar("approval-fora-do-rito", {
+    ...base,
+    rodadaEsperada: esperada,
+    ref,
+    destrava: destravaPorReplano(base.task),
+    replanosVistos: achado.vistos,
+    ...(achado.aviso ? { aviso: achado.aviso } : {}),
+  });
 }
 
 /**
@@ -541,7 +687,7 @@ export function conferirRodadaPorPergunta({ base, anteriores, ref }) {
 }
 
 /** Trailers da marca `Conducao: T<k> tentativa <n> rodada|carimbo`; sem arquivo (por pergunta), sem `Conducao-Rodada-Approval`. */
-export function trailersDaRodada({ task, r, sessaoFilha, rodada, rodadaDoApproval }) {
+export function trailersDaRodada({ task, r, sessaoFilha, rodada, rodadaDoApproval, replanoB = null }) {
   return {
     "Conducao-Task": task,
     "Conducao-Sha-Filha": r.ponta,
@@ -549,6 +695,7 @@ export function trailersDaRodada({ task, r, sessaoFilha, rodada, rodadaDoApprova
     "Conducao-Nonce": r.nonce,
     "Conducao-Rodada": rodada,
     ...(rodadaDoApproval === undefined ? {} : { "Conducao-Rodada-Approval": String(rodadaDoApproval) }),
+    ...(replanoB ? { [TRAILER_RODADA_B_REPLANO]: replanoB.sha } : {}),
   };
 }
 

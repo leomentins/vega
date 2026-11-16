@@ -20,6 +20,8 @@
  *   e os campos próprios de cada regra, no comentário dela.
  */
 
+import { CASOS, pedidoDeCaso, sensivelAditivaNaOrdem, simDaPublicacaoDoCiclo } from "./consentimento.mjs";
+
 /**
  * Motivo da espera depois do encerramento do ciclo (HN-29 T39): o comando de
  * fechamento do projeto (`fechamentoDoCiclo` do adaptador, sem a barra) mais
@@ -65,10 +67,18 @@ export function regraArquivar(ctx) {
 }
 
 /**
+ * A task publica e o ciclo ainda não tem o caso `publicacao-do-ciclo`: a
+ * primeira publicação do ciclo pede o sim; as seguintes, não (D-VEGA37-52).
+ */
+function pedeSimParaPublicar(ctx, t) {
+  return t.publicacao.length > 0 && !simDaPublicacaoDoCiclo({ consentimentos: ctx.consentimentos ?? [], ciclo: ctx.ciclo });
+}
+
+/**
  * Trazer vence as perguntas da vigia: a primeira tentativa em voo, na ordem
  * das tasks da fase, com marcador válido e aviso `T<k>-OK` da filha dela.
  *
- * Lê: `fase`, `voo` (`[{ t, r }]` — task do plano e tentativa em voo), `filhas`.
+ * Lê: `fase`, `voo` (`[{ t, r }]` — task do plano e tentativa em voo), `filhas`, `consentimentos`.
  */
 export function regraTrazer(ctx) {
   const { acao, lerAviso, fase, voo, filhas } = ctx;
@@ -87,9 +97,10 @@ export function regraTrazer(ctx) {
       sha: ok.a.arg,
       sessao: ok.f.sessao ?? null,
       ref: r.ref,
-      // Subpasso Publicar: o sim da fase não cobre a publicação (F4.17).
+      // Subpasso Publicar: o sim da fase não cobre a publicação (F4.17); a primeira do
+      // ciclo pede o sim, e o caso `publicacao-do-ciclo` cobre as seguintes (D-VEGA37-52).
       publicacao: t.publicacao,
-      simParaPublicar: t.publicacao.length > 0,
+      simParaPublicar: pedeSimParaPublicar(ctx, t),
     });
   }
   return null;
@@ -173,7 +184,7 @@ export function regraAbrir(ctx) {
       prazoMin: t.prazoMin,
       posMerge: t.posMerge,
       classe: t.classe,
-      // `abrir --falhou <n> --coberta <sim|nao>` grava a falha antes do marcador.
+      // `abrir --falhou <n> --coberta <sim|nao|ambiente|pergunta>` grava a falha antes do marcador.
       ...(anterior ? { falhaAnterior: anterior } : {}),
     };
   });
@@ -251,6 +262,8 @@ function fechamentoDaFase(plano, fase) {
  * `replanos` são os commits (`{ sha, subject }`) que mexeram no canonico entre
  * a última autorização e o HEAD — null quando o canonico mudou de caminho;
  * decidem a herança da autorização pelo re-plano de ruling (F4.17).
+ * `consentimentos` são os casos do ciclo no git (`lerConsentimentos`): o
+ * `publicacao-do-ciclo` tira o `simParaPublicar` das publicações seguintes.
  *
  * `reabrir` (task → `{ tentativa, coberta, motivo }` da tentativa que caiu)
  * nasce vazio e é a `regraVigia` que o preenche; `vooAtivo`, `servidor`,
@@ -270,7 +283,7 @@ export function contextoDaDecisao(params, injetados) {
 
   // O sim do operador ao ciclo (`autorizar-ciclo`, ruling de 27/10/2026): vale para
   // toda fase enquanto nenhuma task mudar de classe ou sensibilidade em relação
-  // ao plano congelado nele. Os gates seguem pedindo: publicação por task, task
+  // ao plano congelado nele. Os gates seguem pedindo: a primeira publicação do ciclo, task
   // sensível de fase herdada pelo ciclo (por nonce), perguntas da vigia.
   const cicloCobre = Boolean(
     autorizacaoDoCiclo && planoHead && planoHeadBlob && !mudancasQuePerguntam(autorizacaoDoCiclo.plano, planoHead).length,
@@ -442,7 +455,9 @@ export function regraFaseForaDoPlano(ctx) {
  * Sem fase restante (T22): o fechamento do ciclo sai numa sessão limpa,
  * aberta pelo texto que esta entrega (o comando de fechamento do projeto,
  * `fechamentoDoCiclo`) — nunca `perguntar squash` aqui; o squash é perguntado
- * dentro do fechamento do projeto (D-SC7-2).
+ * dentro do fechamento do projeto (D-SC7-2). Desde a VEGA-37 T10 o
+ * `fechar-ciclo` leva em `criar` o `criar-condutora` de fase `fechamento`,
+ * que a própria condutora da última fase executa.
  *
  * Lê: `fase`, `iPrimeira`, `plano`, `autorizadas`, `encerradas`, `entrada`
  * (`proposta`, `ci`, `sessaoMaestra`), `repo`, `temCi`.
@@ -465,17 +480,27 @@ export function regraFecharCiclo(ctx) {
   // que a maestra grava ao executar esta ação — a auditoria do Ato A confere
   // que nenhum sumiu. Fase conduzida antes da T21 não tem marca: fica fora.
   const exigirEncerramentos = [...plano.fases.map((f) => f.id).filter((id) => encerradas.has(id)), "ciclo"];
+  const sessao = entrada.sessaoMaestra ?? null;
+  // Dois papéis (VEGA-37 T10): a condutora da última fase cria a condutora de
+  // fechamento do ciclo, numa sessão limpa, com o texto do fechamento do
+  // projeto (`fechamentoDoCiclo` do adaptador) como prompt — o que a
+  // `maestraCriarFechamento` fazia, sem nível acima. Uma só: o nonce leva o
+  // HEAD, e depois de `Conducao-Encerrada: ciclo` esta regra só espera.
+  const prompt = textoDoFechamento({ ciclo, repo, sessao, conduzidas, exigirEncerramentos, anterior: "condutora anterior" });
   return acao("fechar-ciclo", "fechar:ciclo", 0, {
     ...campos,
-    texto: textoDoFechamento({ ciclo, repo, sessao: entrada.sessaoMaestra ?? null, conduzidas, exigirEncerramentos }),
+    texto: textoDoFechamento({ ciclo, repo, sessao, conduzidas, exigirEncerramentos }),
+    criar: acao("criar-condutora", "condutora:fechamento", 0, { fase: "fechamento", nome: nomeDaCondutora(ciclo, "fechamento"), modelo: null, tentativa: 1, sessaoLimpa: true, texto: prompt }),
   });
 }
 
 /**
- * Uma fase por sessão maestra (D-VEGA22-31, T21): a fase anterior conduzida
+ * Uma fase por condutora (D-VEGA22-31, T21): a fase anterior conduzida
  * com o fechamento conferido e sem a marca `Conducao-Encerrada` dela fecha a
  * sessão antes do pedido de autorização da fase seguinte — só com o CI verde
- * no HEAD, lido pela maestra. O fechamento que conta é o último da fase (T27):
+ * no HEAD. Verde ⇒ `encerrar-sessao` leva em `criar` o `criar-condutora` da
+ * fase seguinte, que a própria condutora executa (VEGA-37 T8); vermelho ou
+ * pendente não cria. O fechamento que conta é o último da fase (T27):
  * o de uma fase reaberta só encerra quando o fechamento novo for conferido.
  *
  * Lê: `fase` (ainda não autorizada), `iPrimeira`, `plano`, `autorizadas`,
@@ -496,10 +521,220 @@ export function regraEncerrarSessao(ctx) {
   const campos = { fase: anterior.id, faseSeguinte: fase.id, task: fechamentoAnterior.id, ci };
   if (!veredito) return acao("esperar", `encerrar:${anterior.id}`, 0, { ...campos, motivo: "ci-pendente" });
   if (veredito === "vermelho") return acao("perguntar", `encerrar:${anterior.id}`, 0, { ...campos, motivo: "ci-vermelho" });
-  return acao("encerrar-sessao", `encerrar:${anterior.id}`, 0, {
+  // Dois papéis (VEGA-37 T8): a própria condutora encerra a fase, sem nível
+  // acima. A criação da seguinte entra na ordem da troca (VEGA-37 T16): depois
+  // do encerramento vem o `passar` (`regraPassarNaFronteira`), e a herdeira
+  // nasce do `criar-condutora` da `regraPassagem`, com nota, posse e época.
+  // O `texto` fica como o resumo da sessão seguinte, sem ser prompt de ninguém.
+  const texto = textoDaProximaSessao({ ciclo, fase: fase.id, repo, sessao: entrada.sessaoMaestra ?? null, peloCiclo: cicloCobre, anterior: "condutora anterior" });
+  return acao("encerrar-sessao", `encerrar:${anterior.id}`, 0, { ...campos, texto, depois: "passar" });
+}
+
+// ── a ordem da troca (VEGA-37 T16, D-VEGA37-18, D-VEGA37-19) ────────────────
+//
+// A troca de condutora, na fronteira de fase ou no meio dela, segue a ordem do
+// esboço, cada passo uma ação do `proximo` com nonce:
+//   1. `passar` — nota de passagem e "em passagem"; o verbo desanexa o ramo
+//      (`desanexar-ramo` se ficou anexado) e NÃO solta a posse;
+//   2. `criar-condutora` — a herdeira, com o `trazer-ramo` dentro do prompt;
+//   3. `trazer-ramo` (verbo, na árvore da herdeira) — o ramo aberto lá e
+//      conferido na ponta, que é a marca de passagem;
+//   4. `passar-posse` — a herdeira toma a posse com o `lock_id` e a época da
+//      nota; a época sobe nessa escrita e a anterior para de gravar;
+//   5. `soltar-inscricao` (anterior) · `inscrever-na-proposta` e
+//      `confirmar-passagem` (herdeira);
+//   6. `arquivar-se` (anterior) e, com ela arquivada e a árvore limpa,
+//      `desmontar-anterior` (herdeira).
+// Sem confirmação no prazo, cada lado sabe quem é a dona pela época: parada,
+// a anterior segue dona (`retomar-da-passagem`, e na segunda falha a pergunta);
+// subida, a dona é a herdeira e a anterior para (`parar passagem-epoca-subiu`).
+//
+// `ctx.passagem` é o resumo que o `proximo` monta (`resumoDaPassagem` de
+// conducao.mjs): `aberta` (a marca `passagem` aberta, com `ramo`, `lock`,
+// `epoca`, `nota`), `ultima` (a última marca de passagem, de qualquer tipo),
+// `falhas` (fase → desistidas desde a última confirmada), `noMeio` (fase →
+// passagens confirmadas no meio dela), e só quando há passagem aberta ou
+// confirmada por último: `posse` (do leitor do projeto), `anexado`,
+// `confirmadaNoRamo` (a anterior lê a ponta do ramo) e `arvoreDaAnterior`
+// (`{ caminho, nome, suja, motivo }` da árvore destacada na marca, ou `null`).
+
+/** O número da época como veio da marca (`Conducao-Epoca`), ou `null`. */
+function epocaDaMarca(m) {
+  const n = Number(m?.epoca);
+  return Number.isSafeInteger(n) && n >= 1 ? n : null;
+}
+
+/**
+ * Quem esta sessão é na passagem aberta, pela posse e pelo ramo:
+ * dona com a época da nota ⇒ `anterior`; dona com época maior ⇒ `herdeira`;
+ * posse alheia com o ramo anexado ⇒ `herdeira-sem-posse` (trouxe o ramo, ainda
+ * não passou a posse); posse alheia destacada ⇒ `anterior-destituida`. Outro
+ * caso (posse ilegível, sem posse, época torta) ⇒ `null`: a ordem não anda sem época.
+ */
+export function papelNaPassagem({ posse, anexado, aberta }) {
+  const daNota = epocaDaMarca(aberta);
+  if (!daNota || !posse) return null;
+  if (posse.estado === "dona") {
+    if (posse.epoca === daNota) return "anterior";
+    if (Number.isSafeInteger(posse.epoca) && posse.epoca > daNota) return "herdeira";
+    return null;
+  }
+  if (posse.estado === "outra") return anexado ? "herdeira-sem-posse" : "anterior-destituida";
+  return null;
+}
+
+/**
+ * A fase e o nome da herdeira (D-VEGA37-18): passagem depois do encerramento da
+ * fase é de fronteira, e a herdeira é a primeira condutora da fase seguinte
+ * (`<ciclo> · F<n+1>`); no meio da fase, leva o ordinal dentro dela — a
+ * primeira condutora é a 1, cada passagem confirmada no meio soma uma.
+ */
+export function herdeiraDaPassagem({ ciclo, plano, encerradas, aberta, noMeio }) {
+  if (encerradas.has(aberta.fase)) {
+    const i = plano.fases.findIndex((f) => f.id === aberta.fase);
+    const seguinte = i >= 0 ? plano.fases[i + 1] ?? null : null;
+    if (!seguinte) return null;
+    return { fase: seguinte.id, ordinal: 1, nome: nomeDaCondutora(ciclo, seguinte.id), modelo: seguinte.modelo ?? null, fronteira: true };
+  }
+  const fase = plano.fases.find((f) => f.id === aberta.fase) ?? null;
+  const ordinal = 2 + (noMeio?.get(aberta.fase) ?? 0);
+  return { fase: aberta.fase, ordinal, nome: nomeDaCondutora(ciclo, aberta.fase, ordinal), modelo: fase?.modelo ?? null, fronteira: false };
+}
+
+/** O estado da outra sessão da troca (`entrada.herdeira`/`entrada.anterior`), normalizado como o da filha. */
+function estadoDoLado(ctx, lado) {
+  if (lado?.estado == null) return null;
+  return typeof ctx.estadoDaFilha === "function" ? ctx.estadoDaFilha(lado.estado) : lado.estado;
+}
+
+/** Minutos desde a criação da herdeira (`entrada.herdeira.criadaEm`), ou `null` sem o instante. */
+function minutosDaHerdeira(ctx, herdeira) {
+  const criada = herdeira?.criadaEm != null ? ctx.epoch(herdeira.criadaEm) : null;
+  if (criada === null || !Number.isFinite(ctx.agora)) return null;
+  return (ctx.agora - criada) / 60;
+}
+
+/**
+ * A troca em curso: lado da anterior e lado da herdeira, pela época
+ * (comentário do bloco). Vem logo depois da rede de arquivamento: em passagem
+ * nada da fase anda. Sem passagem aberta, só o desmonte da anterior fala.
+ *
+ * Lê: `passagem`, `plano`, `encerradas`, `entrada` (`herdeira`, `anterior`,
+ * `inscrita`, `ci`, `sessaoMaestra`), `agora`, `temCi`,
+ * `prazoConfirmacaoMin`, `textoDaHerdeira`.
+ */
+export function regraPassagem(ctx) {
+  const { ciclo, acao, nonce, passagem: p, entrada, plano, encerradas, temCi, prazoConfirmacaoMin, textoDaHerdeira } = ctx;
+  if (!p) return null;
+  const a = p.aberta;
+  if (!a) return regraDesmonte(ctx);
+  const epoca = epocaDaMarca(a);
+  const campos = { fase: a.fase, passagem: a.sha, epoca, ramo: a.ramo ?? null };
+  const papel = papelNaPassagem({ posse: p.posse, anexado: p.anexado, aberta: a });
+  if (!papel)
+    return acao("perguntar", `passagem:${a.sha}`, 0, {
+      ...campos,
+      motivo: "passagem-sem-posse",
+      posse: p.posse?.estado ?? null,
+      detalhe: `a passagem ${a.sha.slice(0, 8)} não anda sem a época: posse ${p.posse?.estado ?? "não lida"}${p.posse?.motivo ? ` (${p.posse.motivo})` : ""}, época da nota ${a.epoca ?? "ausente"}`,
+    });
+  const herdeira = entrada.herdeira ?? null;
+  const minutos = minutosDaHerdeira(ctx, herdeira);
+  // Sem confirmação no prazo: o prazo corre da criação da herdeira; herdeira arquivada antes de confirmar é prazo vencido.
+  const vencido = estadoDoLado(ctx, herdeira) === "ARCHIVED" || (minutos !== null && minutos > prazoConfirmacaoMin);
+  const espera = { ...campos, herdeira: herdeira?.sessao ?? null, prazoMin: prazoConfirmacaoMin, minutos };
+
+  if (papel === "anterior") {
+    if (p.anexado) return acao("desanexar-ramo", `desanexar:${a.sha}`, 0, campos);
+    const falhas = p.falhas?.get(a.fase) ?? 0;
+    if (!herdeira?.sessao) {
+      const h = herdeiraDaPassagem({ ciclo, plano, encerradas, aberta: a, noMeio: p.noMeio });
+      if (!h)
+        return acao("perguntar", `passagem:${a.sha}`, 0, { ...campos, motivo: "passagem-sem-fase-seguinte", detalhe: `${a.fase} é a última fase do plano: a fronteira dela é o fechamento do ciclo, não uma passagem` });
+      const tentativa = falhas + 1;
+      const trazer = { ramo: a.ramo ?? null, passagem: a.sha, tentativa, nonce: nonce(ciclo, `herdeira:${a.sha}`, tentativa, a.sha) };
+      const texto = textoDaHerdeira({ ciclo, fase: h.fase, sessao: entrada.sessaoMaestra ?? null, nota: a.nota ?? null, trazer });
+      return acao("criar-condutora", `herdeira:${a.sha}`, tentativa, { ...campos, fase: h.fase, faseDaPassagem: a.fase, nome: h.nome, ordinal: h.ordinal, modelo: h.modelo, tentativa, texto, trazer, prazoMin: prazoConfirmacaoMin });
+    }
+    if (!vencido) return acao("esperar", `passagem:${a.sha}`, 0, { ...espera, motivo: "passagem-em-curso" });
+    // Época parada: a posse nunca saiu da anterior. Uma nova tentativa; na segunda falha, o operador.
+    if (falhas >= 1)
+      return acao("perguntar", `passagem:${a.sha}`, falhas + 1, { ...campos, motivo: "passagem-sem-confirmacao", herdeira: herdeira.sessao, tentativas: falhas + 1, prazoMin: prazoConfirmacaoMin });
+    return acao("retomar-da-passagem", `retomar:${a.sha}`, falhas + 1, { ...campos, arquivar: herdeira.sessao, prazoMin: prazoConfirmacaoMin, minutos });
+  }
+
+  if (papel === "anterior-destituida") {
+    // A época subiu: a dona é a herdeira. A anterior solta a inscrição, espera a confirmação e se arquiva.
+    if (entrada.inscrita === true) return acao("soltar-inscricao", `soltar:${a.sha}`, 0, { ...campos, ferramenta: "unsubscribe_pr_activity", proposta: entrada.proposta?.numero ?? null });
+    if (p.confirmadaNoRamo) return acao("arquivar-se", `arquivar-se:${a.sha}`, 0, { ...campos, sessao: entrada.sessaoMaestra ?? null, ferramenta: "archive_session" });
+    if (vencido) return acao("parar", `passagem:${a.sha}`, 0, { ...campos, motivo: "passagem-epoca-subiu", herdeira: herdeira?.sessao ?? null, prazoMin: prazoConfirmacaoMin });
+    return acao("esperar", `passagem:${a.sha}`, 0, { ...espera, motivo: "passagem-em-curso" });
+  }
+
+  if (papel === "herdeira-sem-posse") {
+    if (!a.lock)
+      return acao("perguntar", `passagem:${a.sha}`, 0, { ...campos, motivo: "passagem-sem-posse", posse: p.posse?.estado ?? null, detalhe: `a nota de ${a.sha.slice(0, 8)} não traz o lock_id da anterior (trailer Conducao-Lock): sem ele o passar-posse não acha a posse` });
+    return acao("passar-posse", `posse:${a.sha}`, 0, { ...campos, lock_id: a.lock, verbo: "passar-posse" });
+  }
+
+  // Herdeira dona: se inscreve, relê o CI e confirma.
+  if (temCi && entrada.inscrita !== true)
+    return acao("inscrever-na-proposta", `inscricao:${a.sha}`, 0, { ...campos, ferramenta: "subscribe_pr_activity", proposta: entrada.proposta?.numero ?? null, depois: "confirmar-passagem" });
+  return acao("confirmar-passagem", `confirmar:${a.sha}`, 0, {
     ...campos,
-    texto: textoDaProximaSessao({ ciclo, fase: fase.id, repo, sessao: entrada.sessaoMaestra ?? null, peloCiclo: cicloCobre }),
+    epocaNova: p.posse.epoca,
+    ci: entrada.ci ?? null,
+    arvoreDaAnterior: p.arvoreDaAnterior?.caminho ?? null,
+    arvoreSuja: Boolean(p.arvoreDaAnterior?.suja),
   });
+}
+
+/**
+ * O último passo da ordem (D-VEGA37-19): a herdeira, dona, desmonta a árvore
+ * da anterior depois da confirmação, só com a anterior arquivada
+ * (`entrada.anterior.estado`), a árvore achada e limpa. Anterior viva ⇒ nada
+ * (a pasta fica para a limpeza do servidor); árvore suja já registrada na
+ * confirmação ⇒ nada (o operador decide); suja depois dela ⇒ a pergunta.
+ */
+function regraDesmonte(ctx) {
+  const { acao, passagem: p, entrada } = ctx;
+  const c = p.ultima;
+  if (c?.tipo !== "confirmada" || p.posse?.estado !== "dona") return null;
+  const arvore = p.arvoreDaAnterior;
+  if (!arvore?.caminho || c.arvoreSuja) return null;
+  if (estadoDoLado(ctx, entrada.anterior) !== "ARCHIVED") return null;
+  const campos = { fase: c.fase, passagem: c.confirma ?? null, caminho: arvore.caminho, nome: arvore.nome };
+  if (arvore.suja) return acao("perguntar", `desmontar:${c.sha}`, 0, { ...campos, motivo: "arvore-da-anterior-suja", detalhe: arvore.motivo ?? null });
+  return acao("desmontar-anterior", `desmontar:${c.sha}`, 0, { ...campos, anterior: entrada.anterior.sessao ?? null });
+}
+
+/**
+ * Fronteira de fase depois do encerramento (VEGA-37 T16): a fase anterior
+ * encerrada, a seguinte ainda sem autorização e nenhuma passagem confirmada
+ * desde o encerramento ⇒ `passar`, com a nota no molde. É a anterior que
+ * passa; a herdeira, que confirma, autoriza a fase seguinte no seu `proximo`.
+ * Vale também depois de `retomar-da-passagem`: a nova tentativa é outra nota.
+ * Só vale sobre o encerramento com `Conducao-Depois: passar` (`passarDepoisDe`).
+ *
+ * Lê: `fase`, `autorizadas`, `plano`, `iPrimeira`, `encerradas`, `passagem`.
+ */
+export function regraPassarNaFronteira(ctx) {
+  const { acao, fase, autorizadas, plano, iPrimeira, encerradas, passagem: p } = ctx;
+  if (!fase || autorizadas.has(fase.id) || !p) return null;
+  const iFase = plano.fases.indexOf(fase);
+  const anterior = iFase > iPrimeira ? plano.fases[iFase - 1] : null;
+  // Só o encerramento gravado com `Conducao-Depois: passar` pede a passagem: a marca antiga segue lida como antes.
+  if (!anterior || !encerradas.has(anterior.id) || !p.passarDepoisDe?.has(anterior.id) || p.confirmadas?.has(anterior.id)) return null;
+  const falhas = p.falhas?.get(anterior.id) ?? 0;
+  return acao("passar", `passar:${anterior.id}`, falhas, { fase: anterior.id, faseSeguinte: fase.id, molde: "references/nota-de-passagem.md", tentativa: falhas + 1 });
+}
+
+/**
+ * Nome da condutora pela fase (D-VEGA37-2, D-VEGA37-18): `<ciclo> · F<n>`, e
+ * a herdeira que entra no meio da mesma fase leva o ordinal, `· 2`, `· 3`.
+ */
+export function nomeDaCondutora(ciclo, fase, ordinal = 1) {
+  return ordinal > 1 ? `${ciclo} · ${fase} · ${ordinal}` : `${ciclo} · ${fase}`;
 }
 
 /**
@@ -525,6 +760,8 @@ export function regraAutorizarFase(ctx) {
       tasksMudadas: [],
       replanos: [],
       aviso: `${fase.id} autorizada pelo sim do ciclo de ${autorizacaoDoCiclo.sha.slice(0, 8)} (ruling de 27/10/2026)`,
+      // VEGA-37 T19: o caso já coberto passa a ficar registrado (`consentimento.mjs`).
+      consentimento: pedidoDeCaso({ caso: CASOS.herancaEntreFases, fase: fase.id, origem: autorizacaoDoCiclo.sha }),
     });
   const mudaram = planoHead ? tasksQueMudaramDeClasse(plano, planoHead) : [];
   return acao("perguntar", fase.id, 0, {
@@ -567,7 +804,10 @@ export function regraReplano(ctx) {
   const tasksMudadas = diferencaDoPlano(plano, planoHead);
   if (!tasksMudadas.length) return null;
   const pergunta = perguntaDoPlano(ctx, fase.id, fase.tasks, tasksMudadas);
-  const mudou = mudancasQuePerguntam(plano, planoHead);
+  // Task sensível nova, na ordem do plano e dentro da fase autorizada, não pergunta (VEGA-37 T19).
+  const todasMudancas = mudancasQuePerguntam(plano, planoHead);
+  const aditivas = todasMudancas.filter((m) => sensivelAditivaNaOrdem({ de: plano, para: planoHead, faseId: fase.id, mudanca: m }));
+  const mudou = todasMudancas.filter((m) => !aditivas.includes(m));
   const rulings = daFase && Array.isArray(replanos) && replanos.length
     ? replanos.map((c) => rulingDoReplano(c.subject, ciclo, reconhecer))
     : [];
@@ -587,6 +827,19 @@ export function regraReplano(ctx) {
       aviso: `autorização de ${fase.id} herdada pelo re-plano ${replanos.map((c) => c.sha.slice(0, 8)).join(", ")} (${
         porRuling ? [...new Set(rulings)].join(", ") : `sim do ciclo de ${autorizacaoDoCiclo.sha.slice(0, 8)}`
       })`,
+      // VEGA-37 T19: um registro por caso — o re-plano sem mudança de classe e cada task sensível aditiva.
+      consentimento: pedidoDeCaso({
+        caso: CASOS.replanoSemMudancaDeClasse,
+        fase: fase.id,
+        origem: ultimaAutorizacao.herdada ?? ultimaAutorizacao.sha,
+      }),
+      ...(aditivas.length
+        ? {
+            consentimentos: aditivas.map((m) =>
+              pedidoDeCaso({ caso: CASOS.sensivelAditivaNaOrdem, fase: fase.id, origem: ultimaAutorizacao.herdada ?? ultimaAutorizacao.sha, task: m.task }),
+            ),
+          }
+        : {}),
     });
   return pergunta;
 }
@@ -786,10 +1039,11 @@ export function regraVigia(ctx) {
  * condutora executa a task na worktree do ciclo, roda a Verificação e
  * registra com `--condutora` (`--maestra` aceito). Vem antes do `abrir`: é
  * ação curta de quem conduz, e as filhas abrem no turno seguinte.
- * `simParaPublicar`: o sim da fase não cobre a publicação (F4.17) — antes de
- * cada verbo de publicação, o sim do operador para esta task, num turno dele.
+ * `simParaPublicar`: o sim da fase não cobre a publicação (F4.17) — antes da
+ * primeira publicação do ciclo, o sim do operador, num turno dele; as seguintes
+ * do mesmo ciclo seguem cobertas pelo caso `publicacao-do-ciclo` (D-VEGA37-52).
  *
- * Lê: `daCondutora`, `cobertaPelaFase`, `aprovacoes`.
+ * Lê: `daCondutora`, `cobertaPelaFase`, `aprovacoes`, `consentimentos`.
  */
 export function regraFazerCondutora(ctx) {
   const { ciclo, head, acao, nonce, fase, daCondutora, cobertaPelaFase, aprovacoes } = ctx;
@@ -810,7 +1064,7 @@ export function regraFazerCondutora(ctx) {
     task: t.id,
     posMerge: t.posMerge,
     publicacao: t.publicacao,
-    simParaPublicar: t.publicacao.length > 0,
+    simParaPublicar: pedeSimParaPublicar(ctx, t),
   });
 }
 
@@ -855,93 +1109,19 @@ export function regraSemSaida(ctx) {
   });
 }
 
-// ── nível da maestra ────────────────────────────────────────────────────────
+// ── fechamento do ciclo (resto do nível da maestra) ─────────────────────────
 //
-// `proximo --nivel maestra`: a maestra não abre neta; cria uma condutora por
-// fase e a sessão de fechamento do ciclo. As `filhas` da entrada são as
-// condutoras que ela criou, cada uma com a `fase` (`ciclo` para a sessão de
-// fechamento). Contexto (`contextoDaMaestra`, conducao.mjs): `ciclo`, `head`,
-// `planoBlob`, `acao`, `nonce`, `repo`, `plano` (o do HEAD), `encerradas`,
-// `autorizadas`, `cicloAutorizado`, `entrada`, `condutoras` (estado e
-// `statusBucket` normalizados), `agora`, `silencioCondutoraCaidaMin`, `epoch`,
-// `textoDaProximaSessao`, `textoDoFechamento`. O prefixo
-// `maestra…` as separa das `regra…`, que são a ordem do laço da condutora.
+// O nível da maestra (`proximo --nivel maestra`) saiu na VEGA-37 T8: a
+// condutora que fecha a fase cria a seguinte (`regraEncerrarSessao`), e desde
+// a T10 a da última fase cria a de fechamento (`criar` do `fechar-ciclo`, em
+// `regraFecharCiclo`). Fica `maestraCriarFechamento`, sem chamador no
+// `proximo`, só porque o contrato escrito (`contrato-atual.md`, da T25) ainda
+// a descreve; sai com ele. Contexto:
+// `ciclo`, `repo`, `acao`, `plano`, `encerradas`, `autorizadas`,
+// `condutoras` (as sessões criadas, cada uma com `fase` e `estado`),
+// `entrada`, `textoDoFechamento`.
 
 const viva = (c) => c.estado !== "ARCHIVED";
-
-/**
- * A condutora cuja fase já tem `Conducao-Encerrada` (ou de qualquer fase, com
- * o ciclo encerrado) é arquivada antes de toda outra ação: libera a vaga para
- * a condutora seguinte. A sessão de fechamento (`fase: ciclo`) não entra. O
- * nonce não depende do HEAD; `arquivamentos` como na rede das filhas.
- *
- * Lê: `condutoras`, `encerradas`.
- */
-export function maestraArquivarCondutora(ctx) {
-  const { ciclo, head, planoBlob, acao, nonce, condutoras, encerradas } = ctx;
-  for (const c of condutoras) {
-    if (!viva(c) || !c.sessao || c.fase === "ciclo") continue;
-    if (!encerradas.has(c.fase) && !encerradas.has("ciclo")) continue;
-    const n = nonce(ciclo, `arquivar:${c.sessao}`, c.fase ?? "", "");
-    const campos = { sessao: c.sessao, fase: c.fase ?? null, aviso: `${c.fase} encerrada` };
-    const vezes = (Array.isArray(c.arquivamentos) ? c.arquivamentos : []).filter((x) => x === n).length;
-    if (vezes >= 2) return acao("perguntar", `arquivar:${c.sessao}`, 0, { ...campos, motivo: "falha-de-arquivamento", nonceArquivar: n, vezes });
-    return { acao: "arquivar", nonce: n, ciclo, head, plano: planoBlob, ...campos };
-  }
-  return null;
-}
-
-/**
- * Vigia da condutora (T39, no molde da `regraVigia` da T18): condutora viva
- * nunca deixa a maestra em `esperar condutora-viva` sem teto.
- *   - `statusBucket` `BLOCKED` (ou estado `REQUIRES_ACTION`) ⇒ `perguntar
- *     condutora-caida` já, `situacao: bloqueada`: ninguém clica nela;
- *   - `fase` fora do plano do HEAD (a sessão de fechamento, `ciclo`, só
- *     conta antes de `Conducao-Encerrada: ciclo`) ⇒ a mesma pergunta,
- *     `situacao: fase-fora-do-plano`: nenhuma marca a encerraria, e a
- *     maestra esperaria por ela para sempre;
- *   - `statusBucket` (ou, sem ele, o estado) `FAILED` sem `cutucadaEm` ⇒ `cutucar condutora-falhou`: a maestra manda
- *     uma mensagem e grava `cutucadaEm` na condutora da entrada; ainda
- *     `FAILED` depois de `silencioCondutoraCaidaMin` desde o `cutucadaEm` ⇒
- *     a pergunta, `situacao: caida`. A condutora que volta sai do `FAILED`;
- *     se cai de novo, o `cutucadaEm` velho não conta (`cutucadaDestaQueda`).
- * Pergunta vem antes do `cutucar`, como na vigia das filhas.
- *
- * Lê: `plano`, `encerradas`, `condutoras`, `agora`, `silencioCondutoraCaidaMin`, `epoch`.
- */
-export function maestraVigiarCondutora(ctx) {
-  const { acao, plano, encerradas, condutoras, agora, silencioCondutoraCaidaMin, epoch } = ctx;
-  const fases = new Set(plano.fases.map((f) => f.id));
-  // `episodio` separa as quedas cutucadas da mesma condutora: nonce próprio para cada uma.
-  const perguntar = (c, situacao, detalhe, extra = {}, episodio = "") =>
-    acao("perguntar", `vigia:${c.sessao}:${situacao}${episodio}`, 0, { motivo: "condutora-caida", fase: c.fase ?? null, sessao: c.sessao ?? null, situacao, detalhe, ...extra });
-  let caida = null;
-  for (const c of condutoras) {
-    if (!viva(c)) continue;
-    if (c.statusBucket === "BLOCKED" || c.estado === "REQUIRES_ACTION")
-      return perguntar(c, "bloqueada", `a condutora de ${c.fase} está parada esperando um clique que ninguém dá; a fase não anda até alguém decidir o pedido dela.`);
-    if (c.fase === "ciclo" ? !encerradas.has("ciclo") : !fases.has(c.fase))
-      return perguntar(c, "fase-fora-do-plano", `a condutora ${c.sessao} conduz ${c.fase}, que não existe no plano de agora; nenhuma marca a encerraria, e a maestra esperaria por ela sem fim.`);
-    if ((c.statusBucket ?? c.estado) !== "FAILED") continue;
-    const cutucadaEm = cutucadaDestaQueda(c, epoch);
-    if (cutucadaEm === null) {
-      caida ??= c;
-      continue;
-    }
-    if (agora !== null && agora - cutucadaEm >= silencioCondutoraCaidaMin * 60)
-      return perguntar(c, "caida", `a condutora de ${c.fase} caiu, recebeu a mensagem e seguiu calada por ${silencioCondutoraCaidaMin} minutos; a fase está parada sem quem a conduza.`, {
-        cutucadaEm: c.cutucadaEm,
-        silencioMin: silencioCondutoraCaidaMin,
-      }, `:${cutucadaEm}`);
-  }
-  if (!caida) return null;
-  return acao("cutucar", `cutucar:${caida.sessao}`, 0, {
-    motivo: "condutora-falhou",
-    fase: caida.fase ?? null,
-    sessao: caida.sessao ?? null,
-    mensagem: `Sua sessão caiu antes de encerrar ${caida.fase}. Retome a condução do ponto em que parou, pelo proximo da fase.`,
-  });
-}
 
 /**
  * Depois de `Conducao-Encerrada: ciclo`, a sessão de fechamento do ciclo, uma
@@ -966,41 +1146,5 @@ export function maestraCriarFechamento(ctx) {
     ...campos,
     conduzidas,
     texto: textoDoFechamento({ ciclo, repo, sessao: anterior, conduzidas, exigirEncerramentos, anterior: "condutora anterior" }),
-  });
-}
-
-/**
- * A primeira fase do plano sem `Conducao-Encerrada` ganha condutora quando
- * nenhuma condutora vive — inclusive a primeira fase do ciclo, sem sessão
- * anterior a arquivar. Condutora viva ⇒ esperar: uma condutora por vez.
- *
- * Lê: `plano`, `encerradas`, `autorizadas`, `cicloAutorizado`, `condutoras`.
- */
-export function maestraCriarCondutora(ctx) {
-  const { ciclo, repo, acao, plano, encerradas, autorizadas, cicloAutorizado, condutoras, textoDaProximaSessao } = ctx;
-  const fase = plano.fases.find((f) => !encerradas.has(f.id));
-  if (!fase) return acao("perguntar", "ciclo", 0, { motivo: "sem-saida", fase: "ciclo", pendentes: [] });
-  const aberta = condutoras.find((c) => viva(c) && c.fase !== "ciclo");
-  if (aberta) return acao("esperar", `condutora:${aberta.fase}`, 0, { motivo: "condutora-viva", fase: aberta.fase ?? null, sessao: aberta.sessao ?? null });
-  const daFase = condutoras.filter((c) => c.fase === fase.id);
-  const i = plano.fases.indexOf(fase);
-  const daAnterior = i > 0 ? condutoras.filter((c) => c.fase === plano.fases[i - 1].id) : [];
-  const anterior = (daFase.at(-1) ?? daAnterior.at(-1))?.sessao ?? null;
-  // Condutora que caiu sem encerrar a fase é recriada com tentativa nova: o
-  // nonce muda, e a maestra que desduplica por nonce não a confunde com a morta.
-  return acao("criar-condutora", `condutora:${fase.id}`, daFase.length, {
-    fase: fase.id,
-    modelo: fase.modelo,
-    tentativa: daFase.length + 1,
-    texto: textoDaProximaSessao({
-      ciclo,
-      fase: fase.id,
-      repo,
-      sessao: anterior,
-      peloCiclo: cicloAutorizado,
-      anterior: "condutora anterior",
-      primeira: i === 0 && !daFase.length,
-      autorizada: autorizadas.has(fase.id),
-    }),
   });
 }

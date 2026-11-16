@@ -48,28 +48,41 @@ número mora **só no item, no fecho e na chave escondida** — nunca no cabeça
    pedir ("por quê a 2?").
 4. **Fecho acionável** — a resposta esperada é uma sequência curta (`1-b / 2-a`), não prosa.
    Resposta com ou sem hífen entre número e letra vale o mesmo (`1-b` = `1b`).
-5. **Ordem = gravidade; numeração corrida da sessão, com a chave tipada escondida.** Decisão que
+5. **Ordem = gravidade; numeração do ciclo (ou da sessão, fora dele), com a chave tipada escondida.** Decisão que
    trava produção, segurança, dado pessoal ou obrigação legal vem **primeiro dentro do bloco**, e
    o título carrega o peso em linguagem de consequência ("isso trava a entrega da semana", não
    "SEV-HIGH"). Quando a origem agrupa por domínio (um revisor que agrupa os achados em produto ·
    segurança · UI-UX), o **domínio vira tag inline no título** e a numeração segue corrida — nunca
    reinicia por domínio, nunca vira sub-lista aninhada.
-   **Visível: um inteiro corrido por sessão, sem prefixo, em todo tipo de sessão** — maestra,
-   condutora, filha de task, hotfix, shaping, planejamento, sessão avulsa. Cada decisão continua a
-   numeração da sessão, não a do bloco: o segundo bloco abre no inteiro seguinte ao último do
-   primeiro (bloco 1 com 2 decisões ⇒ bloco 2 abre em 3), e o fecho cita esses números
-   (`Diz 3-4 e eu toco.`). Assim "a 3" nunca é ambíguo numa sessão. Limpar a sessão zera: a sessão
-   seguinte abre em `1`. **Compactação não zera:** depois dela o agente recupera o último número da
-   própria sessão — pelo registro de decisões que o projeto declara, que grava sessão e item, ou
-   pelo próprio histórico — e continua dele, nunca reabre em `1` por cima de decisão já levantada.
+   **Visível: um inteiro sem prefixo.** De onde ele vem depende de a sessão trabalhar num ciclo:
+   - **Sessão de ciclo** (planejamento, condução em qualquer nível, fechamento), **em projeto que
+     declara contador por ciclo:** o número é do ciclo, reservado no contador **antes de escrever
+     o bloco**, um por item (a página do projeto nomeia o verbo). Só sobe, do planejamento ao
+     fechamento, e duas sessões do mesmo ciclo ao mesmo tempo nunca recebem o mesmo número. Buraco
+     é aceito: número reservado de bloco que ninguém respondeu fica queimado, e o seguinte não o
+     reaproveita. Limpar ou compactar a sessão não muda nada, porque o número mora no contador.
+     Contador fora do ar ou ausente ⇒ o bloco **não** sai com número por sessão no lugar: o agente
+     diz ao operador que o número do ciclo não saiu. Ciclo que numerava por sessão antes de o
+     contador existir recomeça acima do que já usou (a página do projeto diz de quanto).
+   - **Fora de ciclo** (shaping, hotfix, docs, sessão avulsa) **ou projeto sem contador por ciclo**
+     (registro de decisões em arquivo no git, por exemplo): o inteiro corrido da sessão. Cada
+     decisão continua a numeração da sessão, não a do bloco: o segundo bloco abre no inteiro
+     seguinte ao último do primeiro (bloco 1 com 2 decisões ⇒ bloco 2 abre em 3). Limpar a sessão
+     zera: a sessão seguinte abre em `1`. **Compactação não zera:** depois dela o agente recupera o
+     último número da própria sessão — pelo registro de decisões que o projeto declara, que grava
+     sessão e item, ou pelo próprio histórico — e continua dele, nunca reabre em `1` por cima de
+     decisão já levantada.
+   Nos dois casos o fecho cita os números (`Diz 3-4 e eu toco.`), e "a 3" nunca é ambíguo — no
+   ciclo inteiro, ou na sessão.
    **Escondida: a chave tipada, num comentário HTML no fim do bloco**, uma linha por item:
    `<!-- decisao <k> = <ciclo>/<fase>/<task>/<código> · origem <papel> -->`. As quatro posições são
    fixas, e a que não existe leva `-`:
    - `<ciclo>` — id do ciclo (`ABC-12`); fora de ciclo, o slug do ramo sem a modalidade nem a data
      (`exportar-relatorio` de `hotfix/exportar-relatorio-20260115`); sessão avulsa sem ramo, `-`.
    - `<fase>` · `<task>` — `F4` · `T29`, ou `-` quando a sessão não está numa fase ou task.
-   - `<código>` — o inteiro que a decisão tem **na sessão que a levantou**. Quando quem emite é
-     quem levantou, é o próprio `<k>`; no repasse, é o número da filha (parágrafo seguinte).
+   - `<código>` — o inteiro que a decisão recebeu **de quem a levantou**. Quando quem emite é
+     quem levantou, ou no ciclo com contador, é o próprio `<k>`; no repasse por sessão, é o número
+     da filha (parágrafo seguinte).
    - `<papel>` — o tipo da sessão que levantou, de um vocabulário fechado: `maestra` · `condutora` ·
      `filha` · `neta` · `hotfix` · `docs` · `shaping` · `planejamento` · `fechamento` · `avulsa`.
      Papel novo entra aqui antes de ser usado.
@@ -91,11 +104,13 @@ número mora **só no item, no fecho e na chave escondida** — nunca no cabeça
    > Diz 3 e eu toco.
    > `<!-- decisao 3 = ABC-12/F4/T29/3 · origem condutora -->`
 
-   **Repasse de filha.** Decisão que uma sessão filha levanta sobe pela sessão mãe com o **próximo
-   inteiro da sessão da mãe**; o código que a filha usou vai só na chave escondida. A maestra que
-   já levantou 44 decisões e recebe a decisão 3 da condutora acima a repassa como `45`, fecha com
-   `Diz 45 e eu toco.` e escreve `<!-- decisao 45 = ABC-12/F4/T29/3 · origem condutora -->`. A
-   resposta do operador (`45-a`) volta à filha pela mãe, que a traduz para o código dela.
+   **Repasse de filha.** No ciclo com contador, o número da filha já é único no ciclo: a mãe repassa
+   a decisão **com o mesmo número**, e `<k>` e `<código>` coincidem. Fora disso, a decisão que uma
+   sessão filha levanta sobe pela sessão mãe com o **próximo inteiro da sessão da mãe**; o código
+   que a filha usou vai só na chave escondida. A maestra que já levantou 44 decisões e recebe a
+   decisão 3 da condutora acima a repassa como `45`, fecha com `Diz 45 e eu toco.` e escreve
+   `<!-- decisao 45 = ABC-12/F4/T29/3 · origem condutora -->`. A resposta do operador (`45-a`)
+   volta à filha pela mãe, que a traduz para o código dela.
 6. **O fato técnico bruto é persistido ANTES de simplificar.** A tradução é camada de
    apresentação, nunca o único registro: o achado cru (severidade, regra de acesso, coluna, função,
    saída de comando) vive no artefato da origem — o relatório do revisor, a revisão do esboço, a

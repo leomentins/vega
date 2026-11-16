@@ -22,6 +22,9 @@ export const RE = {
   recusada: /^Conducao: (T\d{1,3}) publicacao recusada$/,
   marcador: /^Conducao: abrir (T\d{1,3}) tentativa (\d+) nonce (\S+)$/,
   encerrada: /^Conducao: (F\d{1,2}|ciclo) sessao encerrada$/,
+  passagem: /^Conducao: (F\d{1,2}) em passagem$/,
+  confirmada: /^Conducao: (F\d{1,2}) passagem confirmada$/,
+  desistida: /^Conducao: (F\d{1,2}) passagem desistida$/,
 };
 
 /** Nonce de ação da maestra: 16 hex, a saída de `nonce()` em `conducao.mjs`. Global: use com `matchAll`. */
@@ -64,6 +67,9 @@ export function marcasDoLog(bruto) {
         herdada: tr["Conducao-Herdada"] ?? null,
         // `autorizar-ciclo`: o sim do operador vale para as fases seguintes (ruling de 27/10/2026).
         ciclo: tr["Conducao-Ciclo"] === "sim",
+        // Quem gravou a herança (`herdar-autorizacao`): `ciclo` | `replano`. No modelo de três papéis
+        // era a maestra que a gravava; a marca é a mesma, e a condutora a lê igual (VEGA-37 T11).
+        origem: tr["Conducao-Origem"] ?? null,
       });
     else if ((m = RE.conferida.exec(subject))) marcas.push({ tipo: "conferida", sha, task: m[1], trailers: tr });
     else if ((m = RE.falhou.exec(subject)))
@@ -72,9 +78,12 @@ export function marcasDoLog(bruto) {
         sha,
         task: m[1],
         tentativa: Number(m[2]),
-        // Não conta no teto: queda coberta por reinício (T12) ou falha de ambiente (P7 do ATRM-51).
-        coberta: tr["coberta-por-reinicio"] === "sim" || tr["Conducao-Falha-Ambiente"] === "sim",
+        // Não conta no teto: queda coberta por reinício (T12), falha de ambiente (P7 do ATRM-51)
+        // ou tentativa encerrada por pergunta da filha respondida com re-plano (ATRM-54 F4).
+        coberta:
+          tr["coberta-por-reinicio"] === "sim" || tr["Conducao-Falha-Ambiente"] === "sim" || tr["Conducao-Falha-Pergunta"] === "sim",
         ambiente: tr["Conducao-Falha-Ambiente"] === "sim",
+        pergunta: tr["Conducao-Falha-Pergunta"] === "sim",
         trailers: tr,
       });
     else if ((m = RE.revertida.exec(subject))) marcas.push({ tipo: "revertida", sha, task: m[1], tentativa: Number(m[2]), trailers: tr });
@@ -86,7 +95,15 @@ export function marcasDoLog(bruto) {
     else if ((m = RE.recusada.exec(subject))) marcas.push({ tipo: "recusada", sha, task: m[1] });
     else if ((m = RE.marcador.exec(subject))) marcas.push({ tipo: "marcador", sha, task: m[1], tentativa: Number(m[2]), nonce: m[3] });
     else if ((m = RE.encerrada.exec(subject)) && tr["Conducao-Encerrada"] === m[1])
-      marcas.push({ tipo: "encerrada", sha, fase: m[1], nonce: tr["Conducao-Nonce"] ?? null });
+      marcas.push({ tipo: "encerrada", sha, fase: m[1], nonce: tr["Conducao-Nonce"] ?? null, depois: tr["Conducao-Depois"] ?? null });
+    // Passagem (VEGA-37 T15): só vale com o trailer `Conducao-Passagem` igual à fase do subject.
+    else if ((m = RE.passagem.exec(subject)) && tr["Conducao-Passagem"] === m[1])
+      marcas.push({ tipo: "passagem", sha, fase: m[1], nota: tr["Conducao-Nota"] ?? null, epoca: tr["Conducao-Epoca"] ?? null, lock: tr["Conducao-Lock"] ?? null, ponta: tr["Conducao-Ponta"] ?? null, ramo: tr["Conducao-Ramo"] ?? null });
+    // Confirmada (VEGA-37 T16): o sha da passagem que confirma, a época nova e a árvore da anterior que ficou suja.
+    else if ((m = RE.confirmada.exec(subject)) && tr["Conducao-Passagem"] === m[1])
+      marcas.push({ tipo: "confirmada", sha, fase: m[1], confirma: tr["Conducao-Confirma"] ?? null, epoca: tr["Conducao-Epoca"] ?? null, arvoreSuja: tr["Conducao-Arvore-Suja"] ?? null });
+    else if ((m = RE.desistida.exec(subject)) && tr["Conducao-Passagem"] === m[1])
+      marcas.push({ tipo: "desistida", sha, fase: m[1], desistida: tr["Conducao-Desistida"] ?? null });
   }
   return marcas;
 }

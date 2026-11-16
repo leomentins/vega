@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { BOTOES } from "../botoes.mjs";
-import { decidirCi, gatilhoDePush } from "../conducao.mjs";
+import { comPassosDoRamo, decidirCi, gatilhoDePush } from "../conducao.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.resolve(AQUI, "..", "conducao.mjs");
@@ -155,4 +155,52 @@ test("conferir-workflows sai 0 sobre um repositorio com ci.yml de gatilho so mai
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// ── os passos do ramo no fechamento (VEGA-37 T9) ────────────────────────────
+
+const HEAD = "f00dfeed00112233445566778899aabbccddeeff";
+const esperarCi = { acao: "esperar", nonce: "x", ciclo: "TESTE-9", head: HEAD, plano: "b", motivo: "ci-pendente", fase: "F1", faseSeguinte: "F2", task: "T3", ci: null };
+const ramo = (noOrigin) => ({ nome: "ciclo-TESTE-9", noOrigin });
+
+test("o fechamento emite empurrar-ramo, inscrever-na-proposta e o ci, nesta ordem", () => {
+  const a = comPassosDoRamo(esperarCi, { ramo: ramo(null), temCi: true, entrada: { proposta: { numero: 77, state: "OPEN" } } });
+  assert.equal(a.acao, "empurrar-ramo");
+  assert.equal(a.sha, HEAD);
+  assert.equal(a.ramo, "ciclo-TESTE-9");
+  assert.equal(a.depois, "esperar");
+  assert.match(a.nonce, /^[0-9a-f]{16}$/);
+  const b = comPassosDoRamo(esperarCi, { ramo: ramo(HEAD), temCi: true, entrada: { proposta: { numero: 77, state: "OPEN" } } });
+  assert.equal(b.acao, "inscrever-na-proposta");
+  assert.equal(b.ferramenta, "subscribe_pr_activity");
+  assert.equal(b.proposta, 77);
+  assert.equal(b.depois, "ci");
+  const c = comPassosDoRamo(esperarCi, { ramo: ramo(HEAD), temCi: true, entrada: { inscrita: true } });
+  assert.equal(c.acao, "esperar");
+  assert.equal(c.motivo, "ci-pendente");
+  assert.equal(c.passo, "ci");
+  // Ponta antiga no origin: o HEAD ainda não subiu, volta ao primeiro passo.
+  assert.equal(comPassosDoRamo(esperarCi, { ramo: ramo("0".repeat(40)), temCi: true, entrada: { inscrita: true } }).acao, "empurrar-ramo");
+});
+
+test("CI com veredito no HEAD, ação fora do fechamento ou árvore sem origin passam como vieram", () => {
+  const encerrar = { ...esperarCi, acao: "encerrar-sessao", motivo: undefined };
+  assert.equal(comPassosDoRamo(encerrar, { ramo: ramo(null), temCi: true }), encerrar);
+  const abrir = { acao: "abrir", ciclo: "TESTE-9", head: HEAD, fase: "F1" };
+  assert.equal(comPassosDoRamo(abrir, { ramo: ramo(null), temCi: true }), abrir);
+  assert.equal(comPassosDoRamo(esperarCi, { ramo: null, temCi: true }), esperarCi);
+});
+
+test("projeto sem CI empurra com os pulos registrados e depois encerra sem inscrição", () => {
+  const encerrar = { ...esperarCi, acao: "encerrar-sessao", motivo: undefined };
+  const a = comPassosDoRamo(encerrar, { ramo: ramo(null), temCi: false });
+  assert.equal(a.acao, "empurrar-ramo");
+  assert.deepEqual(a.pulos, [
+    { passo: "inscrever-na-proposta", motivo: "projeto-sem-proposta" },
+    { passo: "ci", motivo: "projeto-sem-ci" },
+  ]);
+  assert.equal(a.motivo, "pulou:inscrever-na-proposta+ci");
+  assert.equal(comPassosDoRamo(encerrar, { ramo: ramo(HEAD), temCi: false }), encerrar);
+  const fecharCiclo = { acao: "fechar-ciclo", ciclo: "TESTE-9", head: HEAD, fase: "ciclo" };
+  assert.equal(comPassosDoRamo(fecharCiclo, { ramo: ramo(null), temCi: false }).acao, "empurrar-ramo");
 });

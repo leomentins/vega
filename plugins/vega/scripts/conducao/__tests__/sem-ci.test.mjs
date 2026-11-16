@@ -4,7 +4,10 @@
  * Um ciclo de mentira cujo adaptador declara `ci: false` fecha a fase
  * (`encerrar-sessao`) e o ciclo (`fechar-ciclo`) pela Verificação verde da
  * última tarefa, sem `esperar` veredito de CI; o mesmo ciclo com o adaptador
- * default (`ci` ausente ⇒ `true`) segue esperando o CI.
+ * default (`ci` ausente ⇒ `true`) segue esperando o CI. Antes de fechar, o
+ * projeto sem CI empurra o ramo (`empurrar-ramo`, VEGA-37 T9) com a inscrição
+ * e a leitura de CI puladas e registradas; com CI, o preparo empurra o ramo e
+ * passa `inscrita: true`, e o que o teste prova é o estado do CI depois disso.
  *
  * O `abrir` mede o "sem clique" pelo modo da sessão que cria a filha, contra
  * `sessao.modosSemClique` do adaptador: com a declaração do projeto de teste (só
@@ -149,6 +152,19 @@ function f1Conferida(t, decl) {
 
 test("sem CI: a fase fecha pela Verificacao da ultima tarefa, sem esperar run nem veredito", (t) => {
   const a = f1Conferida(t, declaracao({ ci: false }));
+  // Primeiro passo do fechamento (VEGA-37 T9): o ramo sobe, sem proposta nem CI para esperar.
+  const empurrar = (fase) => {
+    const p = a.proximo();
+    assert.equal(p.acao, "empurrar-ramo", JSON.stringify(p));
+    assert.equal(p.fase, fase);
+    assert.deepEqual(p.pulos.map((x) => x.passo), ["inscrever-na-proposta", "ci"]);
+    const r = a.cli("empurrar-ramo", "--nonce", p.nonce);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.saida.acao, "ramo-empurrado");
+    assert.deepEqual(r.saida.pulos.map((x) => x.passo), ["posse", "inscrever-na-proposta", "ci"]);
+    assert.equal(a.noOrigin("refs/heads/ciclo-teste"), a.head());
+  };
+  empurrar("F1");
   // Nenhum veredito de CI na entrada: com CI seria `esperar ci-pendente`.
   // Sem CI o veredito é o da Verificação: nem um CI vermelho na entrada o muda.
   for (const entrada of [undefined, { ci: null }, { sessaoMaestra: "session_maestra_f1" }, { ci: { sha: a.head(), veredito: "vermelho", run: 9 } }]) {
@@ -164,6 +180,7 @@ test("sem CI: a fase fecha pela Verificacao da ultima tarefa, sem esperar run ne
   // A F2 inteira conferida: o ciclo também fecha sem CI.
   a.autorizar("F2");
   for (const id of ["T3", "T4"]) a.conferida(id);
+  empurrar("ciclo");
   const f = a.proximo({ sessaoMaestra: "session_maestra_f2" });
   assert.equal(f.acao, "fechar-ciclo", JSON.stringify(f));
   assert.deepEqual(f.conduzidas, ["F1", "F2"]);
@@ -172,11 +189,13 @@ test("sem CI: a fase fecha pela Verificacao da ultima tarefa, sem esperar run ne
 
 test("com CI (o default do adaptador): a mesma fase espera o veredito do CI no HEAD", (t) => {
   const a = f1Conferida(t, declaracao({ ci: undefined }));
-  const p = a.proximo();
+  // Os passos do ramo (VEGA-37 T9) já dados: o ramo no origin no HEAD e a inscrição na proposta.
+  a.g("push", "-q", "origin", "HEAD:refs/heads/ciclo-teste");
+  const p = a.proximo({ inscrita: true });
   assert.equal(p.acao, "esperar");
   assert.equal(p.motivo, "ci-pendente");
-  assert.equal(a.proximo({ ci: { sha: a.head(), veredito: "vermelho", run: 7 } }).motivo, "ci-vermelho");
-  assert.equal(a.proximo({ ci: { sha: a.head(), veredito: "verde", run: 8 } }).acao, "encerrar-sessao");
+  assert.equal(a.proximo({ inscrita: true, ci: { sha: a.head(), veredito: "vermelho", run: 7 } }).motivo, "ci-vermelho");
+  assert.equal(a.proximo({ inscrita: true, ci: { sha: a.head(), veredito: "verde", run: 8 } }).acao, "encerrar-sessao");
 });
 
 test("sem CI: o fechamento ainda nao conferido nao fecha a fase", (t) => {

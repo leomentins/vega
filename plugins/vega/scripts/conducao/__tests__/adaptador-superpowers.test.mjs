@@ -213,6 +213,96 @@ describe("tarefa sem anotação", () => {
   });
 });
 
+/** Plano de duas fases num arquivo (D-VEGA37-54): `## Fase F<n>` com modelo e tier próprios. */
+function tarefa(n, titulo, marcas = "") {
+  return [
+    `### Tarefa ${n}: ${titulo}`,
+    "",
+    "**Estação:** servidor",
+    "**Publicação:** não",
+    "**Sensível:** não",
+    ...(marcas ? [`**Marcas:** ${marcas}`] : []),
+    "**Verificação:** `npm test`",
+    `**Commit:** EXEMPLO/T${n} — ${titulo}`,
+    "",
+    "**Arquivos:**",
+    `- Modificar: \`src/t${n}.mjs\``,
+    "",
+    "- [ ] **Passo 1: fazer**",
+    "",
+  ].join("\n");
+}
+const DUAS_FASES = [
+  "# Passagem: plano",
+  "",
+  "**Modelo:** haiku",
+  "",
+  "**Largura do ciclo:** 1",
+  "",
+  "## Fase F1 — a saudação",
+  "",
+  "**Modelo:** sonnet",
+  "**Tier:** parecer",
+  "",
+  tarefa(1, "saudação"),
+  tarefa(2, "fechamento de F1", "fechamento-de-fase"),
+  "## Fase F2",
+  "",
+  "**Tier:** critico",
+  "",
+  tarefa(3, "despedida"),
+  tarefa(4, "fechamento de F2", "fechamento-de-fase"),
+].join("\n");
+
+describe("plano de várias fases", () => {
+  test("plano de duas fases num arquivo lê as duas fases", () => {
+    const lido = lerPlanoPublico(DUAS_FASES);
+    assert.deepEqual(lido.declaracoes.invalidas, []);
+    assert.deepEqual(lido.fases, [
+      { id: "F1", model: "sonnet", tier: "parecer" },
+      // Sem `**Modelo:**` sob o cabeçalho, o do topo.
+      { id: "F2", model: "haiku", tier: "critico" },
+    ]);
+    assert.deepEqual(lido.tasks.map((t) => [t.id, t.phase]), [
+      ["T1", "F1"],
+      ["T2", "F1"],
+      ["T3", "F2"],
+      ["T4", "F2"],
+    ]);
+    // O núcleo lê as duas fases, cada fechamento na sua.
+    const plano = lerPlano(DUAS_FASES, CODIGO);
+    assert.deepEqual(plano.tasks.map((x) => [x.id, x.fase, x.classe]), [
+      ["T1", "F1", "comum"],
+      ["T2", "F1", "fechamento"],
+      ["T3", "F2", "comum"],
+      ["T4", "F2", "fechamento"],
+    ]);
+    // O brief da tarefa acaba no cabeçalho da fase seguinte.
+    const dir = tmp("superpowers-fases-");
+    const arquivo = path.join(dir, "EXEMPLO-2-passagem.md");
+    writeFileSync(arquivo, DUAS_FASES);
+    const brief = execFileSync("node", [ADAPTADOR, "brief", "--plano", arquivo, "T2", "--nonce", "n1", "--ref", "refs/conducao/EXEMPLO-2-passagem/T2/1"], { encoding: "utf8" });
+    assert.match(brief, /### Tarefa 2: fechamento de F1/);
+    assert.doesNotMatch(brief, /## Fase F2/);
+  });
+
+  test("fase sem fechamento num plano de várias fases vai a perguntar", () => {
+    const campos = (texto) => lerPlanoPublico(texto).declaracoes.invalidas.map((d) => `${d.campo}: ${d.valor}`);
+    const semFechamento = DUAS_FASES.replace("**Marcas:** fechamento-de-fase\n**Verificação:** `npm test`\n**Commit:** EXEMPLO/T2", "**Verificação:** `npm test`\n**Commit:** EXEMPLO/T2");
+    assert.deepEqual(campos(semFechamento), ["Marcas: nenhuma tarefa de F1 com fechamento-de-fase — a perguntar"]);
+    // Fase repetida, fora da forma, `**Fase:**` no topo e heading de fase fora do formato.
+    assert.match(campos(DUAS_FASES.replace("## Fase F2", "## Fase F1")).join("\n"), /Fase: F1 repetida/);
+    assert.match(campos(DUAS_FASES.replace("## Fase F2", "## Fase dois")).join("\n"), /Fase: dois fora da forma F<n>/);
+    assert.match(campos(DUAS_FASES.replace("**Largura do ciclo:** 1", "**Largura do ciclo:** 1\n\n**Fase:** F1")).join("\n"), /Fase: \*\*Fase:\*\* F1 no topo junto com cabeçalho de fase/);
+    assert.match(campos(DUAS_FASES.replace("## Fase F2", "### Fase F2")).join("\n"), /Fase: linha \d+ fora do formato: ### Fase F2/);
+    // A numeração segue corrida: recomeçar em T1 na F2 deixa o buraco à vista.
+    assert.match(campos(DUAS_FASES.replace("### Tarefa 3:", "### Tarefa 1:")).join("\n"), /Tarefa: esperada T3, veio T1/);
+    // Tarefa antes do primeiro cabeçalho de fase não é de fase nenhuma.
+    const antes = DUAS_FASES.replace("## Fase F1 — a saudação", `${tarefa(1, "solta")}\n## Fase F1 — a saudação`).replace("### Tarefa 1: saudação", "### Tarefa 2: saudação").replace("### Tarefa 2: fechamento de F1", "### Tarefa 3: fechamento de F1").replace("### Tarefa 3: despedida", "### Tarefa 4: despedida").replace("### Tarefa 4: fechamento de F2", "### Tarefa 5: fechamento de F2");
+    assert.deepEqual(lerPlanoPublico(antes).declaracoes.invalidas, [{ campo: "Fase", valor: "tarefa antes do primeiro cabeçalho de fase — a perguntar", task: "T1" }]);
+  });
+});
+
 describe("brief da operária", () => {
   const arquivo = () => {
     const d = tmp("superpowers-brief-");

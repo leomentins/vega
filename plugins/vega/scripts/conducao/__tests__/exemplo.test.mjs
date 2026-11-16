@@ -8,7 +8,8 @@
  * busca a tentativa, trabalha e empurra) → `trazer` → `conferir` (a Verificação
  * embrulhada roda) → `registrar-conferencia`, até o `fechar-ciclo` e a marca de
  * encerramento do ciclo. A declaração não tem CI (`"ci": false`): a fase e o ciclo fecham
- * pela Verificação da última tarefa. Ao fim, o `auditar` confere o rastro.
+ * pela Verificação da última tarefa, depois de o ramo subir (`empurrar-ramo`, VEGA-37 T9,
+ * com a inscrição e o CI pulados). Ao fim, o `auditar` confere o rastro.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -99,9 +100,20 @@ test("o projeto de exemplo é conduzido de ponta a ponta: proximo, abrir, trazer
 
   const feitas = [];
   let encerrou = false;
+  let empurrou = false;
   for (let passo = 0; passo < 40; passo++) {
     const p = a.ok("proximo", "--entrada", JSON.stringify({ sessaoMaestra: "session_maestra_f1" }));
+    if (p.acao === "empurrar-ramo") {
+      // VEGA-37 T9: antes de fechar, a condutora empurra o ramo; sem proposta e sem CI, os dois pulos ficam registrados.
+      assert.deepEqual(p.pulos.map((x) => x.passo), ["inscrever-na-proposta", "ci"]);
+      const r = a.ok("empurrar-ramo", "--nonce", p.nonce);
+      assert.equal(r.acao, "ramo-empurrado", JSON.stringify(r));
+      assert.equal(r.sha, a.g("rev-parse", "HEAD"));
+      empurrou = true;
+      continue;
+    }
     if (p.acao === "fechar-ciclo") {
+      assert.ok(empurrou, "o ramo subiu antes do fechar-ciclo");
       // A última fase fecha com o ciclo: a marca é `Conducao-Encerrada: ciclo`.
       assert.deepEqual(p.conduzidas, ["F1"]);
       a.ok("encerrar-sessao", "--fase", "ciclo", "--nonce", p.nonce);

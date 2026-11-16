@@ -4,7 +4,11 @@
  * Antes de abrir filha, quem conduz confere o host em que a condução vai rodar:
  *
  *   plugin-carregado   a CLI do host (`sessao.cli`, argv sem shell, na raiz do projeto)
- *                      lista o plugin da condução ligado
+ *                      lista o plugin da condução ligado; ou, quando a lista não o
+ *                      prova (a sessão fora da raiz do projeto, VEGA-37 T50), o
+ *                      processo da sessão traz a raiz deste plugin no argv: o
+ *                      primeiro ancestral cujo executável é o binário de
+ *                      `sessao.cli[0]` no PATH, e nenhum acima dele (`pluginNaSessao`)
  *   instalacao-unica   o plugin aparece uma vez só na lista, e nenhum `settings` do
  *                      projeto (`sessao.settings`) registra um hook do plugin à mão;
  *                      entrada de escopo de projeto com `projectPath` de OUTRO projeto
@@ -31,16 +35,33 @@
  * sensível — e resolve para `mecanico` sai em `avisos` com `{ task, tier,
  * modelo }`, sem parar. Tarefa comum em `mecanico` não avisa: o barato basta.
  *
+ * Herdeira (VEGA-37 T17, AC-VEGA37-8), com `--herdeira` (exige `--ciclo`): a
+ * sessão que herdou a condução por passagem confere, ao lado das quatro do host,
+ * as três da partida (`CONFERENCIAS_DA_HERDEIRA`), depois do `passar-posse` e da
+ * inscrição:
+ *
+ *   arvore-na-ponta    o HEAD está anexado ao ramo da marca de passagem
+ *                      (`Conducao-Ramo`) e descende dela
+ *   epoca-da-posse     a posse, pelo leitor da cerca, é desta árvore com a época
+ *                      da nota + 1, e a época gravada no git-dir é a mesma
+ *   inscricao-feita    `entrada.inscrita` é `true`, ou o projeto não tem proposta
+ *                      (`ci: false` na declaração, o mesmo modo da T9), com o pulo
+ *
+ * A passagem lida é a aberta no HEAD, ou a que a última `confirmada` confirma.
+ *
  * O núcleo não nomeia host, ponte, modelo nem fornecedor: o binário, os
  * arquivos de configuração, a variável, a unidade e o mapa tier → modelo vêm
  * da declaração (v5). Toda execução externa vai por `spawnSync` sem shell, com
  * prazo; comando ausente vira falha com remédio, nunca exceção crua.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { accessSync, constants as FS, existsSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
 import path from "node:path";
 import * as adaptador from "./adaptador.mjs";
+import { lerPosseDaCerca, passagemAberta } from "./git-conducao.mjs";
+import { tentarGit } from "./git-exec.mjs";
 import { ErroPlano, lerPlanoNoCommit } from "./ler-plano.mjs";
+import { lerMarcas } from "./marcas.mjs";
 import * as pergunta from "./pergunta.mjs";
 import { casoDeConferencia } from "./verbos.mjs";
 
@@ -48,6 +69,8 @@ import { casoDeConferencia } from "./verbos.mjs";
 export const NOME_DO_PLUGIN = "vega";
 export const PRAZO_MS = 15_000;
 export const CONFERENCIAS = Object.freeze(["plugin-carregado", "instalacao-unica", "ponte-com-restart", "trafego-ligado"]);
+/** As conferências da partida da herdeira (VEGA-37 T17), ao lado das quatro do host. */
+export const CONFERENCIAS_DA_HERDEIRA = Object.freeze(["arvore-na-ponta", "epoca-da-posse", "inscricao-feita"]);
 /** Marcas do `satisfies` que fazem da tarefa um fechamento ou um gate: pedem julgamento. */
 const MARCAS_DE_JULGAMENTO = Object.freeze(["fechamento-de-fase", "review-gate"]);
 const HOOKS_DO_PLUGIN = path.join(adaptador.RAIZ_DO_PLUGIN, "hooks", "hooks.json");
@@ -180,7 +203,90 @@ const motivosDe = (duvidosas) => [...new Set(duvidosas.map((d) => d.motivo))].jo
 /** O sufixo que cita as instalações descartadas por serem de outro projeto. */
 const descartadas = (lista) => (lista.outros?.length ? ` — descartada(s) por ser(em) de outro projeto: ${lista.outros.join(", ")}` : "");
 
-function pluginCarregado(decl, lista) {
+/** `nome` resolvido pelo PATH de `env` até o arquivo real, ou `null`. */
+function binarioNoPath(nome, env) {
+  const candidatos = nome.includes("/") ? [nome] : String(env.PATH ?? "").split(path.delimiter).filter(Boolean).map((d) => path.join(d, nome));
+  for (const c of candidatos) {
+    try {
+      accessSync(c, FS.X_OK);
+      return realpathSync(c);
+    } catch {
+      // não executável aqui: tenta o próximo diretório do PATH.
+    }
+  }
+  return null;
+}
+
+/**
+ * Os ancestrais de `pid` pelo `/proc`, do pai para cima: `[{ pid, exe, argv, cwd }]`
+ * (campo que não deu para ler sai `null`). Sem `/proc` (outro sistema), lista vazia.
+ */
+export function ancestrais(pid = process.ppid, { raizProc = "/proc", limite = 64 } = {}) {
+  const out = [];
+  let atual = pid;
+  while (atual > 1 && out.length < limite) {
+    const base = path.join(raizProc, String(atual));
+    let stat;
+    try {
+      stat = readFileSync(path.join(base, "stat"), "utf8");
+    } catch {
+      break;
+    }
+    const ler = (f) => {
+      try {
+        return f();
+      } catch {
+        return null;
+      }
+    };
+    const argv = ler(() => readFileSync(path.join(base, "cmdline"), "utf8").replace(/\0$/, "").split("\0"));
+    out.push({ pid: atual, exe: ler(() => readlinkSync(path.join(base, "exe"))), argv: argv ?? [], cwd: ler(() => readlinkSync(path.join(base, "cwd"))) });
+    const pai = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]);
+    if (!Number.isInteger(pai) || pai === atual) break;
+    atual = pai;
+  }
+  return out;
+}
+
+/**
+ * O plugin chegou à sessão em que o pré-voo roda? A sessão é o primeiro ancestral
+ * cujo executável é o binário de `sessao.cli[0]` no PATH (o host que lista os
+ * plugins é o mesmo que roda a sessão); um ancestral acima dele é OUTRA sessão e não
+ * conta. O plugin chegou quando um argumento dela (inteiro, ou o valor depois de
+ * `=`) resolve, contra o cwd dela, à raiz deste plugin. `{ pid, argumento }` ou
+ * `{ motivo }`.
+ */
+export function pluginNaSessao(decl, { env = process.env, lerAncestrais = ancestrais, raizDoPlugin = adaptador.RAIZ_DO_PLUGIN } = {}) {
+  const bin = decl.sessao.cli ? binarioNoPath(decl.sessao.cli[0], env) : null;
+  if (!bin) return { motivo: "binário do host fora do PATH" };
+  let raiz;
+  try {
+    raiz = realpathSync(raizDoPlugin);
+  } catch {
+    return { motivo: "a raiz do plugin não resolve" };
+  }
+  const sessao = lerAncestrais().find((p) => {
+    try {
+      return p.exe && realpathSync(p.exe) === bin;
+    } catch {
+      return false;
+    }
+  });
+  if (!sessao) return { motivo: "nenhum processo ancestral é a sessão do host" };
+  for (const a of sessao.argv.slice(1)) {
+    for (const v of [a, a.includes("=") ? a.slice(a.indexOf("=") + 1) : null]) {
+      if (!v) continue;
+      try {
+        if (realpathSync(path.resolve(sessao.cwd ?? "/", v)) === raiz) return { pid: sessao.pid, argumento: a };
+      } catch {
+        // argumento que não é caminho: segue.
+      }
+    }
+  }
+  return { motivo: `a sessão do host (pid ${sessao.pid}) não recebeu ${raiz}` };
+}
+
+function pluginCarregado(decl, lista, naSessao = () => ({ motivo: "não conferido" })) {
   const C = "plugin-carregado";
   if (!decl.sessao.cli) return naoDeclarado(C, "sessao.cli");
   const comando = decl.sessao.cli.join(" ");
@@ -191,9 +297,12 @@ function pluginCarregado(decl, lista) {
   const duvidosasLigadas = lista.duvidosas.filter((d) => d.entrada.enabled !== false);
   if (duvidosasLigadas.length)
     return conferida(C, "falha", `${NOME_DO_PLUGIN} ligado só em instalação que não deu para provar deste projeto: ${motivosDe(duvidosasLigadas)}${descartadas(lista)}`, `corrigir o que impediu a prova (${motivosDe(duvidosasLigadas)}) e conferir com ${comando}`);
+  const s = naSessao();
+  if (s.pid) return conferida(C, "ok", `${NOME_DO_PLUGIN} chegou à sessão do host (pid ${s.pid}, argumento ${s.argumento}) e não à lista de ${comando}${descartadas(lista)}`);
+  const foraDaRaiz = `; fora da raiz do projeto, passar a pasta do plugin (${adaptador.RAIZ_DO_PLUGIN}) à sessão na linha de comando de ${decl.sessao.cli[0]} (${s.motivo})`;
   if (lista.entradas.length)
-    return conferida(C, "falha", `${NOME_DO_PLUGIN} instalado e desligado (${lista.entradas.map((e) => e.scope ?? "?").join(", ")})${descartadas(lista)}`, `ligar o plugin ${NOME_DO_PLUGIN} no projeto e conferir com ${comando}`);
-  return conferida(C, "falha", `${NOME_DO_PLUGIN} fora da lista de ${comando}${descartadas(lista)}`, `instalar o plugin ${NOME_DO_PLUGIN} pelo marketplace, ligá-lo no projeto e conferir com ${comando}`);
+    return conferida(C, "falha", `${NOME_DO_PLUGIN} instalado e desligado (${lista.entradas.map((e) => e.scope ?? "?").join(", ")})${descartadas(lista)}`, `ligar o plugin ${NOME_DO_PLUGIN} no projeto e conferir com ${comando}${foraDaRaiz}`);
+  return conferida(C, "falha", `${NOME_DO_PLUGIN} fora da lista de ${comando}${descartadas(lista)}`, `instalar o plugin ${NOME_DO_PLUGIN} pelo marketplace, ligá-lo no projeto e conferir com ${comando}${foraDaRaiz}`);
 }
 
 /** Os `settings` declarados que existem: `[{ rel, json }]`, ou `{ erro }` no primeiro ilegível. */
@@ -286,6 +395,76 @@ function trafegoLigado(decl, settings, env) {
   return conferida(C, "ok", `${v} ausente`);
 }
 
+// ── partida da herdeira (VEGA-37 T17) ────────────────────────────────────────
+
+/**
+ * A passagem que esta árvore herdou, pelas marcas do HEAD: a aberta, ou a que a
+ * última `confirmada` confirma. `null` sem nenhuma das duas.
+ */
+export function passagemDaHerdeira(marcas) {
+  const aberta = passagemAberta(marcas);
+  if (aberta) return aberta;
+  const c = marcas.findLast((m) => m.tipo === "confirmada" || m.tipo === "desistida");
+  if (c?.tipo !== "confirmada" || !c.confirma) return null;
+  return marcas.find((m) => m.tipo === "passagem" && m.sha === c.confirma) ?? null;
+}
+
+const epocaDe = (v) => {
+  const n = Number(v);
+  return Number.isSafeInteger(n) && n >= 1 ? n : null;
+};
+
+function arvoreNaPonta(repo, p) {
+  const C = "arvore-na-ponta";
+  if (!p) return conferida(C, "falha", "nenhuma passagem aberta nem confirmada no HEAD", "rodar o trazer-ramo do prompt da herdeira, na árvore desta sessão");
+  if (!p.ramo) return conferida(C, "falha", `a marca de passagem ${p.sha.slice(0, 8)} não traz o ramo (Conducao-Ramo)`, "o operador confere o ramo do ciclo e o traz à mão");
+  const ramo = tentarGit(repo, ["symbolic-ref", "--short", "-q", "HEAD"]).saida;
+  if (ramo !== p.ramo)
+    return conferida(C, "falha", `o HEAD está ${ramo ? `em ${ramo}` : "destacado"}, não em ${p.ramo}`, `rodar o trazer-ramo do prompt da herdeira (git switch ${p.ramo})`);
+  const anc = tentarGit(repo, ["merge-base", "--is-ancestor", p.sha, "HEAD"]);
+  if (anc.status !== 0) return conferida(C, "falha", `o HEAD de ${p.ramo} não descende da passagem ${p.sha.slice(0, 8)}`, "parar: o ramo não é o que a anterior passou — o operador decide");
+  return conferida(C, "ok", `${p.ramo} anexado, descendendo da passagem ${p.sha.slice(0, 8)}`);
+}
+
+function epocaDaPosse(repo, p, lerPosse, ciclo) {
+  const C = "epoca-da-posse";
+  const daNota = epocaDe(p?.epoca);
+  if (!daNota) return conferida(C, "falha", p ? `a marca de passagem ${p.sha.slice(0, 8)} não traz época legível (${JSON.stringify(p.epoca ?? null)})` : "sem passagem, sem época da nota", "o operador confere a nota de passagem");
+  let posse;
+  try {
+    posse = lerPosse(repo, ciclo);
+  } catch (e) {
+    posse = { estado: "nao-li", motivo: e.message };
+  }
+  if (posse?.estado !== "dona")
+    return conferida(C, "falha", `posse ${posse?.estado ?? "não declarada"}${posse?.motivo ? ` (${posse.motivo})` : ""}; época da nota ${daNota}`, `rodar o passar-posse que o proximo emite, com o lock_id e a época ${daNota} da nota`);
+  const esperada = daNota + 1;
+  if (posse.epoca !== esperada) {
+    const remedio = Number.isSafeInteger(posse.epoca) && posse.epoca > esperada ? "parar: a posse passou de novo depois desta nota, e a dona é outra sessão — avisar o operador" : `rodar o passar-posse com a época ${daNota} da nota`;
+    return conferida(C, "falha", `época da posse ${JSON.stringify(posse.epoca ?? null)}, esperada ${esperada} (a da nota, ${daNota}, + 1)`, remedio);
+  }
+  if (Object.hasOwn(posse, "epoca_gravada") && posse.epoca_gravada !== posse.epoca)
+    return conferida(C, "falha", `época gravada no git-dir ${posse.epoca_gravada}, a da posse ${posse.epoca}`, "regravar o cache pelo passar-posse (o RETURNING dá o par)");
+  return conferida(C, "ok", `dona na época ${posse.epoca} (a da nota, ${daNota}, + 1)`);
+}
+
+function inscricaoFeita(temCi, entrada) {
+  const C = "inscricao-feita";
+  if (!temCi) return conferida(C, "ok", "projeto sem proposta: inscrição pulada (projeto-sem-proposta)");
+  if (entrada?.inscrita === true) return conferida(C, "ok", "inscrita na proposta do ramo");
+  return conferida(C, "falha", "a herdeira não disse que se inscreveu na proposta", 'chamar subscribe_pr_activity na proposta do ramo e rodar o pré-voo com --entrada \'{"inscrita":true}\'');
+}
+
+/**
+ * As três conferências da partida da herdeira, na ordem de
+ * `CONFERENCIAS_DA_HERDEIRA`. `lerPosse` é o leitor da cerca (o da declaração,
+ * ou o do teste); `temCi` é `ci !== false` da declaração.
+ */
+export function conferenciasDaHerdeira({ repo, ciclo = null, entrada = {}, temCi = true, lerPosse = lerPosseDaCerca, marcas = lerMarcas(repo) }) {
+  const p = passagemDaHerdeira(marcas);
+  return { passagem: p, conferencias: [arvoreNaPonta(repo, p), epocaDaPosse(repo, p, lerPosse, ciclo), inscricaoFeita(temCi, entrada)] };
+}
+
 /** A tarefa pede julgamento: fechamento ou review-gate, conferência do operador, ou classe sensível. */
 export function pedeJulgamento(t, conferencia = []) {
   return Boolean(t.fechamento || (t.marcas ?? []).some((m) => MARCAS_DE_JULGAMENTO.includes(m)) || casoDeConferencia(t, conferencia) || t.classe === "sensivel");
@@ -302,11 +481,17 @@ export function avisosDeTier(plano, decl) {
  * O pré-voo. `env` é o ambiente conferido e o das execuções (PATH incluso);
  * `ciclo` liga o aviso de tier. Devolve a saída do verbo, pronta para o JSON.
  */
-export function preVoo({ repo, ciclo = null, env = process.env, prazoMs = PRAZO_MS }) {
+export function preVoo({ repo, ciclo = null, env = process.env, prazoMs = PRAZO_MS, herdeira = false, entrada = {}, lerPosse = lerPosseDaCerca }) {
   const decl = adaptador.lerAdaptador(repo, { env });
   const lista = decl.sessao.cli ? lerLista(decl, { repo, env, prazoMs }) : { erro: "sessao.cli não declarado" };
   const settings = decl.sessao.settings.length ? lerSettings(decl, repo) : { lidos: [] };
-  const conferencias = [pluginCarregado(decl, lista), instalacaoUnica(decl, lista, settings), ponteComRestart(decl, { env, prazoMs }), trafegoLigado(decl, settings, env)];
+  const conferencias = [pluginCarregado(decl, lista, () => pluginNaSessao(decl, { env })), instalacaoUnica(decl, lista, settings), ponteComRestart(decl, { env, prazoMs }), trafegoLigado(decl, settings, env)];
+  let daHerdeira = null;
+  if (herdeira) {
+    const h = conferenciasDaHerdeira({ repo, ciclo, entrada, temCi: decl.ci !== false, lerPosse });
+    conferencias.push(...h.conferencias);
+    daHerdeira = { passagem: h.passagem?.sha ?? null, epocaDaNota: epocaDe(h.passagem?.epoca) };
+  }
   const avisos = conferencias.filter((c) => c.estado === "nao-declarada").map((c) => ({ tipo: "nao-declarada", conferencia: c.conferencia, remedio: c.remedio }));
   if (ciclo) {
     try {
@@ -317,7 +502,7 @@ export function preVoo({ repo, ciclo = null, env = process.env, prazoMs = PRAZO_
     }
   }
   const falhas = conferencias.filter((c) => c.estado === "falha").map(({ conferencia, encontrado, remedio }) => ({ conferencia, encontrado, remedio }));
-  const base = { ...(ciclo ? { ciclo } : {}), conferencias, avisos };
+  const base = { ...(ciclo ? { ciclo } : {}), ...(daHerdeira ? { herdeira: daHerdeira } : {}), conferencias, avisos };
   if (!falhas.length) return { acao: "pre-voo", ok: true, ...base };
   return pergunta.perguntar({
     acao: "perguntar",

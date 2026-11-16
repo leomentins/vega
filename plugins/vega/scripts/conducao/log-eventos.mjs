@@ -79,6 +79,13 @@ export const ATRIBUTOS = Object.freeze([
   "recomendada",
   "destinatario",
   "textoSha256",
+  // Vigia por estado (VEGA-37 T21, `vigia.mjs`): eventos `vida`, `queda` e
+  // `aviso-da-vigia`. Só tokens, números e o dia `America/Sao_Paulo`.
+  "despertador",
+  "prazoMin",
+  "intervaloMin",
+  "dia",
+  "instante",
 ]);
 
 const TOKEN = /^[A-Za-z0-9._:/+@-]{1,200}$/;

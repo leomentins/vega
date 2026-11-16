@@ -1,7 +1,7 @@
 // Testes do operaria-alcance-guard (ruling 3a, 13/10/2026): a operária arquiva só a si mesma e
 // escreve só para "@parent"; a sessão provada comum arquiva e escreve para qualquer uma (ruling
-// F4.8b, 23/10/2026); dentro disso o hook devolve `allow`, fora devolve `ask`, e nenhum caminho
-// sai sem decisão.
+// F4.8b, 23/10/2026); dentro disso o hook devolve `allow`, fora devolve `deny` — nunca `ask`
+// (hotfix vega-alcance-sem-ask, 13/11/2026) —, e nenhum caminho sai sem decisão.
 // Prova viva = hook invocado direto com JSON no stdin — nenhuma sessão real é tocada.
 //
 // Rodar: node --test hooks/__tests__/operaria-alcance-guard.test.mjs
@@ -99,7 +99,7 @@ test("o id vem da raiz do projeto, nunca do cwd (cd para a worktree de outra ses
   const vitima = "/srv/x/projeto/.claude/worktrees/bridge-cse_01Vitima";
   assert.strictEqual(
     run(ARQUIVAR, { session_id: "session_01Vitima" }, { cwd: vitima }),
-    "ask",
+    "deny",
   );
   assert.strictEqual(
     run(ARQUIVAR, { session_id: EU }, { cwd: "/tmp/qualquer" }),
@@ -107,34 +107,34 @@ test("o id vem da raiz do projeto, nunca do cwd (cd para a worktree de outra ses
   );
 });
 
-test("arquivar outra sessão pergunta", () => {
-  assert.strictEqual(run(ARQUIVAR, { session_id: "session_01Outra" }), "ask");
+test("arquivar outra sessão recusa", () => {
+  assert.strictEqual(run(ARQUIVAR, { session_id: "session_01Outra" }), "deny");
 });
 
-test("arquivar com id que só começa igual ao próprio pergunta", () => {
-  assert.strictEqual(run(ARQUIVAR, { session_id: `${EU}X` }), "ask");
+test("arquivar com id que só começa igual ao próprio recusa", () => {
+  assert.strictEqual(run(ARQUIVAR, { session_id: `${EU}X` }), "deny");
   assert.strictEqual(
     run(ARQUIVAR, { session_id: EU }, { raiz: `${RAIZ}X` }),
-    "ask",
+    "deny",
   );
   assert.strictEqual(
     run(ARQUIVAR, { session_id: EU }, { raiz: `${RAIZ}-copia` }),
-    "ask",
+    "deny",
   );
 });
 
-test("raiz que só CONTÉM a worktree de sessão, sem terminar nela, pergunta", () => {
+test("raiz que só CONTÉM a worktree de sessão, sem terminar nela, recusa", () => {
   assert.strictEqual(
     run(ARQUIVAR, { session_id: EU }, { raiz: `${RAIZ}/apps/web` }),
-    "ask",
+    "deny",
   );
 });
 
-test("arquivar sem saber quem é pergunta", () => {
-  assert.strictEqual(run(ARQUIVAR, { session_id: EU }, { raiz: null }), "ask");
+test("arquivar sem saber quem é recusa", () => {
+  assert.strictEqual(run(ARQUIVAR, { session_id: EU }, { raiz: null }), "deny");
   assert.strictEqual(
     run(ARQUIVAR, { session_id: EU }, { raiz: "/srv/x/projeto" }),
-    "ask",
+    "deny",
   );
   assert.strictEqual(
     run(
@@ -142,15 +142,15 @@ test("arquivar sem saber quem é pergunta", () => {
       { session_id: EU },
       { raiz: "/srv/x/projeto-worktrees/bridge-cse_01AbC123" },
     ),
-    "ask",
+    "deny",
   );
 });
 
-test("arquivar sem id ou com id de outro tipo pergunta", () => {
-  assert.strictEqual(run(ARQUIVAR, {}), "ask");
-  assert.strictEqual(run(ARQUIVAR, { session_id: [EU] }), "ask");
-  assert.strictEqual(run(ARQUIVAR, { session_id: { id: EU } }), "ask");
-  assert.strictEqual(run(ARQUIVAR, null), "ask");
+test("arquivar sem id ou com id de outro tipo recusa", () => {
+  assert.strictEqual(run(ARQUIVAR, {}), "deny");
+  assert.strictEqual(run(ARQUIVAR, { session_id: [EU] }), "deny");
+  assert.strictEqual(run(ARQUIVAR, { session_id: { id: EU } }), "deny");
+  assert.strictEqual(run(ARQUIVAR, null), "deny");
 });
 
 test("mensagem para @parent com texto é permitida", () => {
@@ -160,14 +160,14 @@ test("mensagem para @parent com texto é permitida", () => {
   );
 });
 
-test("mensagem para id explícito pergunta, mesmo que seja o pai", () => {
+test("mensagem para id explícito recusa, mesmo que seja o pai", () => {
   assert.strictEqual(
     run(MENSAGEM, { session_id: "session_01Pai", message: "ok" }),
-    "ask",
+    "deny",
   );
 });
 
-test("mensagem para @parent com QUALQUER chave além de session_id e message pergunta", () => {
+test("mensagem para @parent com QUALQUER chave além de session_id, message e priority válida recusa", () => {
   for (const extra of [
     { to: "parent" },
     { visibility: "posted_to_shared_channel" },
@@ -175,35 +175,36 @@ test("mensagem para @parent com QUALQUER chave além de session_id e message per
     { attachments: [{ file_uuid: "f" }] },
     { in_reply_to: "1.2" },
     { thread_ts: "1.2" },
-    { priority: "now" },
+    { priority: "agora" },
+    { priority: 1 },
     { channel: "C1" },
     { campo_que_ainda_nao_existe: true },
   ]) {
     assert.strictEqual(
       run(MENSAGEM, { session_id: "@parent", message: "ok", ...extra }),
-      "ask",
+      "deny",
       JSON.stringify(extra),
     );
   }
 });
 
-test("mensagem sem alvo ou sem texto pergunta", () => {
-  assert.strictEqual(run(MENSAGEM, { message: "ok" }), "ask");
-  assert.strictEqual(run(MENSAGEM, { session_id: "@parent" }), "ask");
+test("mensagem sem alvo ou sem texto recusa", () => {
+  assert.strictEqual(run(MENSAGEM, { message: "ok" }), "deny");
+  assert.strictEqual(run(MENSAGEM, { session_id: "@parent" }), "deny");
   assert.strictEqual(
     run(MENSAGEM, { session_id: "@parent", message: { texto: "x" } }),
-    "ask",
+    "deny",
   );
 });
 
-test("ferramenta que não é nenhuma das três pergunta (matcher alargado por engano)", () => {
-  assert.strictEqual(run("mcp__claude-code-remote__get_session", {}), "ask");
-  assert.strictEqual(run("Read", { file_path: "/etc/hosts" }), "ask");
+test("ferramenta que não é nenhuma das três recusa (matcher alargado por engano)", () => {
+  assert.strictEqual(run("mcp__claude-code-remote__get_session", {}), "deny");
+  assert.strictEqual(run("Read", { file_path: "/etc/hosts" }), "deny");
 });
 
-test("entrada vazia, nula ou ilegível pergunta", () => {
+test("entrada vazia, nula ou ilegível recusa", () => {
   for (const raw of ["", "null", "[]", "{}", "{nao-json"]) {
-    assert.strictEqual(run(null, null, { raw }), "ask", JSON.stringify(raw));
+    assert.strictEqual(run(null, null, { raw }), "deny", JSON.stringify(raw));
   }
 });
 
@@ -266,7 +267,7 @@ test("create_session fica fora de qualquer allow do plugin (a capacidade vem do 
 });
 
 // Re-revisão de 0c567974..197eb1af (13/10/2026).
-test("arquivar a si mesma com QUALQUER chave além de session_id pergunta", () => {
+test("arquivar a si mesma com QUALQUER chave além de session_id recusa", () => {
   for (const extra of [
     { session_ids: ["session_01Vitima"] },
     { delete: true },
@@ -274,7 +275,7 @@ test("arquivar a si mesma com QUALQUER chave além de session_id pergunta", () =
   ]) {
     assert.strictEqual(
       run(ARQUIVAR, { session_id: EU, ...extra }),
-      "ask",
+      "deny",
       JSON.stringify(extra),
     );
   }
@@ -283,9 +284,9 @@ test("arquivar a si mesma com QUALQUER chave além de session_id pergunta", () =
 test("sem raiz conhecida, nem id nulo vira allow", () => {
   assert.strictEqual(
     run(ARQUIVAR, { session_id: null }, { raiz: null }),
-    "ask",
+    "deny",
   );
-  assert.strictEqual(run(ARQUIVAR, {}, { raiz: "" }), "ask");
+  assert.strictEqual(run(ARQUIVAR, {}, { raiz: "" }), "deny");
 });
 
 test("raiz relativa ou com quebra de linha não identifica a sessão", () => {
@@ -295,7 +296,7 @@ test("raiz relativa ou com quebra de linha não identifica a sessão", () => {
       { session_id: EU },
       { raiz: "x/.claude/worktrees/bridge-cse_01AbC123" },
     ),
-    "ask",
+    "deny",
   );
   assert.strictEqual(
     run(
@@ -303,15 +304,15 @@ test("raiz relativa ou com quebra de linha não identifica a sessão", () => {
       { session_id: EU },
       { raiz: `/srv/x\n/y/.claude/worktrees/bridge-cse_01AbC123` },
     ),
-    "ask",
+    "deny",
   );
 });
 
-test("alvo que só começa com @parent pergunta", () => {
+test("alvo que só começa com @parent recusa", () => {
   for (const alvo of ["@parent-x", "@parent ", "@PARENT"]) {
     assert.strictEqual(
       run(MENSAGEM, { session_id: alvo, message: "ok" }),
-      "ask",
+      "deny",
       alvo,
     );
   }
@@ -337,13 +338,13 @@ test(
 
 const OUTRA = "session_01Outra";
 
-test("sessão comum arquiva outra sessão sem pergunta", () => {
+test("sessão comum arquiva outra sessão sem recusa", () => {
   assert.strictEqual(run(ARQUIVAR, { session_id: OUTRA }, { transcript_path: MAESTRA }), "allow");
   // nem precisa saber quem é: o raio largo não depende da raiz do projeto
   assert.strictEqual(run(ARQUIVAR, { session_id: OUTRA }, { transcript_path: MAESTRA, raiz: null }), "allow");
 });
 
-test("sessão comum manda mensagem para id explícito sem pergunta", () => {
+test("sessão comum manda mensagem para id explícito sem recusa", () => {
   assert.strictEqual(
     run(MENSAGEM, { session_id: OUTRA, message: "ok" }, { transcript_path: MAESTRA }),
     "allow",
@@ -354,21 +355,21 @@ test("sessão comum manda mensagem para id explícito sem pergunta", () => {
   );
 });
 
-test("operária arquiva outra sessão ⇒ pergunta", () => {
-  assert.strictEqual(run(ARQUIVAR, { session_id: OUTRA }, { transcript_path: OPERARIA }), "ask");
+test("operária arquiva outra sessão ⇒ recusa", () => {
+  assert.strictEqual(run(ARQUIVAR, { session_id: OUTRA }, { transcript_path: OPERARIA }), "deny");
   assert.strictEqual(run(ARQUIVAR, { session_id: EU }, { transcript_path: OPERARIA }), "allow");
 });
 
-test("operária manda mensagem para id explícito ⇒ pergunta", () => {
+test("operária manda mensagem para id explícito ⇒ recusa", () => {
   assert.strictEqual(
     run(MENSAGEM, { session_id: OUTRA, message: "ok" }, { transcript_path: OPERARIA }),
-    "ask",
+    "deny",
   );
 });
 
 test("a ação `arquivar` emitida pela condução não alarga a operária", () => {
   const logDir = logCom([intencao("arquivar", OUTRA, { nonce: "a".repeat(16) })]);
-  assert.strictEqual(run(ARQUIVAR, { session_id: OUTRA }, { logDir, transcript_path: OPERARIA }), "ask");
+  assert.strictEqual(run(ARQUIVAR, { session_id: OUTRA }, { logDir, transcript_path: OPERARIA }), "deny");
 });
 
 test("transcript ausente, ilegível ou acima do teto ⇒ raio estreito (a dúvida não libera)", () => {
@@ -380,35 +381,35 @@ test("transcript ausente, ilegível ou acima do teto ⇒ raio estreito (a dúvid
   fs.writeFileSync(grande, anexo.repeat(9) + JSON.stringify({ type: "user", message: { role: "user", content: "Conduzir X" } }) + "\n");
   for (const transcript_path of [null, ausente, pasta, grande]) {
     const rotulo = String(transcript_path);
-    assert.strictEqual(run(ARQUIVAR, { session_id: OUTRA }, { transcript_path }), "ask", rotulo);
-    assert.strictEqual(run(MENSAGEM, { session_id: OUTRA, message: "ok" }, { transcript_path }), "ask", rotulo);
+    assert.strictEqual(run(ARQUIVAR, { session_id: OUTRA }, { transcript_path }), "deny", rotulo);
+    assert.strictEqual(run(MENSAGEM, { session_id: OUTRA, message: "ok" }, { transcript_path }), "deny", rotulo);
     // o raio estreito segue valendo
     assert.strictEqual(run(ARQUIVAR, { session_id: EU }, { transcript_path }), "allow", rotulo);
     assert.strictEqual(run(MENSAGEM, { session_id: "@parent", message: "ok" }, { transcript_path }), "allow", rotulo);
   }
 });
 
-test("sessão comum com chave extra ou tipo errado ⇒ pergunta", () => {
+test("sessão comum com chave extra ou tipo errado ⇒ recusa", () => {
   const t = { transcript_path: MAESTRA };
   for (const extra of [{ force: true }, { session_ids: [EU] }]) {
-    assert.strictEqual(run(ARQUIVAR, { session_id: OUTRA, ...extra }, t), "ask", JSON.stringify(extra));
+    assert.strictEqual(run(ARQUIVAR, { session_id: OUTRA, ...extra }, t), "deny", JSON.stringify(extra));
   }
-  for (const extra of [{ priority: "now" }, { visibility: "posted_to_shared_channel" }, { campo_que_ainda_nao_existe: true }]) {
+  for (const extra of [{ priority: "urgente" }, { visibility: "posted_to_shared_channel" }, { campo_que_ainda_nao_existe: true }]) {
     assert.strictEqual(
       run(MENSAGEM, { session_id: OUTRA, message: "ok", ...extra }, t),
-      "ask",
+      "deny",
       JSON.stringify(extra),
     );
   }
-  assert.strictEqual(run(ARQUIVAR, { session_id: [OUTRA] }, t), "ask");
+  assert.strictEqual(run(ARQUIVAR, { session_id: [OUTRA] }, t), "deny");
   for (const vazio of ["", "  "]) {
-    assert.strictEqual(run(ARQUIVAR, { session_id: vazio }, t), "ask", JSON.stringify(vazio));
-    assert.strictEqual(run(MENSAGEM, { session_id: vazio, message: "ok" }, t), "ask", JSON.stringify(vazio));
+    assert.strictEqual(run(ARQUIVAR, { session_id: vazio }, t), "deny", JSON.stringify(vazio));
+    assert.strictEqual(run(MENSAGEM, { session_id: vazio, message: "ok" }, t), "deny", JSON.stringify(vazio));
   }
-  assert.strictEqual(run(ARQUIVAR, {}, t), "ask");
-  assert.strictEqual(run(MENSAGEM, { session_id: OUTRA }, t), "ask");
-  assert.strictEqual(run(MENSAGEM, { session_id: OUTRA, message: { texto: "x" } }, t), "ask");
-  assert.strictEqual(run(MENSAGEM, { session_id: { id: OUTRA }, message: "ok" }, t), "ask");
+  assert.strictEqual(run(ARQUIVAR, {}, t), "deny");
+  assert.strictEqual(run(MENSAGEM, { session_id: OUTRA }, t), "deny");
+  assert.strictEqual(run(MENSAGEM, { session_id: OUTRA, message: { texto: "x" } }, t), "deny");
+  assert.strictEqual(run(MENSAGEM, { session_id: { id: OUTRA }, message: "ok" }, t), "deny");
 });
 
 // ── push do aviso da operária (P22 do ATRM-51) ─────────────────────────────────────────────────
@@ -433,7 +434,7 @@ const OPERARIA_T27 = transcriptCom(
 );
 const SHA_AVISO = "0123456789abcdef0123456789abcdef01234567";
 
-test("operária empurra o aviso da própria tentativa sem pergunta", () => {
+test("operária empurra o aviso da própria tentativa sem recusa", () => {
   for (const command of [
     `git push origin ${SHA_AVISO}:refs/conducao-aviso/ATRM-51-x/T27/1`,
     `git push origin '${SHA_AVISO.slice(0, 12)}:refs/conducao-aviso/ATRM-51-x/T27/1'`,
@@ -444,10 +445,10 @@ test("operária empurra o aviso da própria tentativa sem pergunta", () => {
   }
 });
 
-test("aviso de outra tentativa, task ou ciclo pela operária pergunta", () => {
+test("aviso de outra tentativa, task ou ciclo pela operária recusa", () => {
   for (const ref of ["ATRM-51-x/T27/2", "ATRM-51-x/T28/1", "OUTRO-1/T27/1"]) {
     const command = `git push origin ${SHA_AVISO}:refs/conducao-aviso/${ref}`;
-    assert.strictEqual(decisaoOuNada("Bash", { command }, OPERARIA_T27), "ask", ref);
+    assert.strictEqual(decisaoOuNada("Bash", { command }, OPERARIA_T27), "deny", ref);
   }
 });
 
@@ -470,30 +471,126 @@ test("a forma do aviso em sessão que não é operária, ou ilegível, não é l
   const command = `git push origin ${SHA_AVISO}:refs/conducao-aviso/ATRM-51-x/T27/1`;
   assert.strictEqual(decisaoOuNada("Bash", { command }, MAESTRA), null);
   assert.strictEqual(decisaoOuNada("Bash", { command }, undefined), null);
-  // contrato sem a referência da tentativa: não sabe o ciclo nem a tentativa ⇒ pergunta
+  // contrato sem a referência da tentativa: não sabe o ciclo nem a tentativa ⇒ recusa
   const semRef = transcriptCom(`## contrato da operária — T27 · nonce \`${NONCE_OP}\``);
-  assert.strictEqual(decisaoOuNada("Bash", { command }, semRef), "ask");
+  assert.strictEqual(decisaoOuNada("Bash", { command }, semRef), "deny");
   // pedido que cita duas tentativas da mesma task: ambíguo ⇒ nenhuma é liberada (revisão do hotfix)
   const duas = transcriptCom(
     `## contrato da operária — T27 · nonce \`${NONCE_OP}\`\nA refs/conducao/ATRM-51-x/T27/1 falhou; empurre para refs/conducao/ATRM-51-x/T27/2\n`,
   );
-  assert.strictEqual(decisaoOuNada("Bash", { command }, duas), "ask");
+  assert.strictEqual(decisaoOuNada("Bash", { command }, duas), "deny");
   // número de tentativa fora da forma canônica (`01`) é outra referência: não casa
   const zero = `git push origin ${SHA_AVISO}:refs/conducao-aviso/ATRM-51-x/T27/01`;
   assert.strictEqual(decisaoOuNada("Bash", { command: zero }, OPERARIA_T27), null);
 });
 
-// O guard de alcance não tem mode-file: fora do que libera, devolve `ask` sempre, com ou sem
+// O guard de alcance não tem mode-file: fora do que libera, devolve `deny` sempre, com ou sem
 // declaração do projeto e com qualquer `<guard>-mode` na pasta declarada.
-test("sem mode-file: fora do alcance devolve ask mesmo com mode-file shadow ou off na pasta declarada", () => {
+test("sem mode-file: fora do alcance devolve deny mesmo com mode-file shadow ou off na pasta declarada", () => {
   const projeto = fs.mkdtempSync(path.join(os.tmpdir(), "alcance-modo-"));
   try {
     fs.mkdirSync(path.join(projeto, ".claude", "state"), { recursive: true });
     for (const modo of ["shadow", "off", "hard"]) {
       fs.writeFileSync(path.join(projeto, ".claude", "state", "operaria-alcance-guard-mode"), `${modo}\n`);
-      assert.strictEqual(run(ARQUIVAR, { session_id: "session_01Outra" }, { raiz: projeto, cwd: projeto }), "ask", modo);
+      assert.strictEqual(run(ARQUIVAR, { session_id: "session_01Outra" }, { raiz: projeto, cwd: projeto }), "deny", modo);
     }
   } finally {
     fs.rmSync(projeto, { recursive: true, force: true });
   }
+});
+
+// ── hotfix vega-alcance-sem-ask (13/11/2026): priority e resposta a quem escreveu ──────────────
+
+test("priority now/next/later passa, para @parent e na sessão comum", () => {
+  for (const priority of ["now", "next", "later"]) {
+    assert.strictEqual(run(MENSAGEM, { session_id: "@parent", message: "ok", priority }), "allow", priority);
+    assert.strictEqual(
+      run(MENSAGEM, { session_id: OUTRA, message: "ok", priority }, { transcript_path: MAESTRA }),
+      "allow",
+      priority,
+    );
+  }
+});
+
+/** Transcript de operária que recebeu mensagem de `remetente` (linha como o harness grava). */
+function operariaQueRecebeuDe(remetente, { comoUser = false, citado = false } = {}) {
+  const f = transcriptCom(`## contrato da operária — T47 · nonce \`${"d".repeat(16)}\`\n\nVocê é a operária…`);
+  const cabecalho = `<cross-session-message from-session="${remetente}">\nThe following was sent by another Claude Code session…`;
+  const conteudo = citado ? `veja: ${cabecalho}` : cabecalho;
+  const linha = comoUser
+    ? { type: "user", isMeta: true, message: { role: "user", content: conteudo } }
+    : { type: "queue-operation", operation: "enqueue", content: conteudo };
+  fs.appendFileSync(f, JSON.stringify(linha) + "\n");
+  return f;
+}
+
+test("operária responde pelo id a quem escreveu para ela, sem pergunta", () => {
+  const PAI = "session_01Condutora";
+  for (const comoUser of [false, true]) {
+    const t = operariaQueRecebeuDe(PAI, { comoUser });
+    assert.strictEqual(run(MENSAGEM, { session_id: PAI, message: "recebi" }, { transcript_path: t }), "allow");
+    assert.strictEqual(
+      run(MENSAGEM, { session_id: PAI, message: "recebi", priority: "later" }, { transcript_path: t }),
+      "allow",
+    );
+    // quem não escreveu segue fora do raio
+    assert.strictEqual(run(MENSAGEM, { session_id: OUTRA, message: "oi" }, { transcript_path: t }), "deny");
+    // arquivar quem escreveu não entra no raio
+    assert.strictEqual(run(ARQUIVAR, { session_id: PAI }, { transcript_path: t }), "deny");
+  }
+});
+
+test("cabeçalho citado no meio de um texto não prova remetente", () => {
+  const t = operariaQueRecebeuDe("session_01Citado", { citado: true });
+  assert.strictEqual(run(MENSAGEM, { session_id: "session_01Citado", message: "x" }, { transcript_path: t }), "deny");
+});
+
+test("o motivo da recusa diz a forma que passa", () => {
+  const r = spawnSync(process.execPath, [HOOK], {
+    input: JSON.stringify({ tool_name: MENSAGEM, tool_input: { session_id: OUTRA, message: "x" }, transcript_path: OPERARIA }),
+    encoding: "utf8",
+    env: { ...process.env, CLAUDE_PROJECT_DIR: RAIZ },
+  });
+  const o = JSON.parse(r.stdout.trim()).hookSpecificOutput;
+  assert.strictEqual(o.permissionDecision, "deny");
+  assert.match(o.permissionDecisionReason, /@parent/);
+  assert.match(o.permissionDecisionReason, /sem pedir ao operador/);
+});
+
+test("texto digitado na sessão (user sem isMeta) ou tool_result não prova remetente", () => {
+  const f = transcriptCom(`## contrato da operária — T47 · nonce \`${"d".repeat(16)}\``);
+  const cab = `<cross-session-message from-session="session_01Colado">\nx`;
+  fs.appendFileSync(f, JSON.stringify({ type: "user", message: { role: "user", content: cab } }) + "\n");
+  fs.appendFileSync(
+    f,
+    JSON.stringify({ type: "user", isMeta: true, message: { role: "user", content: [{ type: "tool_result", content: cab }] } }) + "\n",
+  );
+  assert.strictEqual(run(MENSAGEM, { session_id: "session_01Colado", message: "x" }, { transcript_path: f }), "deny");
+});
+
+test("remetentesProvados: CRLF, diretório, teto lido pela cauda", async () => {
+  const { remetentesProvados } = await import(HOOK);
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "alcance-rem-"));
+  const linha = (id) => JSON.stringify({ type: "queue-operation", content: `<cross-session-message from-session="${id}">\nx` });
+  const crlf = path.join(d, "crlf.jsonl");
+  fs.writeFileSync(crlf, linha("session_01A") + "\r\n" + linha("session_01B") + "\r\n");
+  assert.deepStrictEqual([...remetentesProvados(crlf)].sort(), ["session_01A", "session_01B"]);
+  assert.strictEqual(remetentesProvados(d).size, 0, "diretório");
+  // acima do teto: o remetente do fim é lido; o do começo, fora da janela, não
+  const grande = path.join(d, "grande.jsonl");
+  fs.writeFileSync(grande, linha("session_01Velho") + "\n" + "x".repeat(4096) + "\n" + linha("session_01Novo") + "\n");
+  const r = remetentesProvados(grande, { teto: 1024 });
+  assert.ok(r.has("session_01Novo"));
+  assert.ok(!r.has("session_01Velho"));
+});
+
+test("archive_session com chave extra recusa pela forma, mesmo sem raiz conhecida", () => {
+  const r = spawnSync(process.execPath, [HOOK], {
+    input: JSON.stringify({ tool_name: ARQUIVAR, tool_input: { session_id: EU, force: true }, transcript_path: OPERARIA }),
+    encoding: "utf8",
+    env: { ...process.env, CLAUDE_PROJECT_DIR: "" },
+  });
+  const o = JSON.parse(r.stdout.trim()).hookSpecificOutput;
+  assert.strictEqual(o.permissionDecision, "deny");
+  assert.match(o.permissionDecisionReason, /só com a chave session_id/);
 });

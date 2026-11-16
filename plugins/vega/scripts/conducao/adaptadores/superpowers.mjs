@@ -15,6 +15,17 @@
  *   **Tier:** <tier>                — no topo, OPCIONAL: o tier da fase (`mecanico` · `parecer` ·
  *                                     `critico` · `inherit`, default `inherit`); a tarefa o troca
  *   **Largura do ciclo:** <n>       — no topo, OPCIONAL: ausente cai no padrão do núcleo
+ *
+ * Plano de várias fases num arquivo só (D-VEGA37-54): o cabeçalho `## Fase F<n>`
+ * (`## Fase F<n> — <título>` também), OPCIONAL, abre a fase; as tarefas abaixo dele são
+ * dessa fase até o próximo cabeçalho de fase, e `**Modelo:**` e `**Tier:**` entre o
+ * cabeçalho e a primeira tarefa dele são os da fase (sem eles, os do topo). `fases` sai
+ * na ordem do arquivo. A numeração segue corrida no arquivo (T1..Tn, sem recomeçar por
+ * fase), e cada fase tem a sua tarefa com `fechamento-de-fase`. Vão a perguntar: fase
+ * sem fechamento, fase repetida, fase fora da forma `F<n>`, heading que parece fase fora
+ * do `## Fase F<n>`, tarefa antes do primeiro cabeçalho de fase e `**Fase:**` (no topo
+ * ou sob um cabeçalho) junto com cabeçalho de fase. Plano sem cabeçalho de fase é lido
+ * como sempre: o `**Fase:**` do topo, default F1.
  *   ### Tarefa <n>: <título>        — a tarefa `T<n>` (`### Task <n>:` também)
  *   **Arquivos:** / **Files:**      — a lista `- Criar|Modificar|Teste: \`caminho\`` vira os Outputs
  *   - [ ] **Passo <k>: …**          — os passos (Steps)
@@ -72,6 +83,10 @@ const TAREFA_RE = /^###\s+(?:Tarefa|Task)\s+(\d{1,3})(?:\s*[:—–-]\s*(.*?))?\
 /** Heading que parece tarefa: o que não casa `TAREFA_RE` vai a perguntar, nunca some. */
 const PARECE_TAREFA_RE = /^#{1,6}\s*(?:Tarefa|Task)\b/i;
 const SECAO_RE = /^#{1,3}\s/;
+/** Cabeçalho de fase: `## Fase <id>`, com título opcional depois de `—`, `–`, `:` ou `-`. */
+const FASE_CAB_RE = /^##\s+Fase\s+([^\s:—–]+)(?:\s*[:—–-]\s.*)?$/;
+/** Heading que parece fase: o que não casa `FASE_CAB_RE` vai a perguntar, nunca some. */
+const PARECE_FASE_RE = /^#{1,6}\s*Fase\s+F\d/i;
 const ANOTACAO_RE = /^\s*(?:[-*]\s+)?\*\*([^*:]+):\*\*\s*(.*?)\s*$/;
 const ARQUIVO_RE = /^\s*[-*]\s+[^:`]+:\s*(.*)$/;
 const PASSO_RE = /^\s*[-*]\s+\[[ xX]\]\s+\*\*(?:Passo|Step)\b/;
@@ -136,9 +151,10 @@ function caminhos(texto) {
   return [...texto.matchAll(/`([^`\n]+)`/g)].map((m) => m[1].trim().replace(/:\d+(?:-\d+)?$/, "")).filter((c) => c && !/\s/.test(c));
 }
 
-/** Topo, blocos de tarefa (linhas `[inicio, fim)`) e seções `##` do plano. */
+/** Topo, blocos de tarefa (linhas `[inicio, fim)`), cabeçalhos de fase e seções `##` do plano. */
 function recortar(L) {
   const tarefas = [];
+  const fases = [];
   const secoes = new Map();
   let aberta = null;
   let secao = null;
@@ -157,18 +173,24 @@ function recortar(L) {
       aberta = { id: `T${Number(t[1])}`, titulo: t[2] ?? "", inicio: i, fim: L.length };
       tarefas.push(aberta);
     } else if (/^##\s/.test(linha)) {
+      const f = FASE_CAB_RE.exec(linha.trim());
+      if (f) fases.push({ id: f[1], inicio: i });
       secao = { inicio: i, fim: L.length };
       secoes.set(linha.replace(/^##\s+/, "").trim(), secao);
     }
   }
-  const topo = tarefas.length ? tarefas[0].inicio : L.length;
-  return { topo, tarefas, secoes };
+  const topo = Math.min(tarefas.length ? tarefas[0].inicio : L.length, fases.length ? fases[0].inicio : L.length);
+  return { topo, tarefas, fases, secoes };
 }
 
-/** Anotações do topo: tudo antes da primeira tarefa, também sob um `## Contexto`. */
-function lerTopo(L, fim) {
+/**
+ * Anotações de um trecho fora de tarefa, linhas `[ini, fim)`: o topo (tudo antes da
+ * primeira tarefa e do primeiro cabeçalho de fase, também sob um `## Contexto`) ou o
+ * trecho entre um cabeçalho de fase e a primeira tarefa dele.
+ */
+function lerTopo(L, ini, fim) {
   const topo = new Map();
-  for (const { linha, codigo } of L.slice(0, fim)) {
+  for (const { linha, codigo } of L.slice(ini, fim)) {
     if (codigo) continue;
     const a = ANOTACAO_RE.exec(linha);
     const campo = a && ({ fase: "Fase", modelo: "Modelo", tier: "Tier", "largura do ciclo": "Largura do ciclo" })[semAcento(a[1])];
@@ -241,8 +263,8 @@ function lerTarefa(L, t) {
  */
 export function lerPlanoPublico(texto) {
   const L = linhasDo(texto);
-  const { topo: fimDoTopo, tarefas } = recortar(L);
-  const topo = lerTopo(L, fimDoTopo);
+  const { topo: fimDoTopo, tarefas, fases: cabecalhos } = recortar(L);
+  const topo = lerTopo(L, 0, fimDoTopo);
   const invalidas = [];
   const ausentes = [];
 
@@ -254,8 +276,36 @@ export function lerPlanoPublico(texto) {
   const furo = tarefas.findIndex((t, i) => t.id !== `T${i + 1}`);
   if (furo >= 0) invalidas.push({ campo: "Tarefa", valor: `esperada T${furo + 1}, veio ${tarefas[furo].id} — a perguntar` });
 
-  const fase = topo.get("Fase") ?? "F1";
-  if (!FASE_RE.test(fase)) invalidas.push({ campo: "Fase", valor: fase });
+  for (const [i, { linha, codigo }] of L.entries())
+    if (!codigo && PARECE_FASE_RE.test(linha) && !FASE_CAB_RE.test(linha.trim())) invalidas.push({ campo: "Fase", valor: `linha ${i + 1} fora do formato: ${linha.trim()} — a perguntar` });
+
+  // Fases: sem cabeçalho, o arquivo é uma fase (o `**Fase:**` do topo, default F1); com
+  // cabeçalho, uma por `## Fase F<n>`, na ordem do arquivo, e a tarefa é da do cabeçalho acima.
+  const fases = [];
+  const faseDaTarefa = (t) => {
+    if (!cabecalhos.length) return fases[0].id;
+    const acima = cabecalhos.filter((c) => c.inicio < t.inicio).at(-1);
+    return acima ? acima.id : null;
+  };
+  if (!cabecalhos.length) {
+    const fase = topo.get("Fase") ?? "F1";
+    if (!FASE_RE.test(fase)) invalidas.push({ campo: "Fase", valor: fase });
+    fases.push({ id: fase, model: topo.get("Modelo") ?? null, tier: topo.get("Tier") ?? null });
+  } else {
+    if (topo.has("Fase")) invalidas.push({ campo: "Fase", valor: `**Fase:** ${topo.get("Fase")} no topo junto com cabeçalho de fase — a perguntar` });
+    for (const [k, c] of cabecalhos.entries()) {
+      const proximo = cabecalhos[k + 1]?.inicio ?? L.length;
+      const primeira = tarefas.find((t) => t.inicio > c.inicio)?.inicio ?? L.length;
+      const dela = lerTopo(L, c.inicio + 1, Math.min(proximo, primeira));
+      if (dela.has("Fase")) invalidas.push({ campo: "Fase", valor: `**Fase:** ${dela.get("Fase")} sob o cabeçalho ${c.id} — a perguntar` });
+      if (!FASE_RE.test(c.id)) invalidas.push({ campo: "Fase", valor: `${c.id} fora da forma F<n> — a perguntar` });
+      if (fases.some((f) => f.id === c.id)) {
+        invalidas.push({ campo: "Fase", valor: `${c.id} repetida — a perguntar` });
+        continue;
+      }
+      fases.push({ id: c.id, model: dela.get("Modelo") ?? topo.get("Modelo") ?? null, tier: dela.get("Tier") ?? topo.get("Tier") ?? null });
+    }
+  }
   let largura = 1;
   if (!topo.has("Largura do ciclo")) ausentes.push({ campo: "Largura do ciclo" });
   else if (LARGURA_RE.test(topo.get("Largura do ciclo"))) largura = Number(topo.get("Largura do ciclo"));
@@ -269,6 +319,8 @@ export function lerPlanoPublico(texto) {
   for (const t of tarefas) {
     if (vistos.has(t.id)) invalidas.push({ campo: "Tarefa", valor: `${t.id} repetida`, task: t.id });
     vistos.add(t.id);
+    const fase = faseDaTarefa(t);
+    if (fase === null) invalidas.push({ campo: "Fase", valor: "tarefa antes do primeiro cabeçalho de fase — a perguntar", task: t.id });
     const lida = lerTarefa(L, t);
     const a = lida.anotacoes;
     for (const p of lida.problemas) invalidas.push({ ...p, task: t.id });
@@ -320,12 +372,16 @@ export function lerPlanoPublico(texto) {
     if (a.has("Tier")) bullets.set("Tier", a.get("Tier"));
     tasks.push({ id: t.id, title: t.titulo, phase: fase, bullets, satisfiesRaw: marcas.length ? `(${marcas.join(", ")})` : "" });
   }
-  if (tasks.length && !tasks.some((t) => /\bfechamento-de-fase\b/.test(t.satisfiesRaw)))
-    invalidas.push({ campo: "Marcas", valor: `nenhuma tarefa de ${fase} com fechamento-de-fase — a perguntar` });
+  // Cada fase com a sua tarefa de fechamento; o plano de uma fase sem tarefa já vai a
+  // perguntar por "nenhuma tarefa", e o de várias fases cobra fase a fase.
+  if (tasks.length || cabecalhos.length)
+    for (const f of fases)
+      if (!tasks.some((t) => t.phase === f.id && /\bfechamento-de-fase\b/.test(t.satisfiesRaw)))
+        invalidas.push({ campo: "Marcas", valor: `nenhuma tarefa de ${f.id} com fechamento-de-fase — a perguntar` });
 
   return {
     ciclo: null,
-    fases: [{ id: fase, model: topo.get("Modelo") ?? null, tier: topo.get("Tier") ?? null }],
+    fases,
     tasks,
     declaracoes: { largura, porTask, invalidas, ausentes, anotacoes, aPerguntar: [...aPerguntar] },
   };

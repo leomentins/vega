@@ -7,9 +7,9 @@
  * observou, e devolve UMA linha JSON. O script nunca chama ferramenta de
  * sessão — quem abre, avisa e arquiva é a maestra (D-VEGA22-2).
  *
- *   proximo  [--repo <worktree>] --ciclo <id> [--entrada <arquivo|json>] [--reinicio <arquivo>] [--ponte-ativa-desde <iso>] [--nivel maestra]
- *      `--nivel maestra`: as `filhas` da entrada são as condutoras (cada uma com `fase`); emite
- *      criar-condutora · esperar (condutora-viva) · arquivar · criar-fechamento. Sem a flag, o laço da condutora.
+ *   proximo  [--repo <worktree>] --ciclo <id> [--entrada <arquivo|json>] [--reinicio <arquivo>] [--ponte-ativa-desde <iso>]
+ *      o laço da condutora. `--nivel` (o nível da maestra) saiu na VEGA-37 T8: sai 2 com o motivo do
+ *      papel aposentado; a condutora que fecha a fase cria a seguinte (`criar` do `encerrar-sessao`).
  *      o `--reinicio` só vale confirmado pela ponte (`reinicioConfirmado`): sem confirmação é
  *      ignorado, com uma linha de aviso no stderr
  *   reinicio-valido --arquivo <ponte-reinicio.json> [--ponte-ativa-desde <iso>]
@@ -19,12 +19,18 @@
  *      segmento da Verificação não está no PATH (achado T10 da T18); palavra-chave de shell não conta.
  *      `saidaForaDoGit` + `avisoSaida` quando a tentativa trazida acrescentou padrão a um `.gitignore`
  *   retomar  [--repo <worktree>] --ciclo <id>
+ *      também `nota` (a nota de passagem mais recente), `avisos` (os das operárias, por referência
+ *      do origin) e `ci` (o último run da proposta, pelo gh): a partida da herdeira (VEGA-37 T17)
+ *      `conduzir`: a fase que a condutora que retoma conduz, só pelas marcas (`faseAConduzir`, VEGA-37 T11):
+ *      ciclo do modelo antigo encerrado à espera da maestra segue na fase seguinte, sem maestra
  *   auditar  --nota <arquivo> [--repo <repo>]
  *   auditar  --ciclo <id> --ref <ref> [--repo <repo>] [--exigir-fases F1,F2] [--exigir-encerramentos F1,ciclo]
  *      exit 1 com violação, fase pedida sem condução ou encerramento pedido ausente (T22)
  *
  * Pré-voo (T30, D-VEGA29-15) — `--ciclo` opcional:
- *   pre-voo --repo <projeto> [--ciclo <id>]
+ *   pre-voo --repo <projeto> [--ciclo <id>] [--herdeira --entrada <json>]
+ *      `--herdeira` (VEGA-37 T17): soma as conferências da partida da herdeira —
+ *      árvore na ponta do ramo, época da posse = a da nota + 1, inscrição feita (ou projeto sem proposta)
  *      confere plugin carregado, instalação única, ponte com Restart e tráfego não essencial pelo
  *      contrato do host que a declaração dá (v5); falha ⇒ `perguntar pre-voo` com `falhas`
  *      ({ conferencia, encontrado, remedio }), exit 1, e nenhuma filha abre. Com `--ciclo`, avisa
@@ -49,7 +55,7 @@
  *      autorização herdada pelo re-plano de ruling do `/intra-plan` (F4.17): refaz o `proximo` e só
  *      grava `Conducao: F<n> autorizada` (trailers `Conducao-Herdada`, `Conducao-Replano`) quando ele
  *      devolve `herdar-autorizacao` da mesma fase e do mesmo nonce
- *   abrir T<k> --tentativa <n> --nonce <x> --modo-maestra <modo> [--falhou <n-1> --coberta sim|nao|ambiente [--motivo <texto>]]
+ *   abrir T<k> --tentativa <n> --nonce <x> --modo-maestra <modo> [--falhou <n-1> --coberta sim|nao|ambiente|pergunta [--motivo <texto>]]
  *      `--modo-maestra` = o `session_context.permission_mode` do `get_session` da maestra; fora de `auto`
  *      sai `perguntar modo-da-maestra` sem gravar nada (P19 do ATRM-51)
  *      grava também o brief da filha em `refs/conducao-brief/<ciclo>/T<k>/<n>` e devolve `partida`,
@@ -61,9 +67,17 @@
  *      pelo comando dela e entra no commit, sem perguntar (`regeneradas`; HN-29 T23)
  *      `--aprovado` aceita o SHA inteiro ou prefixo único de 7+ caracteres da ponta;
  *      o que não confere sai `perguntar` com motivo `aprovado-nao-confere` (P24 do ATRM-51)
+ *      registro de caso consentido que não se grava depois da trazida sai `perguntar consentimento-nao-gravado`
+ *      com o trabalho trazido e `remedio: regravar-consentimentos` (D-VEGA37-36); o `proximo` repete a
+ *      pergunta enquanto faltar registro
+ *   regravar-consentimentos T<k> --tentativa <n>
+ *      relê os casos do registro `trazida`, grava só os que faltam no git (idempotente) e sai `regravados`
+ *      com os SHAs, ou a mesma pergunta
  *   conferir-carimbo T<k>
  *   registrar-conferencia T<k> --verificacao verde|declarada-pos-merge --publicacao feita|nao-se-aplica [--sessao <id>] [--sim <texto>] [--operador <texto>]
- *      `--publicacao feita` exige `--sim` = o texto do operador autorizando a publicação daquela task (F4.17)
+ *      `--publicacao feita` exige `--sim` = o texto do operador autorizando a publicação só na primeira
+ *      publicação do ciclo (F4.17); ela grava o caso `publicacao-do-ciclo`, e as seguintes do ciclo fecham sem
+ *      `--sim`, citando o sim e a marca de origem (D-VEGA37-52)
  *      task de conferência do operador por pergunta (`(conferencia-do-operador)`, T14): sem `--operador <texto
  *      do operador dizendo sim>` não grava e sai `perguntar conferencia-do-operador` (opções sim · nao)
  *   registrar-conferencia T<k> --manual --sim <texto> --publicacao feita|nao-se-aplica
@@ -75,14 +89,22 @@
  *      = o texto do operador dizendo não (obrigatório), e o 3º não sai `perguntar teto-de-rodadas`. Por arquivo
  *      (caso declarado no adaptador, por exemplo um gate de UX por arquivo; `needs-rework` é o mesmo não): o approval do
  *      HEAD diz não (`verdict: NEEDS_REWORK`) com `rodada` abaixo do teto do rito (3 ⇒ `perguntar
- *      teto-de-rodadas`), e o brief entrega a rodada B ou C
+ *      teto-de-rodadas`), e o brief entrega a rodada B ou C; a B feita fora da task por re-plano de decisão
+ *      registrada, com task nova de que o gate passa a depender, conta (trailer `Conducao-Rodada-B-Replano`)
  *   registrar-conferencia T<k> --rodada carimbo [--sessao <id>]
  *      mesma task, caso por arquivo, approval em NEEDS_REWORK, tentativa trazida que só acrescenta carimbo (o carimbo que o
  *      adaptador declara; outro arquivo ⇒ `rodada-carimbo-fora-do-carimbo`):
  *      grava `Conducao: T<k> tentativa <n> carimbo`, que não conta como rodada nem no teto
  *   recusar-publicacao T<k> [--motivo <texto>]
  *   reverter-trazido T<k> [--motivo <texto>]
- *   registrar-falha T<k> --tentativa <n> --coberta sim|nao|ambiente [--motivo <texto>]
+ *   registrar-falha T<k> --tentativa <n> --coberta sim|nao|ambiente|pergunta [--motivo <texto>]
+ *      `ambiente` e `pergunta` exigem `--motivo` e não contam no teto de 2 do trabalho; `ambiente` tem
+ *      teto próprio (`BOTOES.tetoFalhasAmbiente`), `pergunta` — tentativa encerrada porque o operador
+ *      respondeu a `pergunta-da-filha` com re-plano (ATRM-54 F4) — não conta em teto nenhum
+ *      (trailer `Conducao-Falha-Pergunta`; o `retomar` mostra `falhasPergunta`). `pergunta` exige no git o
+ *      aviso atual `T<k>-FALHA pergunta <nonce>` da tentativa (o do origin; o visto pela espera só com o origin ilegível; sha no trailer
+ *      `Conducao-Aviso`); sem ele sai `perguntar pergunta-sem-aviso` sem gravar. Tentativa já marcada com
+ *      outra coberta sai `perguntar coberta-diverge-da-marca`: a marca não se reclassifica
  *   empurrar-copia
  *   esperar-filha T<k> --tentativa <n> --teto-chamador-min <n> [--max-min 4] [--intervalo-s 30] [--desde <sha>] [--aviso-tratado <linha>]
  *      `--desde`: a ponta já vista não conta como `andou`; `--aviso-tratado`: o aviso com essa linha
@@ -92,6 +114,29 @@
  *      com a `linha` do aviso (P22 do ATRM-51) — a maestra roda em segundo plano; exit 0, ou 2 sem o teto de
  *      quem chama ou com --max-min acima dele (achado T13 da T18)
  *   limpar
+ *   empurrar-ramo --nonce <x>
+ *      o push do ramo do ciclo no fechamento (VEGA-37 T9): refaz o `proximo` e só empurra quando
+ *      ele devolve `empurrar-ramo` com o mesmo nonce; só da árvore dona da posse (o `posse.comando` da
+ *      declaração; sem ele, sem cerca e o pulo na saída), só com a proposta aberta
+ *      (projeto `ci: false`: sem proposta, pula inscrição e CI), nunca forçado
+ *   passar F<n> --nota <arquivo> [--entrada <json|arquivo com filhas>]
+ *      a nota de passagem no molde (`references/nota-de-passagem.md`, até `ALVO_NOTA_TOKENS`) vai a
+ *      `<pasta do canonico>/notes/passagem-F<n>-<k>.md` com época, lock_id e ponta na cabeça, e a marca
+ *      `Conducao: F<n> em passagem` sai no mesmo commit (VEGA-37 T15); só em fronteira limpa (nenhuma
+ *      tentativa em voo, trazida sem conferência nem filha viva da entrada). Em passagem, `abrir` e
+ *      `registrar-conferencia --publicacao feita` recusam (`em-passagem`) até a herdeira confirmar
+ *      (`Conducao: F<n> passagem confirmada`, VEGA-37 T16) ou a anterior desistir
+ *   desistir-da-passagem F<n> [--motivo <texto>]
+ *      `Conducao: F<n> passagem desistida`: a anterior sai de "em passagem" e segue dona
+ *   desanexar-ramo | confirmar-passagem | retomar-da-passagem --nonce <x> --entrada <json|arquivo>
+ *   desmontar-anterior --nonce <x> --entrada <json|arquivo> --arquivadas <arquivo>
+ *      os verbos da ordem da troca refazem o `proximo` e levam a MESMA `--entrada` do `proximo` que
+ *      emitiu a ação (o `comando` da ação o diz, com o campo que muda a ação: `herdeira` no
+ *      `retomar-da-passagem`, `inscrita` no `confirmar-passagem`, `anterior` no `desmontar-anterior`);
+ *      sem `--entrada` recusam (`sem-entrada`), e ação diferente recusa nomeando a entrada (VEGA-37 T51)
+ *   Cerca do par da posse (D-VEGA37-17): todo verbo que grava marca ou empurra a cópia lê a posse
+ *      (`posse.comando` da declaração) e recusa, exit 1 e o motivo no stderr, posse alheia, leitura que
+ *      falha, dona sem `lock_id` ou época, e par (`lock_id`, época) da sessão diferente do da posse
  *   encerrar-sessao --fase F<n>|ciclo --nonce <x>
  *      marca `Conducao: F<n> sessao encerrada` (trailer `Conducao-Encerrada`) e empurra a cópia (T21);
  *      `--fase ciclo` é a do `fechar-ciclo`: a sessão que a grava para (T22); com o nonce já na
@@ -110,8 +155,11 @@
  * muda a saída nem o exit do verbo.
  *
  * Ações do `proximo`: arquivar · abrir · trazer · esperar · perguntar · herdar-autorizacao ·
- * fechar-fase · encerrar-sessao · fechar-ciclo · parar; no nível da maestra, criar-condutora ·
- * criar-fechamento. Toda ação leva nonce determinístico por ciclo, alvo,
+ * fechar-fase · empurrar-ramo · inscrever-na-proposta (os passos do ramo no fechamento, VEGA-37 T9:
+ * `comPassosDoRamo`) · encerrar-sessao (VEGA-37 T8; desde a T16 sem `criar`: a seguinte nasce
+ * pela ordem da troca) · fechar-ciclo · parar · e a ordem da troca (VEGA-37 T16, `regraPassagem`
+ * de regras.mjs): passar · desanexar-ramo · criar-condutora (a herdeira) · passar-posse ·
+ * soltar-inscricao · confirmar-passagem · retomar-da-passagem · arquivar-se · desmontar-anterior. Toda ação leva nonce determinístico por ciclo, alvo,
  * tentativa e HEAD: o mesmo estado repetido emite a mesma ação com o mesmo
  * nonce. `arquivar <sessão>` (D-VEGA22-25) não depende do HEAD e vem antes de
  * toda outra ação.
@@ -124,6 +172,7 @@
  *     "ci": { "sha": "…", "veredito": "verde|vermelho", "run": <id> },
  *     "sessaoMaestra": "<id da sessão que chama>",
  *     "proposta": { "numero": <N>, "state": "OPEN|MERGED|CLOSED" },
+ *     "inscrita": true,          (a condutora já chamou `subscribe_pr_activity` na proposta, T9)
  *     "aprovacoes": [{ "task": "T<k>", "nonce": "…" }] }
  * `ci` é o veredito que a maestra leu por dentro do run (`ler-run`); o
  * `proximo` não lê run nenhum (limite declarado, T21). `sessaoMaestra` só
@@ -147,13 +196,14 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { accessSync, constants as fsConstants, existsSync, readdirSync, readFileSync } from "node:fs";
+import { accessSync, appendFileSync, constants as fsConstants, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import * as adaptador from "./adaptador.mjs";
 import { BOTOES } from "./botoes.mjs";
 import * as gitConducao from "./git-conducao.mjs";
+import { gravarCasosHerdados, lerConsentimentos } from "./consentimento.mjs";
 import * as logEventos from "./log-eventos.mjs";
 import * as pergunta from "./pergunta.mjs";
 import { preVoo } from "./pre-voo.mjs";
@@ -162,10 +212,6 @@ import { ErroGitPrazo, tentarGit } from "./git-exec.mjs";
 import { RE, lerMarcas } from "./marcas.mjs";
 import {
   contextoDaDecisao,
-  maestraArquivarCondutora,
-  maestraVigiarCondutora,
-  maestraCriarCondutora,
-  maestraCriarFechamento,
   regraAbrir,
   regraArquivar,
   regraAutorizarFase,
@@ -175,6 +221,8 @@ import {
   regraFazerCondutora,
   regraFecharCiclo,
   regraFecharFase,
+  regraPassagem,
+  regraPassarNaFronteira,
   regraPublicacaoRecusada,
   regraReabertaSemFechamento,
   regraReplano,
@@ -185,7 +233,7 @@ import {
   regraWorkstation,
   vagasDoTeto,
 } from "./regras.mjs";
-import { casoDeConferencia, opcoesDaConferencia } from "./verbos.mjs";
+import { casoDeConferencia, opcoesDaConferencia, rulingDoReplano } from "./verbos.mjs";
 import {
   ErroPlano,
   codigoDoPlano,
@@ -195,7 +243,7 @@ import {
   tasksQueMudaramDeClasse,
 } from "./ler-plano.mjs";
 
-const { parsePhaseCommit, sameCycle } = createRequire(import.meta.url)("../../hooks/lib/phase-commit-regex.js");
+const { parsePhaseCommit } = createRequire(import.meta.url)("../../hooks/lib/phase-commit-regex.js");
 
 /**
  * A Verificação roda embrulhada: sem as variáveis de produção que a declaração
@@ -272,6 +320,9 @@ export function estadoDasTasks(marcas, refs, trazidas = []) {
   // Falha de ambiente (P7 do ATRM-51) não conta no teto de trabalho, mas tem teto
   // próprio (`TETO_FALHAS_AMBIENTE`): sem ele, quem classifica reabriria para sempre.
   const falhasAmbiente = new Map();
+  // Tentativa encerrada por pergunta respondida com re-plano (ATRM-54 F4): não conta
+  // em teto nenhum; contada só para o `retomar` mostrar.
+  const falhasPergunta = new Map();
   const falhadas = new Set(); // `T<k>/<n>` com commit `falhou`
   const decididos = new Set(); // nonces de tentativa já decididas: conferida, falhou, revertida, rodada, carimbo
   for (const m of marcas) {
@@ -279,6 +330,7 @@ export function estadoDasTasks(marcas, refs, trazidas = []) {
       falhadas.add(`${m.task}/${m.tentativa}`);
       if (!m.coberta) falhas.set(m.task, (falhas.get(m.task) ?? 0) + 1);
       if (m.ambiente) falhasAmbiente.set(m.task, (falhasAmbiente.get(m.task) ?? 0) + 1);
+      if (m.pergunta) falhasPergunta.set(m.task, (falhasPergunta.get(m.task) ?? 0) + 1);
     }
     const n = m.trailers?.["Conducao-Nonce"];
     if (n && (m.tipo === "conferida" || m.tipo === "falhou" || m.tipo === "revertida" || m.tipo === "rodada" || m.tipo === "carimbo")) decididos.add(n);
@@ -304,7 +356,7 @@ export function estadoDasTasks(marcas, refs, trazidas = []) {
     if (feitas.has(r.task) || encerradas.get(r.task)?.has(r.tentativa)) continue;
     pendentes.set(r.task, r);
   }
-  return { feitas, recusadas, emVoo, falhas, falhasAmbiente, maxTent, trazidas: pendentes, decididos, revertidasSemFalha };
+  return { feitas, recusadas, emVoo, falhas, falhasAmbiente, falhasPergunta, maxTent, trazidas: pendentes, decididos, revertidasSemFalha };
 }
 
 // ── decisão (pura) ───────────────────────────────────────────────────────────
@@ -412,17 +464,8 @@ export function diferencaDoPlano(antigo, novo) {
   return out;
 }
 
-/**
- * Re-plano de ruling do `/intra-plan` (F4.17): subject
- * `<ciclo>-F<n>/D-<CICLO>-<N> — re-plano de <alvo>: …`, reconhecido pelo
- * `phase-commit-regex.js` do harness, do mesmo ciclo. Devolve o id do ruling
- * ou null. `reconhecer` existe para a contraprova (regex desligado ⇒ null).
- */
-export function rulingDoReplano(subject, ciclo, reconhecer = parsePhaseCommit) {
-  const p = reconhecer(subject);
-  if (!p || !p.ruling || !sameCycle(p.cycleId, ciclo)) return null;
-  return p.description.startsWith(`${p.ruling} — re-plano de `) ? p.ruling : null;
-}
+/** Re-plano de ruling do `/intra-plan` (F4.17): a política mora em `verbos.mjs`, que o rito de rodadas também lê. */
+export { rulingDoReplano };
 
 /**
  * A ordem das regras do `proximo` (VEGA-29 T7): a primeira que devolve ação
@@ -433,9 +476,11 @@ export function rulingDoReplano(subject, ciclo, reconhecer = parsePhaseCommit) {
  */
 export const ORDEM_DAS_REGRAS = Object.freeze([
   regraArquivar,
+  regraPassagem,
   regraFaseForaDoPlano,
   regraFecharCiclo,
   regraEncerrarSessao,
+  regraPassarNaFronteira,
   regraAutorizarFase,
   regraReplano,
   regraReabertaSemFechamento,
@@ -473,11 +518,12 @@ export function semSaidasGeradasNaVaga(ctx, geradas) {
 /**
  * O contexto da decisão (regras.mjs `contextoDaDecisao`), com a fábrica de
  * ações `acao` e os auxiliares desta casa injetados. Os campos estão descritos lá;
- * `geradas` são os caminhos das saídas geradas declaradas (`semSaidasGeradasNaVaga`).
+ * `geradas` são os caminhos das saídas geradas declaradas (`semSaidasGeradasNaVaga`);
+ * `consentimentos` são os casos do ciclo no git (`lerConsentimentos`).
  */
-export function contextoDoProximo({ ciclo, head, plano, planoBlob, planoHead, planoHeadBlob, diffPlano, autorizacoes, estado, entrada = {}, agora = null, reinicioEm = null, encerradas = new Set(), repo = null, replanos = null, reconhecer = parsePhaseCommit, autorizacaoDoCiclo = null, conferencia = [], temCi = true, geradas = [], tiers = {} }, acao) {
+export function contextoDoProximo({ ciclo, head, plano, planoBlob, planoHead, planoHeadBlob, diffPlano, autorizacoes, estado, entrada = {}, agora = null, reinicioEm = null, encerradas = new Set(), repo = null, replanos = null, reconhecer = parsePhaseCommit, autorizacaoDoCiclo = null, conferencia = [], temCi = true, geradas = [], tiers = {}, passagem = null, consentimentos = [] }, acao) {
   const ctx = contextoDaDecisao(
-    { ciclo, head, plano, planoBlob, planoHead, planoHeadBlob, diffPlano, autorizacoes, estado, entrada, agora, reinicioEm, encerradas, repo, replanos, reconhecer, autorizacaoDoCiclo, conferencia, temCi, tiers },
+    { ciclo, head, plano, planoBlob, planoHead, planoHeadBlob, diffPlano, autorizacoes, estado, entrada, agora, reinicioEm, encerradas, repo, replanos, reconhecer, autorizacaoDoCiclo, conferencia, temCi, tiers, passagem, consentimentos },
     {
       acao,
       nonce,
@@ -490,6 +536,8 @@ export function contextoDoProximo({ ciclo, head, plano, planoBlob, planoHead, pl
       tasksQueMudaramDeClasse,
       textoDaProximaSessao,
       textoDoFechamento,
+      textoDaHerdeira,
+      prazoConfirmacaoMin: BOTOES.prazoConfirmacaoPassagemMin,
       fechamentoDoCiclo: () => fechamentoDoProjeto(repo),
       casoDeConferencia,
       opcoesDaConferencia,
@@ -527,68 +575,341 @@ export function decidir(params) {
 }
 
 /**
- * Ordem do nível da maestra (`proximo --nivel maestra`): arquivar a condutora
- * encerrada antes de criar a seguinte, a vigia da condutora viva (T39) antes
- * de toda espera, o fechamento do ciclo antes da fase, e a criação da
- * condutora por último, sempre decidindo.
+ * Os passos do ramo no fechamento da fase e do ciclo (VEGA-37 T9, §2.2#3): a
+ * condutora empurra o ramo, se inscreve na proposta e lê o CI pelo próprio
+ * laço, sem pedir a uma sessão acima. Sobre a ação que as regras decidiram
+ * para o fechamento (`esperar ci-pendente`, `encerrar-sessao`, `fechar-ciclo`),
+ * em ordem:
+ *   1. `empurrar-ramo` — a ponta do ramo no origin (`ramo.noOrigin`, pela
+ *      referência de rastreio) não é o HEAD;
+ *   2. `inscrever-na-proposta` — empurrado e a entrada sem `inscrita: true`
+ *      (a condutora chama `subscribe_pr_activity`; o script só emite);
+ *   3. `esperar ci-pendente` com `passo: "ci"` — o verbo `ci` que já existe,
+ *      cujo veredito a condutora põe na entrada (`ci`).
+ * CI verde ou vermelho no HEAD já pressupõe o ramo no origin: a ação passa
+ * como veio. Projeto sem CI (`temCi: false`, que é também sem proposta) só
+ * empurra, e os dois pulos saem na ação. Sem `ramo` (árvore sem `origin`, ou
+ * HEAD destacado) não há para onde empurrar e a ação passa como veio.
  */
-export const ORDEM_DA_MAESTRA = Object.freeze([maestraArquivarCondutora, maestraVigiarCondutora, maestraCriarFechamento, maestraCriarCondutora]);
+export function comPassosDoRamo(decidida, { ramo, temCi, entrada = {} }) {
+  const { ciclo, head, plano } = decidida;
+  const fabrica = (tipo, alvo, tentativa, campos) => ({ acao: tipo, nonce: nonce(ciclo, alvo, tentativa, head), ciclo, head, plano, ...campos });
+  const doFechamento =
+    (decidida.faseSeguinte !== undefined || decidida.fase === "ciclo") &&
+    (decidida.acao === "encerrar-sessao" || decidida.acao === "fechar-ciclo" || (decidida.acao === "esperar" && decidida.motivo === "ci-pendente"));
+  if (!doFechamento || !ramo) return decidida;
+  if (temCi && decidida.acao !== "esperar") return decidida;
+  const alvo = decidida.fase;
+  if (ramo.noOrigin !== head) {
+    const pulos = temCi ? [] : [{ passo: "inscrever-na-proposta", motivo: "projeto-sem-proposta" }, { passo: "ci", motivo: "projeto-sem-ci" }];
+    return fabrica("empurrar-ramo", `ramo:${alvo}`, 0, { fase: alvo, ramo: ramo.nome, sha: head, depois: decidida.acao, ...(pulos.length ? { pulos, motivo: gitConducao.motivoDosPulos(pulos) } : {}) });
+  }
+  if (!temCi) return decidida;
+  if (entrada.inscrita !== true)
+    return fabrica("inscrever-na-proposta", `inscricao:${alvo}`, 0, { fase: alvo, ramo: ramo.nome, proposta: entrada.proposta?.numero ?? null, ferramenta: "subscribe_pr_activity", depois: "ci" });
+  return { ...decidida, passo: "ci" };
+}
 
 /**
- * A ação do nível da maestra, sem I/O (regras.mjs §nível da maestra): as
- * `filhas` da entrada são as condutoras, cada uma com a `fase`; `plano` é o
- * do HEAD — a maestra não abre neta, então não lê o plano congelado.
+ * `empurrar-ramo --nonce <x>` (VEGA-37 T9): não confia em quem chama — refaz o
+ * `proximo` e só empurra quando ele devolve `empurrar-ramo` com o mesmo nonce
+ * (o nonce leva o HEAD: o HEAD conferido é o que o `proximo` viu). As cercas
+ * de posse e de proposta e o push sem força são de `gitConducao.empurrarRamo`.
  */
-export function decidirMaestra({ ciclo, head, plano, planoBlob, encerradas = new Set(), autorizadas = new Set(), cicloAutorizado = false, entrada = {}, repo = null, agora = Math.floor(Date.now() / 1000) }) {
-  const fabrica = (tipo, alvo, tentativa, campos) => ({
-    acao: tipo,
-    nonce: nonce(ciclo, alvo, tentativa, head),
-    ciclo,
-    head,
-    plano: planoBlob,
-    nivel: "maestra",
-    ...campos,
-  });
-  const acao = pergunta.comPergunta(fabrica);
-  const ctx = {
-    ciclo,
-    head,
-    planoBlob,
-    repo,
-    plano,
-    encerradas,
-    autorizadas,
-    cicloAutorizado,
-    entrada,
-    acao,
-    nonce,
-    condutoras: (Array.isArray(entrada.filhas) ? entrada.filhas : []).map((f) => ({
-      ...f,
-      estado: estadoDaFilha(f?.estado),
-      ...(f?.statusBucket !== undefined ? { statusBucket: estadoDaFilha(f.statusBucket) } : {}),
-    })),
-    agora,
-    silencioCondutoraCaidaMin: BOTOES.silencioCondutoraCaidaMin,
-    epoch,
-    textoDaProximaSessao,
-    textoDoFechamento,
-    fechamentoDoCiclo: () => fechamentoDoProjeto(repo),
-  };
-  for (const regra of ORDEM_DA_MAESTRA) {
-    const decidida = regra(ctx);
-    if (decidida) return decidida.nivel ? decidida : { ...decidida, nivel: "maestra" };
-  }
-  throw new Error("decidirMaestra: nenhuma regra decidiu — maestraCriarCondutora, a última, sempre decide");
+export function empurrarRamo({ repo, ciclo, nonce: n, ...opcoes }) {
+  if (!/^[0-9a-f]{16}$/.test(n ?? "")) throw new ErroPlano("uso", `empurrar-ramo exige --nonce, veio ${JSON.stringify(n ?? null)}`);
+  const p = proximo({ repo, ciclo });
+  if (p.acao !== "empurrar-ramo" || p.nonce !== n)
+    throw new ErroPlano("empurrar-recusado", `o proximo devolve ${p.acao}${p.motivo ? ` ${p.motivo}` : ""} (nonce ${p.nonce}), não empurrar-ramo ${n}`);
+  return { ...gitConducao.empurrarRamo({ repo, ciclo, head: p.head, ...opcoes }), fase: p.fase, nonce: n };
 }
 
 /** Raiz do plugin que carrega a skill e os verbos da condução (`<raiz>/scripts/conducao/`). */
 const RAIZ_DOS_VERBOS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
+// ── a ordem da troca (VEGA-37 T16, D-VEGA37-18, D-VEGA37-19) ────────────────
+//
+// As regras puras moram em regras.mjs (`regraPassagem`, `regraPassarNaFronteira`);
+// aqui ficam o resumo que elas leem e os verbos que executam cada passo. Todo
+// verbo da ordem refaz o `proximo` e só age quando ele devolve a mesma ação
+// com o mesmo nonce — menos o `trazer-ramo`, que roda antes do ramo existir na
+// árvore da herdeira e confere o nonce que o `criar-condutora` lhe deu.
+
+const TIPOS_DA_PASSAGEM = new Set(["passagem", "confirmada", "desistida"]);
+
+/** As árvores do repositório por `git worktree list --porcelain`: `{ caminho, head, ramo, destacada }`. */
+export function arvoresDoRepo(repo) {
+  const out = [];
+  let atual = null;
+  for (const l of git(repo, ["worktree", "list", "--porcelain"]).split("\n")) {
+    if (l.startsWith("worktree ")) {
+      atual = { caminho: l.slice("worktree ".length), head: null, ramo: null, destacada: false };
+      out.push(atual);
+    } else if (!atual) continue;
+    else if (l.startsWith("HEAD ")) atual.head = l.slice(5);
+    else if (l.startsWith("branch ")) atual.ramo = l.slice(7).replace(/^refs\/heads\//, "");
+    else if (l === "detached") atual.destacada = true;
+  }
+  return out;
+}
+
+function mesmoCaminho(a, b) {
+  try {
+    return realpathSync(a) === realpathSync(b);
+  } catch {
+    return path.resolve(a) === path.resolve(b);
+  }
+}
+
 /**
- * Texto da próxima sessão maestra (T21), na forma de `/write-plan`
- * §Granularidade de sessão: o comando da sessão nova e o pré-voo da skill,
- * com o arquivamento da sessão que encerra antes do `retomar` (uma maestra
- * por ciclo).
+ * O que impede de desmontar a árvore (`null` = limpa): mudança no `status`, ou
+ * arquivo ignorado sob `notes/sensivel/`, que o `git worktree remove` apagaria
+ * sem perguntar. Status que não se lê conta como sujo (fail-closed).
+ */
+export function sujeiraDaArvore(caminho) {
+  const st = tentarGit(caminho, ["status", "--porcelain"]);
+  if (st.status !== 0) return `status ilegível (${st.erro || `exit ${st.status}`})`;
+  if (st.saida) return `${st.saida.split("\n").length} caminho(s) no status`;
+  const sens = tentarGit(caminho, ["status", "--porcelain", "--ignored", "--", ":(glob)**/notes/sensivel/**"]);
+  if (sens.status !== 0) return `status das notas sensíveis ilegível (${sens.erro || `exit ${sens.status}`})`;
+  if (sens.saida) return `${sens.saida.split("\n").length} nota(s) sensível(is) ignorada(s)`;
+  return null;
+}
+
+/**
+ * A árvore da anterior (D-VEGA37-19): a única, fora esta, destacada na marca de
+ * passagem — o caminho sai de `git worktree list --porcelain`, nunca da nota.
+ * Nenhuma ⇒ `null` (já saiu); mais de uma ⇒ sem caminho, e nada se desmonta.
+ */
+export function arvoreDaAnterior(repo, passagem) {
+  if (!passagem) return null;
+  const propria = git(repo, ["rev-parse", "--show-toplevel"]).trim();
+  const achadas = arvoresDoRepo(repo).filter((a) => a.destacada && a.head === passagem && !mesmoCaminho(a.caminho, propria));
+  if (!achadas.length) return null;
+  if (achadas.length > 1)
+    return { caminho: null, nome: null, suja: true, motivo: `${achadas.length} árvores destacadas em ${passagem.slice(0, 8)} (${achadas.map((a) => a.caminho).join(", ")}): nenhuma se desmonta` };
+  const caminho = achadas[0].caminho;
+  const sujeira = sujeiraDaArvore(caminho);
+  return { caminho, nome: path.basename(caminho), suja: sujeira !== null, motivo: sujeira };
+}
+
+/**
+ * O resumo da passagem que as regras leem (`ctx.passagem`, comentário em
+ * regras.mjs): das marcas, sem I/O; com passagem aberta ou confirmada por
+ * último, também a posse (pelo leitor da cerca), o ramo anexado ou não, a
+ * confirmação na ponta do ramo (a anterior destacada não a vê no HEAD) e a
+ * árvore da anterior.
+ */
+export function resumoDaPassagem(repo, ciclo, marcas, { lerPosse = gitConducao.lerPosseDaCerca } = {}) {
+  const encerradas = new Set();
+  const passarDepoisDe = new Set();
+  const falhas = new Map();
+  const noMeio = new Map();
+  const confirmadas = new Set();
+  let aberta = null;
+  let ultima = null;
+  for (const m of marcas) {
+    if (m.tipo === "encerrada") {
+      encerradas.add(m.fase);
+      if (m.depois === "passar") passarDepoisDe.add(m.fase);
+    }
+    if (!TIPOS_DA_PASSAGEM.has(m.tipo)) continue;
+    ultima = m;
+    if (m.tipo === "passagem") aberta = { ...m, fronteira: encerradas.has(m.fase) };
+    else if (m.tipo === "desistida") {
+      falhas.set(m.fase, (falhas.get(m.fase) ?? 0) + 1);
+      aberta = null;
+    } else {
+      if (encerradas.has(m.fase)) confirmadas.add(m.fase);
+      else noMeio.set(m.fase, (noMeio.get(m.fase) ?? 0) + 1);
+      falhas.clear();
+      aberta = null;
+    }
+  }
+  const resumo = { aberta, ultima, falhas, noMeio, confirmadas, passarDepoisDe };
+  if (!aberta && ultima?.tipo !== "confirmada") return resumo;
+  let posse;
+  try {
+    posse = lerPosse(repo, ciclo);
+  } catch (e) {
+    posse = { estado: "nao-li", motivo: e.message };
+  }
+  const anexado = Boolean(tentarGit(repo, ["symbolic-ref", "-q", "HEAD"]).saida);
+  let confirmadaNoRamo = false;
+  if (aberta && !anexado && aberta.ramo) {
+    const ref = `refs/heads/${aberta.ramo}`;
+    if (tentarGit(repo, ["rev-parse", "--verify", "-q", ref]).status === 0)
+      confirmadaNoRamo = lerMarcas(repo, ref).some((m) => m.tipo === "confirmada" && m.confirma === aberta.sha);
+  }
+  // A árvore da anterior só importa a quem tem o ramo: a herdeira, para a confirmação e o desmonte.
+  const sha = aberta ? (anexado ? aberta.sha : null) : posse?.estado === "dona" ? ultima.confirma : null;
+  return { ...resumo, posse, anexado, confirmadaNoRamo, arvoreDaAnterior: sha ? arvoreDaAnterior(repo, sha) : null };
+}
+
+/**
+ * O prompt da herdeira (VEGA-37 T16): o `trazer-ramo` com o nonce que o
+ * `criar-condutora` deu, a nota, e o `proximo` na própria árvore, que segue a
+ * ordem (passar-posse, inscrição, confirmação). O passar-posse vai pelo verbo
+ * de posse da página do projeto, e o pré-voo da herdeira vem depois dele, que
+ * é quem sobe a época conferida (VEGA-37 T49). Depois da confirmação, a
+ * herdeira segue o laço da fase herdada — o desmonte da anterior, depois as
+ * ações da fase até o fim (VEGA-37 T53, D-VEGA37-56). A anterior se arquiva sozinha.
+ */
+export function textoDaHerdeira({ ciclo, fase, sessao, nota, trazer }) {
+  const verbos = `node ${RAIZ_DOS_VERBOS}/scripts/conducao/conducao.mjs`;
+  const anterior = sessao ?? "<id da condutora anterior>";
+  return [
+    `Conduzir ${ciclo} — ${fase}, como herdeira da condutora ${anterior}, pela skill ${RAIZ_DOS_VERBOS}/skills/conducao/SKILL.md. <árvore> é o diretório de trabalho desta sessão.`,
+    `1. ${verbos} trazer-ramo --repo <árvore> --ciclo ${ciclo} --ramo ${trazer.ramo ?? "<ramo do ciclo>"} --passagem ${trazer.passagem} --tentativa ${trazer.tentativa} --nonce ${trazer.nonce}`,
+    `2. ${verbos} proximo --repo <árvore> --ciclo ${ciclo} e seguir passar-posse e inscrever-na-proposta. O passar-posse vai pelo verbo de posse que a página do projeto nomeia (campo pagina da declaração), com o lock_id e a época da ação; a época sobe nessa escrita.`,
+    `3. Depois do passar-posse, rotina de partida, nesta ordem e só com o git, o estado do harness e a nota (nunca a conversa da anterior): pré-voo (${verbos} pre-voo --repo <árvore> --ciclo ${ciclo} --herdeira --entrada '{"inscrita":true}'; exit 1 ⇒ cada falha ao operador e parar) · estado pelo git (${verbos} retomar --repo <árvore> --ciclo ${ciclo}: tasks, avisos das operárias, CI da proposta) · a nota de passagem ${nota ?? "(campo nota do retomar)"} · a lista de tasks da fase no canonico.`,
+    `4. ${verbos} proximo --repo <árvore> --ciclo ${ciclo} --entrada '{"inscrita":true,"anterior":{"sessao":"${anterior}","estado":"<estado no get_session>"}}' e seguir a ação: inscrever-na-proposta, depois confirmar-passagem. Não arquivar a anterior: ela se arquiva ao ver a confirmação.`,
+    `5. Depois do confirmar-passagem, seguir o laço do proximo da skill na fase herdada (${fase}), chamando ${verbos} proximo --repo <árvore> --ciclo ${ciclo} --entrada <arquivo> a cada ação, com a entrada montada pela §2 da skill (filhas, agora, ci, proposta, aprovacoes, sessaoMaestra), somando inscrita: true e anterior (sessao ${anterior}, estado no get_session) enquanto a anterior não for desmontada: primeiro o desmontar-anterior, que o proximo emite quando o get_session dá a anterior arquivada; depois as ações da fase, até o encerrar-sessao ou o fechar-ciclo, ou até uma pergunta ao operador.`,
+  ].join("\n");
+}
+
+/**
+ * Os verbos da passagem que refazem o `proximo` (`acaoConferida`) e o campo da
+ * entrada que muda a ação de cada um (VEGA-37 T51, achado 4 da T28): sem a
+ * mesma entrada do `proximo` que os emitiu, o `proximo` interno devolve outra
+ * ação (sem `herdeira`, a anterior volta ao `criar-condutora` da primeira
+ * tentativa).
+ */
+const VERBOS_COM_A_ENTRADA = Object.freeze({
+  "desanexar-ramo": null,
+  "confirmar-passagem": "inscrita",
+  "retomar-da-passagem": "herdeira",
+  "desmontar-anterior": "anterior",
+});
+
+/** A ação de um verbo da passagem leva o `comando`: o verbo, o nonce e a mesma `--entrada` deste `proximo`. */
+function comAEntradaDoVerbo(acao) {
+  if (!Object.hasOwn(VERBOS_COM_A_ENTRADA, acao?.acao)) return acao;
+  const campo = VERBOS_COM_A_ENTRADA[acao.acao];
+  const extra = acao.acao === "desmontar-anterior" ? " --arquivadas <arquivo>" : "";
+  return { ...acao, comando: `${acao.acao} --nonce ${acao.nonce} --entrada <a mesma deste proximo>${extra}${campo ? ` (o campo ${campo} muda a ação)` : ""}` };
+}
+
+/**
+ * Refaz o `proximo` com a entrada recebida e exige a ação `tipo` com o nonce
+ * `n`; devolve a ação. Sem entrada recusa (`sem-entrada`); ação diferente
+ * recusa dizendo que o verbo refaz o `proximo` e pede a mesma entrada dele,
+ * nomeando o campo que muda a ação — nunca outra ação calada.
+ */
+function acaoConferida({ repo, ciclo, entrada, tipo, nonce: n, verbo }) {
+  if (!/^[0-9a-f]{16}$/.test(n ?? "")) throw new ErroPlano("uso", `${verbo} exige --nonce, veio ${JSON.stringify(n ?? null)}`);
+  const campo = VERBOS_COM_A_ENTRADA[verbo] ?? null;
+  const doCampo = campo ? ` (o campo ${campo} muda a ação)` : "";
+  if (entrada == null || typeof entrada !== "object")
+    throw new ErroPlano("sem-entrada", `${verbo} exige --entrada, a mesma do proximo que emitiu ${tipo}: o verbo refaz o proximo com ela${doCampo}`);
+  const p = proximo({ repo, ciclo, entrada });
+  if (p.acao !== tipo || p.nonce !== n) {
+    const faltou = campo && entrada[campo] === undefined ? `; a entrada recebida veio sem ${campo}` : "";
+    throw new ErroPlano(
+      `${verbo}-recusado`,
+      `o ${verbo} refaz o proximo com a entrada recebida, e ele devolve ${p.acao}${p.motivo ? ` ${p.motivo}` : ""} (nonce ${p.nonce}), não ${tipo} ${n}: passe a mesma --entrada do proximo que emitiu a ação${doCampo}${faltou}`,
+    );
+  }
+  return p;
+}
+
+/** `desanexar-ramo --nonce`: a anterior em passagem solta o ramo (`git switch --detach`) e fica com a posse. */
+export function desanexarRamo({ repo, ciclo, nonce: n, entrada }) {
+  const p = acaoConferida({ repo, ciclo, entrada, tipo: "desanexar-ramo", nonce: n, verbo: "desanexar-ramo" });
+  git(repo, ["switch", "--quiet", "--detach"]);
+  return { acao: "ramo-desanexado", ciclo, fase: p.fase, ramo: p.ramo, sha: p.passagem, nonce: n };
+}
+
+/**
+ * `trazer-ramo --ramo <r> --passagem <sha> --tentativa <k> --nonce <x>`, na
+ * árvore da herdeira (passo 3): a árvore limpa, a ponta do ramo é a marca de
+ * passagem aberta, o nonce é o do `criar-condutora`; abre o ramo (`git switch`,
+ * que recusa enquanto a anterior o tiver anexado) e confere o HEAD na ponta.
+ */
+export function trazerRamo({ repo, ciclo, ramo, passagem, tentativa, nonce: n }) {
+  if (!ramo || !/^[0-9a-f]{40}$/.test(passagem ?? "") || !Number.isInteger(tentativa) || tentativa < 1 || !/^[0-9a-f]{16}$/.test(n ?? ""))
+    throw new ErroPlano("uso", "trazer-ramo exige --ramo <r> --passagem <sha inteiro> --tentativa <k> --nonce <x>");
+  if (n !== nonce(ciclo, `herdeira:${passagem}`, tentativa, passagem))
+    throw new ErroPlano("trazer-ramo-recusado", `o nonce ${n} não é o do criar-condutora da passagem ${passagem.slice(0, 8)}, tentativa ${tentativa}`);
+  const sujeira = sujeiraDaArvore(repo);
+  if (sujeira) throw new ErroPlano("arvore-suja", `a árvore da herdeira não está limpa (${sujeira}): o ramo só se traz para árvore limpa`);
+  const ref = `refs/heads/${ramo}`;
+  const ponta = tentarGit(repo, ["rev-parse", "--verify", "-q", ref]).saida;
+  if (ponta !== passagem) throw new ErroPlano("ponta-diferente", `a ponta de ${ramo} é ${ponta ? ponta.slice(0, 8) : "(ramo ausente)"}, não a passagem ${passagem.slice(0, 8)}`);
+  const aberta = gitConducao.passagemAberta(lerMarcas(repo, ref));
+  if (aberta?.sha !== passagem) throw new ErroPlano("sem-passagem", `a ponta de ${ramo} não é uma passagem aberta de ${ciclo}`);
+  const sw = tentarGit(repo, ["switch", "--quiet", ramo]);
+  if (sw.status !== 0) throw new ErroPlano("ramo-preso", `o ramo ${ramo} não abriu aqui (${sw.erro}) — a anterior ainda o tem anexado?`);
+  const head = git(repo, ["rev-parse", "HEAD"]).trim();
+  if (head !== passagem) throw new ErroPlano("ponta-diferente", `o HEAD trazido é ${head.slice(0, 8)}, não a passagem ${passagem.slice(0, 8)}`);
+  return { acao: "ramo-trazido", ciclo, fase: aberta.fase, ramo, ponta: head, tentativa, nonce: n };
+}
+
+/** `confirmar-passagem --nonce`: a herdeira dona fecha a passagem, com a árvore suja da anterior registrada. */
+export function confirmarPassagem({ repo, ciclo, nonce: n, entrada }) {
+  const p = acaoConferida({ repo, ciclo, entrada, tipo: "confirmar-passagem", nonce: n, verbo: "confirmar-passagem" });
+  const arvore = arvoreDaAnterior(repo, p.passagem);
+  const suja = arvore?.suja ? arvore.caminho ?? arvore.motivo : null;
+  return { ...gitConducao.confirmarPassagem({ repo, ciclo, passagem: p.passagem, epoca: p.epocaNova, arvoreSuja: suja }), nonce: n };
+}
+
+/**
+ * `retomar-da-passagem --nonce` (época parada, sem confirmação no prazo): a
+ * anterior, que nunca deixou de ser dona, solta o ramo da árvore da herdeira
+ * (limpa; suja recusa), reanexa o ramo na ponta da passagem e grava a
+ * desistência. A herdeira se arquiva por quem chama (`arquivar`), nunca se reabre.
+ * A posse se confere antes de mexer em ramo: alheia ou ilegível, o verbo recusa
+ * sem tocar em ramo nem em árvore.
+ */
+export function retomarDaPassagem({ repo, ciclo, nonce: n, entrada }) {
+  const p = acaoConferida({ repo, ciclo, entrada, tipo: "retomar-da-passagem", nonce: n, verbo: "retomar-da-passagem" });
+  if (!p.ramo) throw new ErroPlano("sem-ramo", `a marca de passagem ${p.passagem.slice(0, 8)} não traz o ramo (Conducao-Ramo): reanexar à mão`);
+  // A cerca antes de qualquer `switch` (D-VEGA37-58): com a posse de outra árvore,
+  // ou ilegível, nenhum ramo troca de árvore. Sem leitor e `sem-posse` passam.
+  gitConducao.exigirPosse({ repo, ciclo });
+  const ponta = tentarGit(repo, ["rev-parse", "--verify", "-q", `refs/heads/${p.ramo}`]).saida;
+  if (ponta !== p.passagem) throw new ErroPlano("ramo-andou", `a ponta de ${p.ramo} é ${ponta ? ponta.slice(0, 8) : "(ausente)"}, não a passagem ${p.passagem.slice(0, 8)} — alguém gravou depois dela`);
+  const propria = git(repo, ["rev-parse", "--show-toplevel"]).trim();
+  const presa = arvoresDoRepo(repo).find((a) => a.ramo === p.ramo && !mesmoCaminho(a.caminho, propria));
+  if (presa) {
+    const sujeira = sujeiraDaArvore(presa.caminho);
+    if (sujeira) throw new ErroPlano("ramo-preso", `o ramo ${p.ramo} está anexado em ${presa.caminho}, que não está limpa (${sujeira}): o operador decide`);
+    git(presa.caminho, ["switch", "--quiet", "--detach"]);
+  }
+  git(repo, ["switch", "--quiet", p.ramo]);
+  const motivo = `sem confirmação da herdeira ${p.arquivar ?? "?"} em ${p.prazoMin} min; época parada: a anterior segue dona e tenta de novo`;
+  return { ...gitConducao.desistirDaPassagem({ repo, ciclo, fase: p.fase, motivo }), acao: "passagem-retomada", arquivar: p.arquivar ?? null, nonce: n };
+}
+
+/**
+ * `desmontar-anterior --nonce --arquivadas <arquivo>` (D-VEGA37-19): a herdeira
+ * grava o nome da anterior na lista de arquivadas da limpeza (T12) e remove a
+ * árvore dela por `git worktree remove`, sem `--force` — só com a anterior
+ * arquivada e a árvore limpa, reconferidas aqui.
+ */
+export function desmontarAnterior({ repo, ciclo, nonce: n, entrada, arquivadas }) {
+  if (!arquivadas) throw new ErroPlano("uso", "desmontar-anterior exige --arquivadas <arquivo da lista de arquivadas da limpeza>");
+  const p = acaoConferida({ repo, ciclo, entrada, tipo: "desmontar-anterior", nonce: n, verbo: "desmontar-anterior" });
+  const arvore = arvoreDaAnterior(repo, p.passagem);
+  if (!arvore?.caminho || !mesmoCaminho(arvore.caminho, p.caminho)) throw new ErroPlano("arvore-trocada", `a árvore da anterior não é mais ${p.caminho}`);
+  if (arvore.suja) throw new ErroPlano("arvore-da-anterior-suja", `${p.caminho}: ${arvore.motivo} — nada se apaga; o operador decide`);
+  const lista = existsSync(arquivadas) ? readFileSync(arquivadas, "utf8") : "";
+  if (!lista.split("\n").includes(arvore.nome)) {
+    mkdirSync(path.dirname(arquivadas), { recursive: true });
+    appendFileSync(arquivadas, `${lista && !lista.endsWith("\n") ? "\n" : ""}${arvore.nome}\n`);
+  }
+  const rm = tentarGit(repo, ["worktree", "remove", arvore.caminho]);
+  if (rm.status !== 0) throw new ErroPlano("desmonte-recusado", `git worktree remove ${arvore.caminho}: ${rm.erro} — o nome ficou na lista de arquivadas, a limpeza a solta`);
+  return { acao: "anterior-desmontada", ciclo, fase: p.fase, caminho: arvore.caminho, nome: arvore.nome, arquivadas, nonce: n };
+}
+
+/**
+ * Texto da próxima sessão (T21), na forma de `/write-plan` §Granularidade de
+ * sessão: o comando da sessão nova e o pré-voo da skill, com o arquivamento
+ * da sessão que encerra antes do `retomar`. Desde a VEGA-37 T8 é o prompt do
+ * `criar-condutora` que a condutora que encerra a fase executa (`anterior`:
+ * "condutora anterior"); o padrão "maestra anterior" fica para quem chama
+ * sem dizer.
  */
 export function textoDaProximaSessao({ ciclo, fase, repo, sessao, peloCiclo = false, anterior = "maestra anterior", primeira = false, autorizada = false }) {
   const arvore = repo ?? "<worktree do ciclo conduzido>";
@@ -676,8 +997,12 @@ export function encerrarSessao({ repo, ciclo, fase, nonce: n }) {
       detalhe: `a sessão já estava encerrada: o marcador ${remota.sha.slice(0, 8)} com o nonce ${n} está na cópia remota; nada gravado nem empurrado, e o ramo local não recebeu o marcador (trazer a cópia para cá antes do proximo)`,
     };
   const ja = lerMarcas(repo).find((m) => m.tipo === "encerrada" && m.fase === fase);
+  // A marca passa pela cerca da posse (VEGA-37 T15); a cópia, no `comCopia`, também.
+  if (!ja) gitConducao.exigirPosse({ repo, ciclo });
   if (!ja)
-    git(repo, ["commit", "-q", "--allow-empty", "-m", `Conducao: ${fase} sessao encerrada`, "-m", `Conducao-Encerrada: ${fase}\nConducao-Nonce: ${n}`]);
+    // `Conducao-Depois: passar` (VEGA-37 T16): a fase seguinte nasce pela ordem da troca. Marca antiga, sem o
+    // trailer, segue lida como antes — a sessão seguinte já criada autoriza a fase.
+    git(repo, ["commit", "-q", "--allow-empty", "-m", `Conducao: ${fase} sessao encerrada`, "-m", `Conducao-Encerrada: ${fase}\nConducao-Nonce: ${n}${fase === "ciclo" ? "" : "\nConducao-Depois: passar"}`]);
   const sha = ja?.sha ?? git(repo, ["rev-parse", "HEAD"]).trim();
   return gitConducao.comCopia(repo, ciclo, { acao: "encerrada", ciclo, fase, nonce: n, sha, jaEstava: !!ja });
 }
@@ -865,7 +1190,7 @@ function carregarReinicio(arquivo, ativaDesdeFlag, repo) {
  * inteiro, `agora` ilegível. Campo a mais dentro de uma filha
  * passa: a sessão traz o que a API der.
  */
-export function problemasDaEntrada(entrada, { nivel = null } = {}) {
+export function problemasDaEntrada(entrada) {
   const objeto = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
   if (!objeto(entrada)) return [`a entrada é ${Array.isArray(entrada) ? "lista" : typeof entrada}, esperado objeto`];
   const out = [];
@@ -894,10 +1219,6 @@ export function problemasDaEntrada(entrada, { nivel = null } = {}) {
       out.push(`${onde}.caidaEm: ${JSON.stringify(f.caidaEm)}, depois de agora`);
     tipo(`${onde}.tentativa`, f.tentativa, inteiro, "inteiro >= 0");
     tipo(`${onde}.arquivamentos`, f.arquivamentos, (a) => Array.isArray(a) && a.every(texto), "lista de textos");
-    // Nível da maestra: a condutora sem sessão, fase ou estado não se arquiva nem
-    // se distingue de nenhuma — vira pergunta, nunca espera calada.
-    if (nivel === "maestra")
-      for (const k of ["sessao", "fase", "estado"]) if (!texto(f[k]) || !f[k].trim()) out.push(`${onde}.${k}: ausente, esperado texto (nível da maestra)`);
   });
   lista("aprovacoes", (a, onde) => {
     for (const k of ["task", "nonce"]) tipo(`${onde}.${k}`, a[k], texto, "texto");
@@ -910,14 +1231,32 @@ export function problemasDaEntrada(entrada, { nivel = null } = {}) {
   }
   tipo("proposta", entrada.proposta, objeto, "objeto");
   if (objeto(entrada.proposta)) tipo("proposta.state", entrada.proposta.state, texto, "texto");
+  // A condutora já chamou `subscribe_pr_activity` na proposta (T9): `"sim"` não pode passar como não inscrita calado.
+  tipo("inscrita", entrada.inscrita, (v) => typeof v === "boolean", "true ou false");
   tipo("tetoPonte", entrada.tetoPonte, inteiro, "inteiro >= 0");
   tipo("agora", entrada.agora, (v) => epoch(v) !== null, "instante ISO ou epoch em segundos");
   tipo("sessaoMaestra", entrada.sessaoMaestra, texto, "texto");
+  // A ordem da troca (VEGA-37 T16): a anterior lê a herdeira que criou (`get_session`), e a herdeira, a anterior.
+  for (const lado of ["herdeira", "anterior"]) {
+    tipo(lado, entrada[lado], objeto, "objeto");
+    if (!objeto(entrada[lado])) continue;
+    for (const k of Object.keys(entrada[lado])) if (!["sessao", "estado", "criadaEm"].includes(k)) out.push(`${lado}: campo desconhecido: ${k}`);
+    for (const k of ["sessao", "estado"]) tipo(`${lado}.${k}`, entrada[lado][k], texto, "texto");
+    tipo(`${lado}.criadaEm`, entrada[lado].criadaEm, (v) => epoch(v) !== null, "instante ISO ou epoch em segundos");
+  }
   return out;
 }
 
+/**
+ * Motivo da recusa do `--nivel` (VEGA-37 T8): o papel maestra foi aposentado.
+ * A condutora que fecha a fase cria a seguinte, e a decisão do operador chega
+ * pela própria condutora, sem sessão intermediária (AC-VEGA37-1).
+ */
+export const MOTIVO_SEM_NIVEL =
+  "proximo não tem mais nível: o papel maestra foi aposentado (VEGA-37) — a condutora que fecha a fase cria a seguinte pelo `criar` do encerrar-sessao; rode o proximo sem --nivel";
+
 /** Campos de cima que o `proximo` lê da entrada (SKILL §2 passo 1). */
-const CAMPOS_DA_ENTRADA = Object.freeze(["filhas", "aprovacoes", "ci", "proposta", "tetoPonte", "agora", "sessaoMaestra"]);
+const CAMPOS_DA_ENTRADA = Object.freeze(["filhas", "aprovacoes", "ci", "proposta", "inscrita", "tetoPonte", "agora", "sessaoMaestra", "herdeira", "anterior"]);
 
 /**
  * A entrada com `vez: "esperando"` nas filhas cuja sessão o adaptador diz ter
@@ -976,10 +1315,11 @@ export function comTetoDoAdaptador(repo, entrada) {
  * relógio da máquina.
  */
 export function proximo({ repo, ciclo, entrada = {}, entradaErro = null, reinicio = null, nivel = null }) {
+  if (nivel !== null) throw new ErroPlano("uso", MOTIVO_SEM_NIVEL);
   const head = git(repo, ["rev-parse", "HEAD"]).trim();
   // Fronteira (T17, 20-a): entrada que não se lê, ou de forma errada, vira
   // pergunta; nunca decisão calada (filhas não-lista lidas como nenhuma filha).
-  const problemas = entradaErro ? [entradaErro] : problemasDaEntrada(entrada, { nivel });
+  const problemas = entradaErro ? [entradaErro] : problemasDaEntrada(entrada);
   if (problemas.length)
     return pergunta.perguntar({
       acao: "perguntar",
@@ -1000,21 +1340,6 @@ export function proximo({ repo, ciclo, entrada = {}, entradaErro = null, reinici
     throw e;
   }
   const encerradas = new Set(marcas.filter((m) => m.tipo === "encerrada").map((m) => m.fase));
-  // Nível da maestra (A1): cria a condutora de cada fase e a sessão de
-  // fechamento; o laço da condutora, abaixo, fica como está.
-  if (nivel === "maestra")
-    return decidirMaestra({
-      ciclo,
-      head,
-      plano: noHead.plano,
-      planoBlob: noHead.blob,
-      encerradas,
-      autorizadas: new Set(autorizacoes.map((a) => a.fase)),
-      cicloAutorizado: autorizacoes.some((m) => m.ciclo),
-      entrada,
-      repo,
-      agora: entrada.agora !== undefined ? epoch(entrada.agora) : Math.floor(Date.now() / 1000),
-    });
   const ultima = autorizacoes.at(-1);
   if (!ultima) {
     const fase = faseSugerida(repo, ciclo, noHead.plano);
@@ -1070,8 +1395,29 @@ export function proximo({ repo, ciclo, entrada = {}, entradaErro = null, reinici
       process.stderr.write(`conducao: sim do ciclo ${marcaDoCiclo.sha.slice(0, 8)} ignorado (${e.codigo}) — cada fase pede o sim de ${adaptador.nomeDoOperador(repo)}\n`);
     }
   }
+  const estado = estadoDasTasks(marcas, lerRefsLocais(repo, ciclo), gitConducao.lerTrazidas(repo, ciclo));
+  // Trazida com caso consentido sem registro: a task não segue enquanto a pergunta estiver aberta (D-VEGA37-36).
+  for (const r of estado.trazidas.values()) {
+    const falta = gitConducao.faltaDaTrazida(repo, ciclo, r);
+    if (falta !== null && !falta.length) continue;
+    return pergunta.perguntar({
+      acao: "perguntar",
+      nonce: nonce(ciclo, r.task, r.tentativa, head),
+      ciclo,
+      head,
+      task: r.task,
+      tentativa: r.tentativa,
+      motivo: "consentimento-nao-gravado",
+      trazido: true,
+      registro: r.ref,
+      faltam: falta === null ? null : falta.length,
+      remedio: "regravar-consentimentos",
+      comando: `regravar-consentimentos ${r.task} --tentativa ${r.tentativa}`,
+      detalhe: `o trabalho da ${r.task} foi trazido; ${falta === null ? "os casos do registro trazida não se leem" : `${falta.length} caso(s) que seguiram sem pergunta estão sem registro`}. Rodar o regravar-consentimentos antes de conferir a task.`,
+    });
+  }
   const decl = adaptador.lerAdaptador(repo);
-  return decidir({
+  const decidida = decidir({
     ciclo,
     head,
     autorizacaoDoCiclo,
@@ -1081,7 +1427,7 @@ export function proximo({ repo, ciclo, entrada = {}, entradaErro = null, reinici
     planoHeadBlob: noHead.blob,
     diffPlano,
     autorizacoes,
-    estado: estadoDasTasks(marcas, lerRefsLocais(repo, ciclo), gitConducao.lerTrazidas(repo, ciclo)),
+    estado,
     // A vez antes do teto: o teto medido conta as vivas, e a filha esperando a vez não é viva (T25).
     // Com o teto medido a vez é neutra (as vagas são `filhasNovas`, medido sobre a memória que já
     // inclui quem espera); só o `tetoPonte` fixado à mão a faz valer (ruling do operador 02/11/2026, 8a).
@@ -1099,7 +1445,13 @@ export function proximo({ repo, ciclo, entrada = {}, entradaErro = null, reinici
     geradas: saidasGeradas(repo).map((s) => s.caminho),
     // O mapa tier → modelo: a filha nasce com o do tier da task, senão o da fase.
     tiers: decl.tiers,
+    // A ordem da troca (VEGA-37 T16): o resumo das marcas de passagem e, com passagem em curso, a posse e as árvores.
+    passagem: resumoDaPassagem(repo, ciclo, marcas),
+    // Os casos do ciclo no git: o sim da primeira publicação cobre as seguintes (D-VEGA37-52).
+    consentimentos: lerConsentimentos(repo, { ciclo }),
   });
+  // Os passos do ramo no fechamento (T9) vêm depois da ordem das regras, sobre a ação que ela decidiu.
+  return comAEntradaDoVerbo(comPassosDoRamo(decidida, { ramo: gitConducao.ramoNoOrigin(repo), temCi: decl.ci !== false, entrada }));
 }
 
 /**
@@ -1107,6 +1459,9 @@ export function proximo({ repo, ciclo, entrada = {}, entradaErro = null, reinici
  * pelo re-plano de ruling ou pelo sim do ciclo (`autorizar-ciclo`, origem
  * `ciclo`). Não confia em quem chama: refaz o `proximo` e só
  * grava quando ele devolve `herdar-autorizacao` da mesma fase e do mesmo nonce.
+ * O sim que a herança segue é o que está no git (a marca `autorizada` de
+ * origem): a herdeira não pede o sim de novo nem o recebe por mensagem
+ * (T20); os casos da ação ficam registrados por `consentimento.mjs`.
  */
 export function herdarAutorizacao({ repo, ciclo, fase, nonce: n }) {
   if (!/^F\d{1,2}$/.test(fase ?? "")) throw new ErroPlano("uso", `herdar-autorizacao exige F<n>, veio ${JSON.stringify(fase ?? null)}`);
@@ -1117,9 +1472,19 @@ export function herdarAutorizacao({ repo, ciclo, fase, nonce: n }) {
       "heranca-recusada",
       `o proximo devolve ${p.acao}${p.motivo ? ` ${p.motivo}` : ""}${p.fase ? ` ${p.fase}` : ""} (nonce ${p.nonce}), não herdar-autorizacao ${fase} ${n}`,
     );
+  // VEGA-37 T20 (D-VEGA37-35): os casos que a ação traz ficam no git antes da marca herdada, com o
+  // sim lido da marca de origem e o gate irmão que só aceita esse corpo, byte a byte. Falha aqui
+  // ⇒ nada de herança: o próximo `herdar-autorizacao` refaz o registro.
+  const consentimentos = gravarCasosHerdados({
+    repo,
+    ciclo,
+    pedidos: [p.consentimento, ...(p.consentimentos ?? [])],
+    quem: adaptador.nomeDoOperador(repo),
+    cerca: () => gitConducao.exigirPosse({ repo, ciclo }),
+  }).map((c) => ({ sha: c.sha, caso: c.registro.caso, ...(c.registro.task ? { task: c.registro.task } : {}) }));
   const r = gitConducao.registrarHeranca({ repo, ciclo, fase, autorizacao: p.autorizacao, replanos: p.replanos, planoNovo: p.planoNovo, origem: p.origem ?? "replano" });
   process.stderr.write(`conducao: ${p.aviso}\n`);
-  return { ...r, aviso: p.aviso };
+  return { ...r, aviso: p.aviso, consentimentos };
 }
 
 /** Aspas simples de shell. */
@@ -1291,12 +1656,95 @@ function lerRefsOrigin(repo, ciclo) {
 }
 
 /**
+ * A nota de passagem mais recente do ramo (VEGA-37 T17): a da última marca
+ * `passagem`, lida no commit da própria marca (`git show <sha>:<nota>`), com o
+ * par que ela leva. `null` sem passagem; nota que não se lê vem com `erro`.
+ */
+export function notaMaisRecente(repo, marcas) {
+  const m = marcas.findLast((x) => x.tipo === "passagem");
+  if (!m) return null;
+  const base = { passagem: m.sha, fase: m.fase, epoca: m.epoca ?? null, lock_id: m.lock ?? null, ramo: m.ramo ?? null, caminho: m.nota ?? null };
+  if (!m.nota) return { ...base, corpo: null, erro: "a marca não traz a nota (Conducao-Nota)" };
+  const r = tentarGit(repo, ["show", `${m.sha}:${m.nota}`]);
+  return r.status === 0 ? { ...base, corpo: r.saida } : { ...base, corpo: null, erro: r.erro.split("\n").at(-1) || `git show saiu ${r.status}` };
+}
+
+/**
+ * Os avisos das operárias do ciclo pelas referências do origin
+ * (`refs/conducao-aviso/<ciclo>/T<k>/<n>`, VEGA-37 T17): por referência, o sha e
+ * a linha (o subject do commit de aviso). Objeto que não está aqui é buscado
+ * para uma referência temporária, apagada em seguida — lido, nunca adotado.
+ * Nunca lança: origin mudo sai `{ erro }`, aviso ilegível sai com `erro` na linha.
+ */
+export function avisosDasOperarias(repo, ciclo) {
+  const prefixo = `refs/conducao-aviso/${ciclo}/`;
+  const ls = tentarGit(repo, ["ls-remote", "origin", `${prefixo}*`]);
+  if (ls.status !== 0) return { erro: ls.erro.split("\n").at(-1) || `git ls-remote saiu ${ls.status}`, avisos: [] };
+  const avisos = [];
+  for (const l of ls.saida.split("\n")) {
+    const [sha, ref] = l.split("\t");
+    const m = /^([^/]+)\/(\d+)$/.exec(ref?.startsWith(prefixo) ? ref.slice(prefixo.length) : "");
+    if (!sha || !m) continue;
+    let local = tentarGit(repo, ["cat-file", "-e", `${sha}^{commit}`]).status === 0;
+    if (!local) {
+      const temp = `refs/conducao-retomar/${ciclo}/aviso/${m[1]}/${m[2]}`;
+      const f = tentarGit(repo, ["fetch", "--no-tags", "--quiet", "origin", `+${ref}:${temp}`]);
+      tentarGit(repo, ["update-ref", "-d", temp]);
+      local = f.status === 0 && tentarGit(repo, ["cat-file", "-e", `${sha}^{commit}`]).status === 0;
+    }
+    const linha = local ? tentarGit(repo, ["log", "-1", "--format=%s", sha]) : null;
+    avisos.push({ task: m[1], tentativa: Number(m[2]), ref, sha, ...(linha?.status === 0 ? { linha: linha.saida } : { linha: null, erro: "aviso não buscado do origin" }) });
+  }
+  avisos.sort((a, b) => Number(a.task.slice(1)) - Number(b.task.slice(1)) || a.tentativa - b.tentativa);
+  return { avisos };
+}
+
+/** Roda o `gh` sem shell, com prazo; JSON ou `{ erro }`. */
+function ghJson(repo, args) {
+  try {
+    return { valor: JSON.parse(execFileSync("gh", args, { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 20_000 })) };
+  } catch (e) {
+    return { erro: String(e.stderr ?? e.message).trim().split("\n").at(-1) || e.code || "gh falhou" };
+  }
+}
+
+/**
+ * O último CI da proposta do ramo (VEGA-37 T17), pelo `gh`: a proposta e o run
+ * mais recente do sha para que ela aponta. Não decide veredito — `conclusion`
+ * sozinho não é veredito; quem lê o run por dentro é o `ci` do laço. Projeto
+ * sem CI (`ci: false`, o mesmo modo da T9) sai com o pulo. Nunca lança.
+ */
+export function ciDaProposta({ repo, ramo }) {
+  let temCi = true;
+  try {
+    temCi = adaptador.lerAdaptador(repo).ci !== false;
+  } catch {
+    // declaração ilegível: segue como projeto com CI, e o gh diz o resto.
+  }
+  if (!temCi) return { pulo: "projeto-sem-ci" };
+  if (!ramo) return { erro: "HEAD destacado: sem ramo, sem proposta" };
+  const pr = ghJson(repo, ["pr", "view", ramo, "--json", "number,state,headRefOid,mergeStateStatus"]);
+  if (pr.erro) return { erro: `gh pr view ${ramo}: ${pr.erro}` };
+  const proposta = { numero: pr.valor.number ?? null, state: pr.valor.state ?? null, headRefOid: pr.valor.headRefOid ?? null, mergeStateStatus: pr.valor.mergeStateStatus ?? null };
+  if (!proposta.headRefOid) return { proposta, run: null };
+  const runs = ghJson(repo, ["run", "list", "--commit", proposta.headRefOid, "--limit", "20", "--json", "databaseId,headSha,status,conclusion,createdAt,workflowName"]);
+  if (runs.erro) return { proposta, erro: `gh run list: ${runs.erro}` };
+  const run = (Array.isArray(runs.valor) ? runs.valor : []).toSorted((a, b) => Date.parse(b.createdAt ?? "") - Date.parse(a.createdAt ?? ""))[0] ?? null;
+  return { proposta, run, leitura: "conclusion não é veredito: o ci do laço lê o run por dentro" };
+}
+
+/**
  * Estado da condução reconstruído só do git local (marcas no ramo e
  * referências `refs/conducao-local/…`), conferido contra o origin. O origin
  * nunca é fonte: referência dele que diverge da local é relatada, nunca
  * buscada nem adotada (§5 do plano de origem da condução).
+ *
+ * Partida da herdeira (VEGA-37 T17, AC-VEGA37-8): o `retomar` também devolve a
+ * nota de passagem mais recente (`nota`), os avisos das operárias pelas
+ * referências (`avisos`) e o último CI da proposta (`ci`, pelo `lerCi`) — o que
+ * a herdeira precisa para seguir sem ler a conversa da anterior.
  */
-export function retomar({ repo, ciclo }) {
+export function retomar({ repo, ciclo, lerCi = ciDaProposta }) {
   const head = git(repo, ["rev-parse", "HEAD"]).trim();
   let ramo = null;
   try {
@@ -1360,8 +1808,64 @@ export function retomar({ repo, ciclo }) {
       .map((r) => ({ task: r.task, tentativa: r.tentativa, ref: r.ref, ponta: r.ponta, nonce: r.nonce })),
     falhas: Object.fromEntries([...estado.falhas].sort(([a], [b]) => porNum(a, b))),
     falhasAmbiente: Object.fromEntries([...estado.falhasAmbiente].sort(([a], [b]) => porNum(a, b))),
+    falhasPergunta: Object.fromEntries([...estado.falhasPergunta].sort(([a], [b]) => porNum(a, b))),
+    conduzir: faseAConduzir(marcas, fasesDoPlano(repo, ciclo)),
     divergencias,
+    nota: notaMaisRecente(repo, marcas),
+    avisos: avisosDasOperarias(repo, ciclo),
+    ci: (() => {
+      try {
+        return lerCi({ repo, ramo, ciclo });
+      } catch (e) {
+        return { erro: e.message };
+      }
+    })(),
   };
+}
+
+/** Ids das fases do plano no HEAD, ou `null` quando o plano (ou o adaptador) não se lê aqui. */
+function fasesDoPlano(repo, ciclo) {
+  try {
+    return lerPlanoNoCommit(repo, "HEAD", ciclo).plano.fases.map((f) => f.id);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A fase que a condutora que retoma conduz, só pelas marcas (VEGA-37 T11,
+ * D-VEGA37-7, AC-VEGA37-9). A marca `Conducao-Encerrada` e a autorização são
+ * as mesmas nos dois modelos: um ciclo que a condutora do modelo antigo
+ * encerrou esperando a maestra criar a seguinte segue aqui na fase seguinte,
+ * sem maestra — quem roda o `retomar` é a condutora nova, e o `proximo` dela
+ * pede (ou herda) a autorização da fase. A autorização herdada que a maestra
+ * gravou (`Conducao-Origem: ciclo`) conta como qualquer autorização.
+ *
+ * `fases` é a ordem do plano; `null` (plano ou adaptador ilegível, como o do
+ * ramo sob o motor de `main`, D-VEGA37-26) cai na ordem numérica das marcas,
+ * com `fonte: "marcas"`. Devolve `{ fase, situacao, fonte, depoisDe }`:
+ * `situacao` `fase-aberta` (autorizada e não encerrada) · `fase-seguinte`
+ * (ainda sem autorização) · `fechamento` (todas encerradas, ou o ciclo) ·
+ * `sem-marca` (nenhuma fase autorizada nem encerrada: `fase` é a primeira do
+ * plano, ou `null` sem ele).
+ */
+export function faseAConduzir(marcas, fases = null) {
+  const encerradas = new Set(marcas.filter((m) => m.tipo === "encerrada").map((m) => m.fase));
+  const autorizadas = new Set(marcas.filter((m) => m.tipo === "autorizada").map((m) => m.fase));
+  const fonte = fases ? "plano" : "marcas";
+  const num = (f) => Number(f.slice(1));
+  const encerradasDeFase = [...encerradas].filter((f) => f !== "ciclo").sort((a, b) => num(a) - num(b));
+  const depoisDe = encerradasDeFase.at(-1) ?? null;
+  if (encerradas.has("ciclo")) return { fase: "fechamento", situacao: "fechamento", fonte, depoisDe };
+  const ordem = fases ?? [...new Set([...autorizadas, ...encerradas])].sort((a, b) => num(a) - num(b));
+  // Fases antes da primeira com marca ficaram fora da condução (feitas à mão), como o `iPrimeira` de regras.mjs.
+  const iPrimeira = ordem.findIndex((f) => autorizadas.has(f) || encerradas.has(f));
+  const aberta = ordem.slice(Math.max(iPrimeira, 0)).find((f) => !encerradas.has(f));
+  if (!autorizadas.size && !encerradas.size) return { fase: fases?.[0] ?? null, situacao: "sem-marca", fonte, depoisDe };
+  if (aberta) return { fase: aberta, situacao: autorizadas.has(aberta) ? "fase-aberta" : "fase-seguinte", fonte, depoisDe };
+  // Sem plano, a fase depois da última encerrada é a seguinte pelo número; com plano, não há outra.
+  if (!fases) return { fase: `F${num(depoisDe) + 1}`, situacao: "fase-seguinte", fonte, depoisDe };
+  return { fase: "fechamento", situacao: "fechamento", fonte, depoisDe };
 }
 
 // ── auditar ──────────────────────────────────────────────────────────────────
@@ -1719,6 +2223,7 @@ const VERBOS_GIT = new Set([
   "autorizar-ciclo",
   "abrir",
   "trazer",
+  "regravar-consentimentos",
   "conferir-carimbo",
   "registrar-conferencia",
   "recusar-publicacao",
@@ -1729,6 +2234,14 @@ const VERBOS_GIT = new Set([
   "esperar-filha",
   "encerrar-sessao",
   "herdar-autorizacao",
+  "empurrar-ramo",
+  "passar",
+  "desistir-da-passagem",
+  "desanexar-ramo",
+  "trazer-ramo",
+  "confirmar-passagem",
+  "retomar-da-passagem",
+  "desmontar-anterior",
 ]);
 
 function inteiro(v) {
@@ -1804,6 +2317,8 @@ function verboDeGit(verbo, resto, { repo, ciclo }) {
         sessao: flag(resto, "--sessao") ?? null,
         aprovado: flag(resto, "--aprovado") ?? null,
       });
+    case "regravar-consentimentos":
+      return gitConducao.regravarConsentimentos({ repo, ciclo, task: exigirTask(), tentativa: inteiro(flag(resto, "--tentativa")) });
     case "conferir-carimbo":
       return gitConducao.conferirCarimbo({ repo, ciclo, task: exigirTask() });
     case "registrar-conferencia":
@@ -1862,8 +2377,50 @@ function verboDeGit(verbo, resto, { repo, ciclo }) {
     }
     case "herdar-autorizacao":
       return herdarAutorizacao({ repo, ciclo, fase: resto.find((a) => /^F\d{1,2}$/.test(a)), nonce: flag(resto, "--nonce") });
+    case "empurrar-ramo":
+      return empurrarRamo({ repo, ciclo, nonce: flag(resto, "--nonce") });
     case "encerrar-sessao":
       return encerrarSessao({ repo, ciclo, fase: flag(resto, "--fase"), nonce: flag(resto, "--nonce") });
+    case "passar": {
+      const fase = resto.find((a) => /^F\d{1,2}$/.test(a));
+      const arquivo = flag(resto, "--nota");
+      if (!arquivo) throw new ErroPlano("uso", "passar exige --nota <arquivo com o corpo da nota, no molde de references/nota-de-passagem.md>");
+      let corpo;
+      try {
+        corpo = readFileSync(arquivo, "utf8");
+      } catch (e) {
+        throw new ErroPlano("nota-ilegivel", `--nota ${arquivo}: ${e.code ?? e.message}`);
+      }
+      const entrada = lerEntrada(flag(resto, "--entrada"), "--entrada");
+      if (entrada.erro) throw new ErroPlano("entrada-invalida", entrada.erro);
+      // Filha viva = a mesma conta do teto da ponte (`vagasDoTeto`): toda que não está arquivada.
+      const filhas = Array.isArray(entrada.valor.filhas) ? entrada.valor.filhas : [];
+      const vivas = filhas.filter((f) => f.estado !== "ARCHIVED").map((f) => f.sessao ?? f.task ?? "?");
+      const estado = estadoDasTasks(lerMarcas(repo), lerRefsLocais(repo, ciclo), gitConducao.lerTrazidas(repo, ciclo));
+      const r = gitConducao.passar({ repo, ciclo, fase, corpo, emVoo: [...estado.emVoo.values()], trazidas: [...estado.trazidas.values()], vivas });
+      // Ao entrar em passagem a anterior desanexa o ramo e fica com a posse (VEGA-37 T16): a herdeira o traz.
+      // Falhou o switch ⇒ o proximo emite `desanexar-ramo`; a passagem já está gravada.
+      const sw = tentarGit(repo, ["switch", "--quiet", "--detach"]);
+      return { ...r, desanexado: sw.status === 0, ...(sw.status !== 0 ? { detalheDesanexar: sw.erro } : {}) };
+    }
+    case "desanexar-ramo":
+    case "confirmar-passagem":
+    case "retomar-da-passagem":
+    case "desmontar-anterior": {
+      // Sem `--entrada` o verbo recusa (`sem-entrada`): ele refaz o proximo e só a mesma entrada devolve a mesma ação (T51).
+      const bruta = flag(resto, "--entrada");
+      const entrada = bruta === undefined ? { valor: undefined } : lerEntrada(bruta, "--entrada");
+      if (entrada.erro) throw new ErroPlano("entrada-invalida", entrada.erro);
+      const args = { repo, ciclo, nonce: flag(resto, "--nonce"), entrada: entrada.valor };
+      if (verbo === "desanexar-ramo") return desanexarRamo(args);
+      if (verbo === "confirmar-passagem") return confirmarPassagem(args);
+      if (verbo === "retomar-da-passagem") return retomarDaPassagem(args);
+      return desmontarAnterior({ ...args, arquivadas: flag(resto, "--arquivadas") });
+    }
+    case "trazer-ramo":
+      return trazerRamo({ repo, ciclo, ramo: flag(resto, "--ramo"), passagem: flag(resto, "--passagem"), tentativa: inteiro(flag(resto, "--tentativa")), nonce: flag(resto, "--nonce") });
+    case "desistir-da-passagem":
+      return gitConducao.desistirDaPassagem({ repo, ciclo, fase: resto.find((a) => /^F\d{1,2}$/.test(a)), motivo: flag(resto, "--motivo") ?? null });
     case "limpar": {
       const estado = estadoDasTasks(lerMarcas(repo), lerRefsLocais(repo, ciclo), gitConducao.lerTrazidas(repo, ciclo));
       return gitConducao.limpar({ repo, ciclo, emVoo: [...estado.emVoo.values()], trazidas: [...estado.trazidas.values()] });
@@ -2019,7 +2576,11 @@ export function main(argv) {
       return saida.valido ? 0 : 1;
     }
     if (verbo === "pre-voo") {
-      const saida = preVoo({ repo, ciclo: ciclo ?? null });
+      const herdeira = resto.includes("--herdeira");
+      if (herdeira && !ciclo) return sair(2, "pre-voo --herdeira exige --ciclo <id>");
+      const entrada = lerEntrada(flag(resto, "--entrada"), "--entrada");
+      if (entrada.erro) return sair(2, `pre-voo: ${entrada.erro}`);
+      const saida = preVoo({ repo, ciclo: ciclo ?? null, herdeira, entrada: entrada.valor ?? {} });
       if (ciclo && saida.acao === "perguntar") logar(saida, "intencao", undefined, adaptador.lerAdaptador(repo));
       process.stdout.write(`${JSON.stringify(saida)}\n`);
       return saida.acao === "perguntar" ? 1 : 0;
@@ -2044,11 +2605,9 @@ export function main(argv) {
       const { reinicio, confirmacao } = carregarReinicio(flag(resto, "--reinicio"), flag(resto, "--ponte-ativa-desde"), repo);
       if (confirmacao && !confirmacao.valido)
         process.stderr.write(`conducao: registro de reinício ignorado (${confirmacao.motivo}) — a queda não fica coberta\n`);
-      const nivel = resto.includes("--nivel") ? (flag(resto, "--nivel") ?? "") : null;
-      if (nivel !== null && nivel !== "maestra") return sair(2, `--nivel aceita só maestra (veio ${nivel}); sem a flag, o laço da condutora`);
+      if (resto.includes("--nivel")) return sair(2, MOTIVO_SEM_NIVEL);
       const entrada = lerEntrada(flag(resto, "--entrada"), "--entrada");
       saida = proximo({
-        nivel,
         repo,
         ciclo,
         entrada: entrada.valor ?? {},

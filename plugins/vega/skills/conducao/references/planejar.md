@@ -26,3 +26,7 @@ Objetivo: um arquivo por ciclo que o adaptador declarado lê sem adivinhar nada.
 4. **Anotar cada tarefa.** `Estação`, `Publicação`, `Sensível`, `Verificação` e o subject do commit, explícitos — nunca deixar para o núcleo deduzir do texto (`conduzivel.md` §Anotações obrigatórias).
 5. **Outputs pelo arquivo.** Listar cada arquivo que a tarefa cria ou muda, com o caminho onde ele mora; peça que a tarefa pode precisar tocar entra como `Modificar` (`conduzivel.md` §Outputs).
 6. **Conferir antes de entregar.** Ler o plano com o adaptador declarado: tarefa sem anotação obrigatória, fase sem fechamento, ou heading fora do formato voltam como pergunta — consertar no plano, não no núcleo.
+
+## 3. De sessão a sessão
+
+Cada etapa tem a sua condutora, chamada pelo nome da fase: a de shaping desenha e, com o design aprovado, cria a de planejamento (`create_session` com o pedido da fase), em vez de entregar texto para o operador colar; a de planejamento, com o plano conferido, cria a condutora da primeira fase de execução. Antes de criar, tudo no git, nenhuma decisão aberta.

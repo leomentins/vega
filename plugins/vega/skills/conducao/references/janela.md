@@ -31,15 +31,13 @@ Sem unidade medida na sessão, decidir na faixa seguinte, com a medida; na últi
 
 | Papel | Como o sensor sabe | Unidade e fronteira limpa | Corte |
 | --- | --- | --- | --- |
-| **Maestra** | a sessão rodou `proximo --nivel maestra` | fase: condutora encerrada e arquivada, nenhuma filha viva, nenhuma decisão aberta, tudo no git ou no banco | pede `/clear` ao operador nessa fronteira, com a nota de passagem commitada; o id fica, e as filhas seguem usando-o como `@parent` |
-| **Condutora** | o pedido de nascimento é o texto da próxima sessão (`Conduzir <ciclo> — F<n>, pela skill …`) | task conferida e trazida, nenhuma neta viva | nota de passagem em `notes/` (commit só de prosa, `empurrar-copia`) e sobe à maestra `janela <usados>/<janela> faixa <f> — parada limpa após T<k>` |
+| **Condutora de execução** (`F<n>`) e **de fechamento** | o pedido de nascimento (`Conduzir <ciclo> — F<n>, pela skill …`, ou o da herdeira) | task conferida e trazida, nenhuma operária viva, nenhuma pergunta aberta | não compacta nem pede `/clear`: passa o comando à herdeira (`proximo` até a ação `passar`, nota no molde de `nota-de-passagem.md`) |
+| **Condutora de shaping e de planejamento** | o pedido de nascimento da fase | fim de etapa do desenho ou do plano | compacta como a sessão comum; na fronteira, cria a seguinte (a de shaping cria a de planejamento) |
 | **Operária** | o contrato no pedido de nascimento | a própria task fechada (commit; carimbo só em gatilho crítico ou publicação; aviso) | fecha a task pelo menor caminho, sem varredura nova; se a projeção passa o teto antes de fechar, para no próximo commit limpo e avisa `T<k>-FALHA janela <nonce>` |
 | **Comum** | o resto | fim de task ou de etapa do pedido | fecha com o texto da próxima sessão e `/clear`; `/compact` se há racional só na conversa (`write-plan/references/checkpoints.md`) |
 
-## A janela das condutoras
+## A régua da condutora
 
-A maestra vigia a própria janela pelo sensor e a de cada condutora pelo `get_session` que ela já lê para montar `filhas`: `external_metadata.context_usage` (`used_tokens`, `max_tokens`), classificado pelas mesmas faixas (o comando está na página do projeto). A condutora que cruza uma faixa já foi avisada pelo sensor dela e põe a linha `janela …` na próxima mensagem à maestra — o segundo caminho, para quando o `get_session` não traz o uso.
-
-Condutora na faixa em que a próxima task não cabe: a maestra espera a parada limpa, arquiva a sessão dela, e o `proximo --nivel maestra` emite `criar-condutora` da mesma fase com tentativa nova (condutora arquivada sem `Conducao-Encerrada` é recriada); a nova retoma pelo git.
+A régua conta tokens **acima da carga inicial** da sessão (o contexto da primeira resposta), nunca fração da janela: o sensor lê a carga do começo do transcript a cada leitura e classifica o uso pelas faixas e pelo teto acima dela (`regua` no config do projeto, com a medição citada). Na faixa em que a próxima task não cabe, a condutora de execução fecha as operárias abertas e passa o comando na fronteira limpa seguinte; não há nível acima vigiando a janela dela. "Maestra", o nível que vigiava a janela das condutoras, é termo aposentado.
 
 As decisões do operador que deram esta forma estão na página do projeto (campo `pagina` da declaração).

@@ -528,3 +528,132 @@ test("--rodada carimbo recusa carimbo fora dos destinos, carimbo apagado, approv
   comum.rodada("T2", 1, { [carimboDoCiclo(SHA_QUALQUER)]: carimbo(SHA_QUALQUER) });
   comum.recusa("rodada-fora-da-conferencia", "registrar-conferencia", "T2", "--rodada", "carimbo");
 });
+
+// ── rodada B feita por re-plano (ATRM-54 F6, T27 tentativa 4) ────────────────
+//
+// Os consertos da rodada A da T27 saíram em tasks novas (T45–T48) por re-plano
+// de decisão registrada (D-ATRM54-34), de que a T27 passou a depender: a B
+// nunca aconteceu dentro da task, a tentativa seguinte já foi a C (approval
+// `rodada: 2`), e `--rodada needs-rework` recusava `approval-fora-do-rito`
+// (1 marca pede `rodada: 1`). O rito passa a contar esse re-plano como a B.
+
+/** O gate T1 que passa a depender de `T3` (pelos Inputs), e a T3 nova, independente. */
+const GATE_DEPENDE_DE_T3 = GATE.replace("- **Inputs:** `README.md`", "- **Inputs:** `README.md` · saída da T3");
+const T3 = task("T3");
+
+/** A maestra commita o re-plano no ramo do ciclo (canonico novo), com o subject dado. */
+function replanejar(a, tasks, subject) {
+  escreverEm(a.maestra, { [CAMINHO]: canonico(tasks) });
+  a.g("add", "-A");
+  a.g("commit", "-q", "-m", subject);
+  return a.g("rev-parse", "HEAD");
+}
+
+/** O `proximo` até abrir `tk`: herda a autorização do re-plano, ou o operador re-autoriza o plano mudado. */
+function abrirDepoisDoReplano(a, tk, tentativa) {
+  for (let i = 0; i < 4; i++) {
+    const p = a.proximo();
+    if (p.acao === "herdar-autorizacao") a.ok("herdar-autorizacao", p.fase, "--nonce", p.nonce);
+    else if (p.acao === "perguntar" && p.motivo === "plano-mudou") a.ok("autorizar-ciclo", "F1", "--sim", "sim, o re-plano");
+    else if (p.acao === "abrir") {
+      const x = p.tarefas.find((y) => y.task === tk);
+      assert.ok(x, `esperava abrir ${tk}: ${JSON.stringify(p)}`);
+      assert.equal(x.tentativa, tentativa, JSON.stringify(p));
+      a.ok("abrir", tk, "--tentativa", String(tentativa), "--nonce", x.nonce, "--modo-maestra", "auto");
+      return x;
+    } else assert.fail(`proximo inesperado: ${JSON.stringify(p)}`);
+  }
+  assert.fail(`${tk} não abriu`);
+}
+
+const RULING_T3 = `${CICLO}-F1/D-TESTE2-9 — re-plano de F1: conserto da rodada A do gate em T3`;
+
+test("re-plano de ruling que cria task de que o gate passa a depender conta como a B: approval 2 depois de 1 marca grava", (t) => {
+  const a = ateRodada(t, [{ [APPROVAL]: approval("NEEDS_REWORK", 1) }]); // A
+  a.ok("registrar-conferencia", "T1", "--rodada", "needs-rework");
+  const replano = replanejar(a, [GATE_DEPENDE_DE_T3, T3], RULING_T3);
+
+  // A B sai na T3, fora da task do gate.
+  abrirDepoisDoReplano(a, "T3", 1);
+  const ref = `refs/conducao/${CICLO}/T3/1`;
+  a.f("fetch", "-q", "origin", `+${ref}:refs/remotes/tentativa`);
+  a.f("checkout", "-q", "--detach", "refs/remotes/tentativa");
+  escreverEm(a.filha, { "src/t3.mjs": "export const conserto = 1;\n" });
+  a.f("add", "-A");
+  a.f("commit", "-q", "-m", `${CICLO}-F1/T3 — conserto`);
+  a.f("push", "-q", "origin", `HEAD:${ref}`);
+  a.ok("trazer", "T3", "--tentativa", "1", "--sessao", "filha-T3-1");
+  a.ok("registrar-conferencia", "T3", "--verificacao", "verde", "--publicacao", "nao-se-aplica");
+
+  // A tentativa seguinte do gate já é a C.
+  a.abrirPeloProximo("T1", 2);
+  a.rodada("T1", 2, { [APPROVAL]: approval("NEEDS_REWORK", 2) });
+  const s = a.ok("registrar-conferencia", "T1", "--rodada", "needs-rework");
+  assert.equal(s.acao, "rodada-registrada");
+  assert.equal(s.rodadaDoApproval, 2);
+  assert.equal(s.rodadasRegistradas, 1);
+  assert.equal(s.rodadaBPorReplano.sha, replano);
+  assert.equal(s.rodadaBPorReplano.ruling, "D-TESTE2-9");
+  assert.equal(s.rodadaBPorReplano.por, "dependencia");
+  assert.deepEqual(s.rodadaBPorReplano.novas, ["T3"]);
+  assert.equal(a.g("log", "-1", "--format=%(trailers:key=Conducao-Rodada-B-Replano,valueonly=true)"), replano);
+
+  // A marca conta como duas: a B seguinte (approval ainda 2) grava, e a C dela (3) bate no teto.
+  a.abrirPeloProximo("T1", 3);
+  a.rodada("T1", 3, { "src/t1.mjs": "export const conserto = 2;\n" });
+  assert.equal(a.ok("registrar-conferencia", "T1", "--rodada", "needs-rework").rodadasRegistradas, 3);
+  a.abrirPeloProximo("T1", 4);
+  a.rodada("T1", 4, { [APPROVAL]: approval("NEEDS_REWORK", 3) });
+  const teto = a.cli("registrar-conferencia", "T1", "--rodada", "needs-rework");
+  assert.equal(teto.status, 1, teto.linhas.join("\n"));
+  assert.equal(teto.saida.motivo, "teto-de-rodadas");
+  assert.equal(teto.saida.rodadasRegistradas, 4);
+});
+
+test("re-plano de ruling cuja task nova o gate não depende nem cita recusa approval-fora-do-rito, dizendo o que destrava", (t) => {
+  const a = ateRodada(t, [{ [APPROVAL]: approval("NEEDS_REWORK", 1) }]); // A
+  a.ok("registrar-conferencia", "T1", "--rodada", "needs-rework");
+  const replano = replanejar(a, [GATE, T3], `${CICLO}-F1/D-TESTE2-9 — re-plano de F1: tarefa nova sem relação`);
+
+  // O gate é independente: abre direto, sem passar pela T3.
+  abrirDepoisDoReplano(a, "T1", 2);
+  a.rodada("T1", 2, { [APPROVAL]: approval("NEEDS_REWORK", 2) });
+  const r = a.cli("registrar-conferencia", "T1", "--rodada", "needs-rework");
+  assert.equal(r.status, 1, r.linhas.join("\n"));
+  assert.equal(r.saida.motivo, "approval-fora-do-rito");
+  assert.equal(r.saida.rodadaEsperada, 1);
+  assert.equal(r.saida.rodadasRegistradas, 1);
+  assert.match(r.saida.destrava, /re-plano de decisão registrada/);
+  assert.deepEqual(r.saida.replanosVistos, [{ sha: replano, ruling: "D-TESTE2-9", motivo: "T1-nao-depende-nem-e-citada" }]);
+  assert.ok(!a.marcas().some((m) => /tentativa 2 rodada$/.test(m)));
+  assert.equal(a.proximo().motivo, "trazida-sem-conferencia");
+});
+
+test("re-plano de ruling que cria task e cita o gate no corpo conta como a B, mesmo sem dependência", (t) => {
+  const a = ateRodada(t, [{ [APPROVAL]: approval("NEEDS_REWORK", 1) }]); // A
+  a.ok("registrar-conferencia", "T1", "--rodada", "needs-rework");
+  escreverEm(a.maestra, { [CAMINHO]: canonico([GATE, T3]) });
+  a.g("add", "-A");
+  a.g("commit", "-q", "-m", `${CICLO}-F1/D-TESTE2-9 — re-plano de F1: conserto em tarefa nova`, "-m", "A rodada B da T1 sai na T3.");
+  const replano = a.g("rev-parse", "HEAD");
+  abrirDepoisDoReplano(a, "T1", 2);
+  a.rodada("T1", 2, { [APPROVAL]: approval("NEEDS_REWORK", 2) });
+  const s = a.ok("registrar-conferencia", "T1", "--rodada", "needs-rework");
+  assert.equal(s.rodadaBPorReplano.sha, replano);
+  assert.equal(s.rodadaBPorReplano.por, "citacao");
+});
+
+test("sem re-plano, approval 2 depois de 1 marca recusa como antes, e a recusa diz que um re-plano destravaria", (t) => {
+  const a = ateRodada(t, [
+    { [APPROVAL]: approval("NEEDS_REWORK", 1) }, // A
+    { [APPROVAL]: approval("NEEDS_REWORK", 2) }, // C sem B
+  ]);
+  const r = a.cli("registrar-conferencia", "T1", "--rodada", "needs-rework");
+  assert.equal(r.status, 1, r.linhas.join("\n"));
+  assert.equal(r.saida.motivo, "approval-fora-do-rito");
+  assert.equal(r.saida.rodadaEsperada, 1);
+  assert.equal(r.saida.rodadasRegistradas, 1);
+  assert.match(r.saida.destrava, /conta como a rodada B/);
+  assert.deepEqual(r.saida.replanosVistos, []);
+  assert.equal(a.marcas().filter((m) => /rodada$/.test(m)).length, 1);
+});

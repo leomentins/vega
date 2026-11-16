@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "log-v1.schema.json",
   "title": "Log de eventos da condução — v1 (VEGA-29 T11, D-VEGA29-3)",
-  "description": "Uma linha JSONL por elemento, desenho OCEL 2.0 (D-GAME1-21). Arquivo em <pasta>/<projeto>/<ciclo>.jsonl. Linha sem `v` é v0 (pasta antiga, só leitura — D-VEGA29-21) e não casa este esquema. Valores são tokens sem espaço: texto livre, relato, prompt e diff não entram (PHI não atravessa fronteira). Conferido sem ajv por `conferirEsquema` em log-eventos.mjs.",
+  "description": "Uma linha JSONL por elemento, desenho OCEL 2.0 (D-GAME1-21). Arquivo em <pasta>/<projeto>/<ciclo>.jsonl. Linha sem `v` é v0 (pasta antiga, só leitura — D-VEGA29-21) e não casa este esquema. Valores são tokens sem espaço: texto livre, relato, prompt e diff não entram (PHI não atravessa fronteira). Conferido sem ajv por `conferirEsquema` em log-eventos.mjs. Eventos da vigia (VEGA-37 T21, vigia.mjs): `vida` (sinal de vida da condutora: estado da vigia, prazoMin, intervaloMin, despertador, instante), `queda` (prazo do estado vencido sem novo `vida`: estado, prazoMin, ref = chave do `vida`) e `aviso-da-vigia` (aviso ao operador: estado, ref, vezes, intervaloMin, dia America/Sao_Paulo); `aviso` sozinho é o da filha, que a vigia não conta.",
   "oneOf": [
     { "$ref": "#/$defs/objeto" },
     { "$ref": "#/$defs/relacao" },
@@ -156,7 +156,12 @@
               "enum": ["operador", "responsavel-clinico"]
             },
             "textoSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-            "nonces": { "$ref": "#/$defs/token" }
+            "nonces": { "$ref": "#/$defs/token" },
+            "despertador": { "$ref": "#/$defs/token" },
+            "prazoMin": { "type": "number" },
+            "intervaloMin": { "type": "number" },
+            "dia": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+            "instante": { "$ref": "#/$defs/quando" }
           }
         },
         "chave": { "$ref": "#/$defs/chave" },
