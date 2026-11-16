@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { execFileSync } from "node:child_process";
 
 import { ErroDestino, escaparRegex, gravarNoGit, lerDestino, raizDoProjeto, raizPrincipal, varrerPhi } from "./destino.mjs";
 
@@ -14,7 +15,10 @@ import { ErroDestino, escaparRegex, gravarNoGit, lerDestino, raizDoProjeto, raiz
 // <saida>/decisoes.jsonl (contrato de `estado.mjs decisao gravar`); `git` vai para o arquivo de
 // decisoes do projeto, com o PHI-gate de CPF/CNS na escrita. Declaracao ilegivel ou destino
 // desconhecido: exit 2, nada escrito. O projeto da conversa e a raiz git do `cwd` dela; pasta que
-// sumiu cai no `--repo` (padrao: esta arvore).
+// sumiu cai no `--repo` (padrao: esta arvore). Conversa de QUALQUER arvore do projeto do `--repo`
+// (a principal ou uma worktree, viva ou nao) grava na arvore do `--repo`: um arquivo so, que quem
+// roda leva ao ramo principal pela arvore dele. So conversa de outro projeto (`--projeto` largo)
+// grava na arvore dela.
 // O decisoes.jsonl pode conter fala de sessao clinica: fica fora do repositorio (o PHI-gate do verbo filtra CPF/CNS).
 function arg(nome, padrao) {
   const i = process.argv.indexOf(nome);
@@ -60,8 +64,50 @@ function destinoDe(raiz) {
 }
 // O layout das worktrees de ciclo (`worktrees_de_ciclo`) vem da declaracao desta raiz. Sem ele,
 // o ciclo nao se infere do ramo nem da pasta (so do texto, se algum prefixo aparecer).
-const WORKTREES = destinoDe(REPO).worktrees;
-if (!WORKTREES) console.error(`aviso: ${REPO} nao declara worktrees_de_ciclo — ciclo nao se infere do ramo nem da pasta`);
+// A arvore do `--repo` e a raiz git dele: o padrao (tres pastas acima deste arquivo) cai DENTRO do
+// projeto quando o corpo mora em `plugins/vega/coletor/`, e a declaracao esta na raiz.
+const ARVORE = raizDoProjeto(REPO) ?? REPO;
+const WORKTREES = destinoDe(ARVORE).worktrees;
+// A arvore onde a conversa grava. Com uma worktree por sessao, a raiz git do `cwd` e a worktree
+// DAQUELA sessao: gravar nela espalha um arquivo de decisoes por worktree viva, inclusive na de
+// sessao em andamento, e ninguem junta (medido no hub, 16/11/2026). Mesmo projeto = mesma arvore
+// principal (o `.git` comum).
+// `raizPrincipal` de `destino.mjs` devolve a propria pasta quando o git falha, e ai worktree com o
+// `.git` orfao (ou git recusando a pasta) pareceria outro projeto e voltaria a gravar em si mesma.
+// Aqui a falha le o arquivo `.git` da worktree; sem ele e `null`, decide-se pelo caminho (pasta
+// dentro da arvore principal do `--repo`) e o resumo conta.
+function principalOuNulo(pasta) {
+  try {
+    const comum = execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: pasta, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    // `path.resolve` nos dois ramos: no Windows o git devolve barra normal, e a comparacao e de texto.
+    return path.resolve(path.basename(comum) === ".git" ? path.dirname(comum) : pasta);
+  } catch {
+    // O git nao respondeu. Worktree diz de quem e no proprio arquivo `.git`
+    // (`gitdir: <principal>/.git/worktrees/<nome>`), mesmo com o registro ja apagado.
+    try {
+      const m = fs.readFileSync(path.join(pasta, ".git"), "utf8").match(/^gitdir:\s*(.+?)[\\/]\.git[\\/]worktrees[\\/]/);
+      return m ? path.resolve(pasta, m[1]) : null;
+    } catch {
+      return null;
+    }
+  }
+}
+const dentroDe = (pasta, raiz) => pasta === raiz || pasta.startsWith(raiz + path.sep);
+const PRINCIPAL_DO_REPO = principalOuNulo(ARVORE);
+const mesmoProjeto = new Map();
+let principalIndeterminada = 0;
+function arvoreDeGravacao(doCwd) {
+  if (!doCwd || doCwd === ARVORE) return ARVORE;
+  if (!mesmoProjeto.has(doCwd)) {
+    const principal = principalOuNulo(doCwd);
+    if (principal === null || PRINCIPAL_DO_REPO === null) {
+      principalIndeterminada++;
+      mesmoProjeto.set(doCwd, dentroDe(doCwd, PRINCIPAL_DO_REPO ?? ARVORE));
+    } else mesmoProjeto.set(doCwd, principal === PRINCIPAL_DO_REPO);
+  }
+  return mesmoProjeto.get(doCwd) ? ARVORE : doCwd;
+}
+if (!WORKTREES) console.error(`aviso: ${ARVORE} nao declara worktrees_de_ciclo — ciclo nao se infere do ramo nem da pasta`);
 fs.mkdirSync(SAIDA, { recursive: true });
 
 // ---------- leitura ----------
@@ -133,6 +179,10 @@ const reCicloTexto = prefixosCiclo.size
 const RE_FECHO = /Diz\s.{0,120}?e eu toco|Diz\s+D?\d+.{0,120}?para eu seguir/i;
 const RE_CABECALHO = /^\s*(?:#+\s*)?\*\*\s*(?:Decis(?:ão|ões)\b|\d+\s+decis)|Decisão de operador\s*—\s*divergência|^\s*\*\*\s*Decisão/i;
 const RE_ITEM = /^\s*(?:\*\*)?\s*((?:D-[A-Z0-9]+-\d+)|(?:[A-Z]{1,2}\d+(?:\.\d+)*)|(?:\d+(?:\.\d+)*))[.)](?:\*\*)?\s+(.+?)\s*$/;
+// Item do `/brainstorm` de consumidor ate 15/11/2026: `**D12 — titulo em comportamento**`, a linha
+// inteira em negrito, travessao no lugar do ponto. So com D e inteiro: negrito qualquer com
+// travessao e prosa.
+const RE_ITEM_TRAVESSAO = /^\s*\*\*\s*(D\d+)\s+[—–]\s+(.+?)\s*\*\*\s*$/;
 const RE_OPCAO = /^\s*(?:[-*•]\s*)?\(([a-z])\)\s*(.*)$/;
 // Cabecalho (`| Opcao | Pro | Contra |`) e separador da tabela de opcoes: nao sao contexto. Outra
 // linha de tabela sem letra (tabela de dados no contexto) segue como contexto.
@@ -186,7 +236,7 @@ function parseBloco(texto) {
   let ultimaOpcao = null;
   const fecha = () => { if (cur) itens.push(cur); cur = null; ultimaOpcao = null; };
   for (const ln of corpo) {
-    const mi = ln.match(RE_ITEM);
+    const mi = ln.match(RE_ITEM) ?? ln.match(RE_ITEM_TRAVESSAO);
     const ot = opcaoDeTabela(ln);
     if (ot) {
       if (!cur) cur = { item: null, titulo: cabecalho || "", dominio: null, ctx: [], opcoes: [], recomendada: null, motivo: null };
@@ -244,6 +294,11 @@ function parseBloco(texto) {
 }
 
 // ---------- parse da resposta ----------
+// "a", "e" ou "o" solto antes de palavra, na mesma linha, e prosa ("a maior parte…"), nao letra.
+// Segue letra antes de conectivo que nao abre frase ("a porque…", "a sim") e antes de outra letra
+// de opcao que nao e palavra ("a c", "a e c"). "e a gente…" e "a mesma coisa…" sao prosa.
+const ARTIGO = "[aeo][ \\t]+(?!(?:porque|pq|pois|mas|sim)(?![\\wà-ú]))(?!(?:e[ \\t]+)?[b-df-np-z](?![\\wà-ú]))[\\wà-ú]";
+const RE_ARTIGO_NO_INICIO = new RegExp(`^${ARTIGO}`, "i");
 const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const RE_ACEITE = /^\s*(ok|okay|sim|s|vai|pode|manda|segue|aprovo|aprovado|perfeito|fechado|beleza|bora|isso|concordo|de acordo|pode seguir|segue assim|todas?|todos?)(\s+(as\s+)?recomenda\w*)?\s*[.!]*\s*$/i;
 
@@ -264,8 +319,10 @@ function parseResposta(resp, itens) {
     const semD = /^D\d+$/.test(it.item) ? it.item.slice(1) : null;
     if (semD && !ids.has(semD)) formas.push(semD);
     for (const forma of formas) {
+      // Segunda letra: colada, depois de `+`, ou depois de virgula/espaco — menos o artigo
+      // (`ARTIGO`): "2b, a maior parte…" e (b), nunca (ab).
       const re = new RegExp(
-        `(?<![\\w.#/@-])${escRe(forma)}\\s*[-:.)=]?\\s*\\(?([${letrasValidas}](?:\\s*[+,]?\\s*[${letrasValidas}])*)\\)?(?![a-zà-úA-Z0-9])`,
+        `(?<![\\w.#/@-])${escRe(forma)}\\s*[-:.)=]?\\s*\\(?([${letrasValidas}](?:[${letrasValidas}]|\\s*\\+\\s*[${letrasValidas}]|(?:\\s*,\\s*|\\s+)(?!${ARTIGO})[${letrasValidas}])*)\\)?(?![a-zà-úA-Z0-9])`,
         "gi",
       );
       const m = R.match(re);
@@ -305,7 +362,10 @@ function parseResposta(resp, itens) {
   const trim = R.trim();
   const unico = itens.length === 1;
   const mLetra = trim.match(/^\(?([a-f])\)?(?:\s*[,.;:!—–-]\s*|\s+|$)([\s\S]*)$/i);
-  if (mLetra && (unico ? (itens[0].opcoes.length === 0 || itens[0].opcoes.some((o) => o.letra === mLetra[1].toLowerCase())) : false)) {
+  // "a base deve ser…" e prosa, nao a opcao (a): "a", "e" ou "o" sem parentese, seguido de palavra
+  // na mesma linha. "a", "a.", "(a) porque…" e "a" sozinho na primeira linha seguem sendo letra.
+  const artigo = RE_ARTIGO_NO_INICIO.test(trim);
+  if (mLetra && !artigo && (unico ? (itens[0].opcoes.length === 0 || itens[0].opcoes.some((o) => o.letra === mLetra[1].toLowerCase())) : false)) {
     const resto = mLetra[2].trim();
     res.set(itens[0].item, { escolha: mLetra[1].toLowerCase(), livre: false, comentario: resto || null, conf: resto ? "media" : "alta", via: "letra-solta" });
     return res;
@@ -379,7 +439,10 @@ for (const arq of sessoes) {
   resumo.sessoes_lidas++;
   const doCwd = raizDoProjeto(objs.find((o) => o.cwd)?.cwd);
   if (!doCwd) resumo.sessoes_sem_raiz_no_cwd = (resumo.sessoes_sem_raiz_no_cwd || 0) + 1; // destino do --repo
-  const destino = destinoDe(doCwd ?? REPO);
+  const arvore = arvoreDeGravacao(doCwd);
+  // Conversa de outra arvore do projeto: o destino e o da declaracao da arvore do `--repo`.
+  if (doCwd && arvore !== doCwd) resumo.sessoes_trazidas_a_arvore_do_repo = (resumo.sessoes_trazidas_a_arvore_do_repo || 0) + 1;
+  const destino = destinoDe(arvore);
   const dirNome = path.basename(path.dirname(arq));
   const idDir = (dirNome.match(/bridge-cse-([A-Za-z0-9]+)$/) || [])[1];
   const primeiroUser = objs.find((o) => o.type === "user" && !temToolResult(o.message?.content) && !o.isMeta);
@@ -557,6 +620,10 @@ for (const [arquivo, linhas] of paraGit) {
     resumo.destino_git.push({ arquivo, erro: e.code ?? e.message });
     console.error(`falha ao gravar ${arquivo}: ${e.code ?? e.message}`);
   }
+}
+if (principalIndeterminada) {
+  resumo.arvores_com_principal_indeterminada = principalIndeterminada;
+  console.error(`aviso: ${principalIndeterminada} arvore(s) em que o git nao disse a arvore principal — decidido pelo caminho (dentro de ${PRINCIPAL_DO_REPO ?? ARVORE} = mesmo projeto)`);
 }
 fs.writeFileSync(path.join(SAIDA, "resumo.json"), JSON.stringify(resumo, null, 2) + "\n");
 console.log(JSON.stringify(resumo, null, 2));

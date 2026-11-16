@@ -32,9 +32,9 @@ Sem unidade medida na sessão, decidir na faixa seguinte, com a medida; na últi
 | Papel | Como o sensor sabe | Unidade e fronteira limpa | Corte |
 | --- | --- | --- | --- |
 | **Condutora de execução** (`F<n>`) e **de fechamento** | o pedido de nascimento (`Conduzir <ciclo> — F<n>, pela skill …`, ou o da herdeira) | task conferida e trazida, nenhuma operária viva, nenhuma pergunta aberta | não compacta nem pede `/clear`: passa o comando à herdeira (`proximo` até a ação `passar`, nota no molde de `nota-de-passagem.md`) |
-| **Condutora de shaping e de planejamento** | o pedido de nascimento da fase | fim de etapa do desenho ou do plano | compacta como a sessão comum; na fronteira, cria a seguinte (a de shaping cria a de planejamento) |
+| **Condutora de shaping e de planejamento** | o pedido de nascimento da fase | fim de etapa do desenho ou do plano | compacta na fronteira (`/compact`, `write-plan/references/checkpoints.md`); nela, cria a seguinte (a de shaping cria a de planejamento) |
 | **Operária** | o contrato no pedido de nascimento | a própria task fechada (commit; carimbo só em gatilho crítico ou publicação; aviso) | fecha a task pelo menor caminho, sem varredura nova; se a projeção passa o teto antes de fechar, para no próximo commit limpo e avisa `T<k>-FALHA janela <nonce>` |
-| **Comum** | o resto | fim de task ou de etapa do pedido | fecha com o texto da próxima sessão e `/clear`; `/compact` se há racional só na conversa (`write-plan/references/checkpoints.md`) |
+| **Comum** | o resto | fim de task ou de etapa do pedido | **não recebe aviso** (ruling do operador, 16/11/2026): a sessão fora de condução não é mandada cortar, e quem decide `/compact` ou `/clear` é o operador. No config, `papeis.comum.enabled: false`; apagar a chave volta a avisar |
 
 ## A régua da condutora
 

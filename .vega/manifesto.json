@@ -1,18 +1,18 @@
 {
   "esquema": 1,
-  "fonte": "da8aed55327c7689c68b3326fe522abf85023751",
-  "versao": "0.1.6",
-  "versao_anterior": "0.1.5",
+  "fonte": "e9a0e7553f1275b0c89c432b299cedb8e14c7ee6",
+  "versao": "0.1.7",
+  "versao_anterior": "0.1.6",
   "arquivos": {
     ".claude-plugin/marketplace.json": "d5e303981ff2dbdaa1892ea59c9df4d70d79cd0a",
     ".github/workflows/conferir-fonte.yml": "a9d7ef034058cd7d69c88b70596ba409ddba4642",
     ".vega/conferir-fonte.mjs": "fd29690a31e32099d2525c6ff0115f58fdd6898e",
     "CONTRIBUTING.md": "2dc2fe040c4b7ebaf94fa05795ab9cb327eea1c8",
     "README.md": "7864252706c2725e78bab6281bedfe8317832b7e",
-    "plugins/vega/.claude-plugin/plugin.json": "dc471126ea7aa6d707abe143b458b239917b334c",
+    "plugins/vega/.claude-plugin/plugin.json": "503889330116b5894630cd280b2371ad0465abc2",
     "plugins/vega/INSTALL.md": "7a57f6b61727449caeb7a7f245c719b2d1444661",
     "plugins/vega/coletor/decisoes/destino.mjs": "f517e5de7de9c60f574487b71a1b7915dfd2bd1e",
-    "plugins/vega/coletor/decisoes/extrair-conversas.mjs": "201c86665db35df7f2d00fa5e33861e7fd84cafd",
+    "plugins/vega/coletor/decisoes/extrair-conversas.mjs": "4939eea2a8d4fd48b6115100fb32ba4e9a07bb1a",
     "plugins/vega/coletor/lib/varredura-phi-segredo.mjs": "5851a70f319b0e5ff21efbd7741d5f79f4ceee00",
     "plugins/vega/exemplo/.vega/declaracao.json": "69e38e050838624360e37637d64fadb3a2c2d859",
     "plugins/vega/exemplo/README.md": "baac1647b84c1a75f9017af329234863042e1cf9",
@@ -133,7 +133,7 @@
     "plugins/vega/skills/conducao/references/brief-operaria.md": "39320f9e338e02c47cdcbf129514c3829ed10a9e",
     "plugins/vega/skills/conducao/references/conduzivel.md": "7823c98a926581f302a56363431f3105f150baf1",
     "plugins/vega/skills/conducao/references/contrato.md": "c4284563048e2fa2253aa94e357a619d958cc48f",
-    "plugins/vega/skills/conducao/references/janela.md": "90cac1754cd11479127cd2dca09d06030083582c",
+    "plugins/vega/skills/conducao/references/janela.md": "89b72b10da222620b033cb64b0d52977e3ee5f69",
     "plugins/vega/skills/conducao/references/nota-de-passagem.md": "1d4799653b82e54cff06cf777581d39041e78263",
     "plugins/vega/skills/conducao/references/planejar.md": "2e6dee4c105e314955d6fd2c296f3c04eadabc27"
   }
