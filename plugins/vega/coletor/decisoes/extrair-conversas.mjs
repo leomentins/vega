@@ -128,10 +128,34 @@ const reCicloTexto = prefixosCiclo.size
   : null;
 
 // ---------- parse do bloco ----------
-const RE_FECHO = /Diz\s.{0,120}?e eu toco/i;
+// Fecho de 16/11/2026 ("Diz D3 e a letra, ou texto livre, para eu seguir.") ou o antigo
+// ("Diz 3 e eu toco."), que segue lido: a coleta rele conversas passadas.
+const RE_FECHO = /Diz\s.{0,120}?e eu toco|Diz\s+D?\d+.{0,120}?para eu seguir/i;
 const RE_CABECALHO = /^\s*(?:#+\s*)?\*\*\s*(?:Decis(?:ão|ões)\b|\d+\s+decis)|Decisão de operador\s*—\s*divergência|^\s*\*\*\s*Decisão/i;
 const RE_ITEM = /^\s*(?:\*\*)?\s*((?:D-[A-Z0-9]+-\d+)|(?:[A-Z]{1,2}\d+(?:\.\d+)*)|(?:\d+(?:\.\d+)*))[.)](?:\*\*)?\s+(.+?)\s*$/;
 const RE_OPCAO = /^\s*(?:[-*•]\s*)?\(([a-z])\)\s*(.*)$/;
+// Cabecalho (`| Opcao | Pro | Contra |`) e separador da tabela de opcoes: nao sao contexto. Outra
+// linha de tabela sem letra (tabela de dados no contexto) segue como contexto.
+const RE_CABECALHO_TABELA = /^\s*\|\s*Op[çc][ãa]o\s*\||^\s*\|(?:\s*:?-{2,}:?\s*\|)+\s*$/i;
+
+// Opcao numa linha da tabela Opcao | Pro | Contra (16/11/2026). Copia de `opcaoDeTabela` em
+// `estado/lib/bloco-de-decisao.mjs`: este extrator viaja sozinho na vitrine e nao importa de la.
+function opcaoDeTabela(linha) {
+  if (!/^\s*\|/.test(linha)) return null;
+  const celulas = linha
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/(?<!\\)\|\s*$/, "")
+    .split(/(?<!\\)\|/)
+    .map((c) => c.trim().replace(/\\\|/g, "|"));
+  const m = celulas[0].match(/^\*{0,2}\(([a-z])\)\*{0,2}\s*(.*)$/);
+  if (!m) return null;
+  let texto = m[2].trim();
+  let resto = celulas.slice(1);
+  if (!texto && resto.length) [texto, ...resto] = resto;
+  const [pro, contra] = resto;
+  return { letra: m[1], texto, ...(pro ? { pro } : {}), ...(contra ? { contra } : {}) };
+}
 const RE_RECO = /^\s*(?:[-*]\s*)?(?:→|->)\s*(?:\*\*)?\s*(?:(?:A|O)\s+[a-zà-ú]+\s+)?Recomend[oa]\b(.*)$/i;
 
 function limpaMd(s) {
@@ -163,6 +187,14 @@ function parseBloco(texto) {
   const fecha = () => { if (cur) itens.push(cur); cur = null; ultimaOpcao = null; };
   for (const ln of corpo) {
     const mi = ln.match(RE_ITEM);
+    const ot = opcaoDeTabela(ln);
+    if (ot) {
+      if (!cur) cur = { item: null, titulo: cabecalho || "", dominio: null, ctx: [], opcoes: [], recomendada: null, motivo: null };
+      cur.opcoes.push(ot);
+      ultimaOpcao = null;
+      continue;
+    }
+    if (RE_CABECALHO_TABELA.test(ln)) continue;
     if (mi && !RE_OPCAO.test(ln)) {
       fecha();
       let titulo = limpaMd(mi[2]);
@@ -228,6 +260,9 @@ function parseResposta(resp, itens) {
     const alias = /\./.test(it.item) ? it.item.split(".").pop() : null;
     const formas = [it.item];
     if (alias && !ids.has(alias) && !itens.some((o) => o !== it && o.item.split(".").pop() === alias)) formas.push(alias);
+    // Item `D48` aceita "48a" sem o D (decisao 2a de 16/11/2026): mesma decisao, confianca alta.
+    const semD = /^D\d+$/.test(it.item) ? it.item.slice(1) : null;
+    if (semD && !ids.has(semD)) formas.push(semD);
     for (const forma of formas) {
       const re = new RegExp(
         `(?<![\\w.#/@-])${escRe(forma)}\\s*[-:.)=]?\\s*\\(?([${letrasValidas}](?:\\s*[+,]?\\s*[${letrasValidas}])*)\\)?(?![a-zà-úA-Z0-9])`,
@@ -236,7 +271,7 @@ function parseResposta(resp, itens) {
       const m = R.match(re);
       if (m) {
         const idx = R.search(re);
-        achados.push({ it, ini: idx, fim: idx + m[0].length, escolha: [...new Set(m[0].slice(forma.length).toLowerCase().replace(/[^a-z]/g, "").split(""))].sort().join(""), alias: forma !== it.item });
+        achados.push({ it, ini: idx, fim: idx + m[0].length, escolha: [...new Set(m[0].slice(forma.length).toLowerCase().replace(/[^a-z]/g, "").split(""))].sort().join(""), alias: forma !== it.item && forma !== semD });
         break;
       }
     }

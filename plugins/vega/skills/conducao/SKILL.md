@@ -127,7 +127,7 @@ Pergunta aberta não tem prazo e nunca é queda. A checagem de fora (o instalado
 
 ### 3.1 Gate ao operador
 
-O bloco de gate segue o formato de decisão da página do projeto, numeração inclusive (contador por ciclo: repasse mantém o número); sem formato declarado: `Decisão de operador — <assunto>`, item com inteiro corrido da sessão, opções `(a)/(b)`, `→ Recomendo`, fecho "diz … e eu toco", e o número segue o contador da sessão. O nonce vai no item.
+O bloco de gate segue o formato de decisão da página do projeto, numeração inclusive (contador por ciclo: repasse mantém o número); sem formato declarado: `Decisão de operador — <assunto>`, opções `(a)/(b)`, `→ Recomendo`, item `D<n>` (inteiro da sessão, sem hífen), fecho "Diz D<n> e a letra, ou texto livre, para eu seguir.". O nonce vai no item.
 
 ## 4. Push do ramo e CI da proposta
 

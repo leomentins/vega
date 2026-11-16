@@ -16,28 +16,41 @@ pergunta de distância, e simplificar corta ruído, nunca corta opção.
 **Decisão de operador — <assunto — do que o bloco trata, em poucas palavras>**
 (plural com mais de um item: **Decisões de operador — …**; outro papel: **Decisão de <outro papel> — …**)
 
-k. <título em linguagem de comportamento/UX — nunca de schema, coluna, função ou diff>
-   <1-2 linhas do que está em jogo, em consequência observável>
-   - (a) <opção em 1 linha>
-   - (b) <opção em 1 linha>
-   → Recomendo (a) — <motivo em meia linha>
-   _Decide:_ <papel — só quando ESTE item foge do papel do cabeçalho>
+Dk. <título em linguagem de comportamento/UX — nunca de schema, coluna, função ou diff>
 
-k+1. ...
+<1-2 linhas do que está em jogo, em consequência observável>
+- (a) <opção em 1 linha>
+- (b) <opção em 1 linha>
+→ Recomendo (a) — <motivo em meia linha>
+_Decide:_ <papel — só quando ESTE item foge do papel do cabeçalho>
 
-Diz k-…-<último k do bloco> e eu toco.   (um item só: "Diz k e eu toco.")
-<opcional, no máximo 1 linha: "Se nenhuma serve, me diz.">
-<!-- decisao k = <ciclo>/<fase>/<task>/<código> · origem <papel> -->   (posições fixas, `-` no vazio; regra 5)
-<!-- decisao k+1 = … -->
+D<k+1>. <item cuja opção esconde custo — §Pró e contra: as opções vão em tabela>
+
+<1-2 linhas do que está em jogo>
+
+| Opção | Pró | Contra |
+|---|---|---|
+| (a) <opção em 1 linha> | <o que se ganha> | <o que se paga> |
+| (b) <opção em 1 linha> | … | … |
+
+→ Recomendo (b) — <motivo em meia linha>
+
+Diz Dk-…-D<último k do bloco> e a letra, ou texto livre, para eu seguir.   (um item só: "Diz Dk e a letra, ou texto livre, para eu seguir.")
+<!-- decisao Dk = <ciclo>/<fase>/<task>/<código> · origem <papel> -->   (posições fixas, `-` no vazio; regra 5)
+<!-- decisao D<k+1> = … -->
 ```
 
 O cercado acima é só a moldura do molde: o bloco sai como **markdown corrido na conversa, nunca
-dentro de bloco de código** — em bloco de código ele vira cartão copiável e o negrito, a lista e
-o fecho somem.
+dentro de bloco de código** — em bloco de código ele vira cartão copiável e o negrito, a lista, a
+tabela e o fecho somem. O título leva uma linha em branco depois, e a tabela uma antes e outra
+depois: `D3.` não é lista numerada, e sem a linha em branco o markdown cola o título no contexto,
+lê a tabela como texto do parágrafo de cima e engole o `→ Recomendo` como linha da tabela.
 
-`k` segue a regra 5: é o próximo inteiro da sessão — `1` no primeiro bloco, `3` no segundo se o
-primeiro teve 2 decisões —, sem prefixo de ciclo, fase ou task. `k+1` é o inteiro seguinte. Esse
-número mora **só no item, no fecho e na chave escondida** — nunca no cabeçalho (regra 7).
+`Dk` segue a regra 5: a letra D e o inteiro, sem hífen — o do ciclo, reservado no contador, em
+sessão de ciclo de projeto que o declara; fora disso, o próximo inteiro da sessão (`D1` no
+primeiro bloco, `D3` no segundo se o primeiro teve 2 decisões) —, sem prefixo de ciclo, fase ou task.
+`D<k+1>` é o inteiro seguinte. Esse número mora **só no item, no fecho e na chave escondida** —
+nunca no cabeçalho (regra 7).
 
 1. **Título e corpo em comportamento, não em implementação.** "Segredo do servidor transita pela
    sua máquina sem controle" — não "senha do banco e chave de serviço em variável de ambiente sem
@@ -46,15 +59,21 @@ número mora **só no item, no fecho e na chave escondida** — nunca no cabeça
    trabalho de decidir *e* de avaliar.
 3. **Técnico a uma pergunta de distância.** Nunca no corpo do bloco; expandir só quando o operador
    pedir ("por quê a 2?").
-4. **Fecho acionável** — a resposta esperada é uma sequência curta (`1-b / 2-a`), não prosa.
-   Resposta com ou sem hífen entre número e letra vale o mesmo (`1-b` = `1b`).
+4. **Fecho acionável** — `Diz D3 e a letra, ou texto livre, para eu seguir.` (vários itens:
+   `Diz D3-D4 e a letra, ou texto livre, para eu seguir.`). A resposta esperada é uma sequência
+   curta (`D1b / D2a`), e o texto livre vale como alternativa (regra 8). Com ou sem o D, com ou sem
+   hífen entre número e letra, vale o mesmo (`D1-b` = `D1b` = `1b`). O fecho antigo
+   (`Diz 3 e eu toco.`, até 16/11/2026) não se escreve mais, e a coleta segue lendo os blocos que
+   o usaram.
 5. **Ordem = gravidade; numeração do ciclo (ou da sessão, fora dele), com a chave tipada escondida.** Decisão que
    trava produção, segurança, dado pessoal ou obrigação legal vem **primeiro dentro do bloco**, e
    o título carrega o peso em linguagem de consequência ("isso trava a entrega da semana", não
    "SEV-HIGH"). Quando a origem agrupa por domínio (um revisor que agrupa os achados em produto ·
    segurança · UI-UX), o **domínio vira tag inline no título** e a numeração segue corrida — nunca
    reinicia por domínio, nunca vira sub-lista aninhada.
-   **Visível: um inteiro sem prefixo.** De onde ele vem depende de a sessão trabalhar num ciclo:
+   **Visível: a letra D e um inteiro, sem hífen e sem outro prefixo** (`D3`). O D diz "decisão" a
+   quem lê e a quem responde, e não muda a conta: o inteiro é o mesmo, e a resposta sem o D (`3a`)
+   vale para o item `D3`. De onde o inteiro vem depende de a sessão trabalhar num ciclo:
    - **Sessão de ciclo** (planejamento, condução em qualquer nível, fechamento), **em projeto que
      declara contador por ciclo:** o número é do ciclo, reservado no contador **antes de escrever
      o bloco**, um por item (a página do projeto nomeia o verbo). Só sobe, do planejamento ao
@@ -72,10 +91,10 @@ número mora **só no item, no fecho e na chave escondida** — nunca no cabeça
      último número da própria sessão — pelo registro de decisões que o projeto declara, que grava
      sessão e item, ou pelo próprio histórico — e continua dele, nunca reabre em `1` por cima de
      decisão já levantada.
-   Nos dois casos o fecho cita os números (`Diz 3-4 e eu toco.`), e "a 3" nunca é ambíguo — no
-   ciclo inteiro, ou na sessão.
+   Nos dois casos o fecho cita os números (`Diz D3-D4 e a letra, ou texto livre, para eu
+   seguir.`), e "a D3" nunca é ambíguo — no ciclo inteiro, ou na sessão.
    **Escondida: a chave tipada, num comentário HTML no fim do bloco**, uma linha por item:
-   `<!-- decisao <k> = <ciclo>/<fase>/<task>/<código> · origem <papel> -->`. As quatro posições são
+   `<!-- decisao D<k> = <ciclo>/<fase>/<task>/<código> · origem <papel> -->`. As quatro posições são
    fixas, e a que não existe leva `-`:
    - `<ciclo>` — id do ciclo (`ABC-12`); fora de ciclo, o slug do ramo sem a modalidade nem a data
      (`exportar-relatorio` de `hotfix/exportar-relatorio-20260115`); sessão avulsa sem ramo, `-`.
@@ -86,30 +105,33 @@ número mora **só no item, no fecho e na chave escondida** — nunca no cabeça
    - `<papel>` — o tipo da sessão que levantou, de um vocabulário fechado: `maestra` · `condutora` ·
      `filha` · `neta` · `hotfix` · `docs` · `shaping` · `planejamento` · `fechamento` · `avulsa`.
      Papel novo entra aqui antes de ser usado.
-   Exemplos: hotfix sem ciclo, `<!-- decisao 4 = exportar-relatorio/-/-/4 · origem hotfix -->`;
-   brainstorm, `<!-- decisao 2 = ABC-13/-/-/2 · origem shaping -->`. O app não renderiza o
-   comentário, então o operador lê só o inteiro; a coleta lê o texto cru e tem nele o tipo da
+   Exemplos: hotfix sem ciclo, `<!-- decisao D4 = exportar-relatorio/-/-/4 · origem hotfix -->`;
+   brainstorm, `<!-- decisao D2 = ABC-13/-/-/2 · origem shaping -->`. O `<código>` é o inteiro,
+   sem o D. O app não renderiza o
+   comentário, então o operador lê só o número; a coleta lê o texto cru e tem nele o tipo da
    decisão. Exemplo de bloco, terceira decisão de uma condutora que executa a T29 da F4 do ABC-12 —
    em citação, com o comentário em crase só para aparecer aqui; na conversa o bloco sai solto e o
    comentário cru, sem crase:
 
    > **Decisão de operador — teste de recuperação da condução**
    >
-   > 3\. A recuperação depois de queda não tem como ser testada no servidor
+   > D3. A recuperação depois de queda não tem como ser testada no servidor
+   >
    > O teste precisa derrubar a rede, e o servidor de CI não deixa. Se seguir sem ele: a recuperação embarca sem prova.
    > - (a) testar na estação, à mão, e registrar o resultado na fase
    > - (b) adiar o teste para a fase de portabilidade
    > → Recomendo (a) — a prova sai nesta fase, e custa uma sessão
    >
-   > Diz 3 e eu toco.
-   > `<!-- decisao 3 = ABC-12/F4/T29/3 · origem condutora -->`
+   > Diz D3 e a letra, ou texto livre, para eu seguir.
+   > `<!-- decisao D3 = ABC-12/F4/T29/3 · origem condutora -->`
 
    **Repasse de filha.** No ciclo com contador, o número da filha já é único no ciclo: a mãe repassa
    a decisão **com o mesmo número**, e `<k>` e `<código>` coincidem. Fora disso, a decisão que uma
    sessão filha levanta sobe pela sessão mãe com o **próximo inteiro da sessão da mãe**; o código
    que a filha usou vai só na chave escondida. A maestra que já levantou 44 decisões e recebe a
-   decisão 3 da condutora acima a repassa como `45`, fecha com `Diz 45 e eu toco.` e escreve
-   `<!-- decisao 45 = ABC-12/F4/T29/3 · origem condutora -->`. A resposta do operador (`45-a`)
+   decisão D3 da condutora acima a repassa como `D45`, fecha com `Diz D45 e a letra, ou texto
+   livre, para eu seguir.` e escreve `<!-- decisao D45 = ABC-12/F4/T29/3 · origem condutora -->`.
+   A resposta do operador (`D45a`, ou `45a`)
    volta à filha pela mãe, que a traduz para o código dela.
 6. **O fato técnico bruto é persistido ANTES de simplificar.** A tradução é camada de
    apresentação, nunca o único registro: o achado cru (severidade, regra de acesso, coluna, função,
@@ -131,9 +153,9 @@ número mora **só no item, no fecho e na chave escondida** — nunca no cabeça
    pelo número da decisão.
 8. **Alternativa livre é sempre aceita e nunca listada.** O operador pode responder fora do menu
    em qualquer item, sem que isso precise ser oferecido. Por isso nenhum item ganha opção
-   "(c) outra" ou "outro caminho": decisão de sim/não tem duas opções, não três. O convite é
-   **opcional e no máximo uma linha de rodapé** depois do fecho, para o bloco inteiro — nunca
-   dentro de um item.
+   "(c) outra" ou "outro caminho": decisão de sim/não tem duas opções, não três. O convite já vem
+   no fecho ("ou texto livre", regra 4), para o bloco inteiro — nunca dentro de um item, e sem
+   linha de rodapé a mais.
 9. **A primeira linha diz o tipo da saída.** Toda saída que para diante do operador abre com uma
    linha em negrito no molde do cabeçalho de decisão, e o leitor sabe o que é antes de ler o resto:
    - **`Decisão de <papel> — <assunto>`** (plural `Decisões` com mais de um item) — depende de quem
@@ -154,6 +176,23 @@ problema, com três opções fixas — *conserta agora* · *vira dívida (porqu�
 formato vale, e decisão adicional levantada junto (escopo, retrabalho parcial) volta a exigir a
 recomendação. Um rótulo único ("embarca" · "refaz" · "embarca com dívida") obrigaria a resumir N
 problemas numa escolha só.
+
+**Pró e contra — quando a opção esconde custo.** O padrão continua sendo a opção em 1 linha, em
+lista. Pró e contra entram quando a opção troca um ganho por um custo que a própria linha não
+mostra: o operador escolheria diferente se lesse o custo. Teste de quem escreve: *tirando o
+contra, a escolha muda?* Não muda ⇒ não entra. Um item com pró e contra leva os dois em **todas**
+as opções dele, para a comparação ficar de pé, e por isso as opções dele saem numa **tabela** de
+colunas `Opção | Pró | Contra`, uma linha por opção, com a letra no começo da primeira célula
+(`| (a) … | … | … |`) e cada célula em uma linha curta (decisão do operador de 16/11/2026; até
+ali eram sub-linhas `Pró:` e `Contra:` sob a opção, que a coleta segue lendo).
+- **Obrigatório** nos blocos de desenho (brainstorm e shaping, antes de existir design aprovado),
+  onde cada opção é uma troca de custo: ali o teste não se aplica, e todo item leva pró e contra.
+  A única exceção dentro do desenho é o item de aprovação do design (aprovo · ajustar), que
+  não troca custo.
+- **Nunca** nos itens de conserto do julgamento de tela (as três opções fixas acima). Fora do
+  desenho, sim/não cuja opção já diz o custo não leva.
+- Pró e contra não fazem opção nova nem a substituem: a opção segue legível sozinha, e a
+  recomendação segue com o motivo dela.
 
 ## Invariante — simplificar corta ruído, nunca opção
 
@@ -218,10 +257,15 @@ o operador não pode cravar.
   lista (regra 8).
 - ❌ Segundo bloco da sessão, ou a sessão depois de compactada, reabrindo a numeração em 1
   (regra 5).
-- ❌ Prefixo visível no número — task (`13.1`), fase (`F0.2`), ciclo ou código da filha na frente
-  do inteiro; o tipo vai na chave escondida (regra 5).
-- ❌ Repasse de filha com o número dela (`3`, `4.1`) em vez do próximo inteiro da sessão mãe, ou
-  sem a chave escondida que guarda o número da filha (regra 5).
+- ❌ Prefixo visível no número além do D — task (`13.1`), fase (`F0.2`), ciclo ou código da filha
+  na frente do inteiro; o tipo vai na chave escondida (regra 5). E o D com hífen (`D-3`), que a
+  coleta não lê.
+- ❌ Fecho antigo (`Diz 3 e eu toco.`) ou fecho sem o D; sem o fecho a coleta perde o bloco
+  inteiro (regra 4).
+- ❌ Pró e contra fora da tabela, ou tabela com a letra fora da primeira célula (§Pró e contra).
+- ❌ Fora do ciclo com contador, repasse de filha com o número dela (`D3`, `4.1`) em vez do
+  próximo inteiro da sessão mãe, ou sem a chave escondida que guarda o número da filha (regra 5).
+  No ciclo com contador é o contrário: o número da filha passa igual.
 - ❌ Chave tipada visível — fora de comentário HTML, ou dentro de bloco de código onde o
   comentário vira texto (regra 5).
 - ❌ Opção que é outra renomeada — mesmo comportamento observável, palavras diferentes
