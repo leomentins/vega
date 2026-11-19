@@ -14,6 +14,40 @@ import { lerDeclaracoesConducao, parseHeadings, parseTasks } from "./leitor-cano
 
 const BRIEF = path.join(path.dirname(fileURLToPath(import.meta.url)), "brief-canonico.mjs");
 
+/**
+ * As peças do consentimento do projeto de teste (VEGA-19 T16): um gate de PHI
+ * de mentira (recusa CPF formatado) e um registro de perguntas que só aceita
+ * a forma e devolve `digitado` para toda pergunta citada — as suítes que
+ * medem a recusa por origem injetam peças próprias (`consentimento-no-registro`,
+ * `pergunta-citada`). Dublê declarado (D-VEGA19-42): o projeto de teste não
+ * tem registro, então `perguntaDoAutorizar` responde a pergunta do autorizar
+ * que o núcleo pede (`pedido`: ciclo, fase e sim), na convenção da
+ * D-VEGA19-44, com a opção `a` escolhida. Quem confere é o núcleo
+ * (`exigirPerguntaDoAutorizar`); o uso único ele lê do git, não daqui.
+ */
+export function consentimentoDoProjeto() {
+  return Object.freeze({
+    phi: (entrada) => (/\d{3}\.\d{3}\.\d{3}-\d{2}/.test(String(entrada?.corpo ?? "")) ? { recusar: true, mensagem: "corpo · cpf-formatted" } : { recusar: false }),
+    perguntas: Object.freeze({
+      gravar(eventos) {
+        if (!Array.isArray(eventos) || !eventos.every((e) => /^p-[0-9a-f]{16}$/.test(e?.pergunta_id ?? ""))) throw new Error("evento fora da forma");
+        return [{ exit: 0, gravados: eventos.length }];
+      },
+      origemEfetiva: (id) => ({ origem: /^p-[0-9a-f]{16}$/.test(id ?? "") ? "digitado" : null }),
+      perguntaDoAutorizar(id, pedido) {
+        if (!/^p-[0-9a-f]{16}$/.test(id ?? "")) return { origem: null, motivo: "sem-resposta", sem_registro: false, abertura: null, escolhas: [] };
+        return {
+          origem: "digitado",
+          motivo: null,
+          sem_registro: false,
+          abertura: { evento: "abertura", pergunta_id: id, ciclo: pedido?.ciclo ?? null, ponteiro: `autorizar-ciclo:${pedido?.fase ?? ""}`, itens: [{ numero: 1, opcoes: [{ letra: "a", texto: pedido?.sim ?? "" }] }] },
+          escolhas: [{ numero: 1, letra: "a" }],
+        };
+      },
+    }),
+  });
+}
+
 /** Frontmatter `cycle:` do plano. */
 function cicloDoFrontmatter(texto) {
   return /^cycle:\s*(\S+)/m.exec(/^---\r?\n([\s\S]*?)\r?\n---/.exec(texto)?.[1] ?? "")?.[1] ?? null;

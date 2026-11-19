@@ -12,8 +12,8 @@ O núcleo decide abrir sessão, trazer, publicar e perguntar pelo que o plano **
 | anotação | valores | o que o núcleo faz com ela |
 | --- | --- | --- |
 | `Estação` | `servidor` · `workstation` · `condutora` | onde a tarefa roda: na sessão filha do servidor, na estação do operador, ou pela própria condutora (`maestra` é o nome antigo, lido como `condutora`) |
-| `Publicação` | `sim` · `não` | `sim` ⇒ a tarefa publica (banco, deploy, envio para fora do repositório) e só a condutora publica, depois de trazer |
-| `Sensível` | `sim` · `não` | `sim` ⇒ a tarefa toca dado ou caminho sensível do projeto e pede o sim de quem decide antes de abrir |
+| `Publicação` | `sim` · `não` | `sim` ⇒ a tarefa publica (banco, deploy, envio para fora do repositório) e só a condutora publica, depois de trazer. |
+| `Sensível` | `sim` · `não` | `sim` ⇒ a tarefa toca dado de paciente ou caminho clínico, ou publica apagando ou alterando algo existente, e pede o sim de quem decide mesmo coberta pelo sim do ciclo. Publicação só de acréscimo (migration aditiva, coluna nova, verbo novo) é `não`, e sai coberta pelo sim do ciclo (D18a do operador, 16/11/2026) |
 | `Verificação` | um comando, entre crases | o único comando que a conferência roda depois de trazer; exit 0 é verde |
 | `Commit` | o subject do commit | o subject que a tarefa grava; no formato público, sem a anotação, vale o `-m "…"` do `git commit` do passo |
 

@@ -1,13 +1,15 @@
 # Janela de contexto
 
-Toda sessão da condução corta o contexto antes de degradar, e corta numa fronteira limpa. O teto é onde a sessão já deveria ter cortado, nunca onde ela começa a pensar no corte: os avisos chegam antes, em faixas, e em cada um a sessão decide onde cortar com o que mediu.
+Toda sessão da condução corta o contexto antes de degradar, e corta numa fronteira limpa. O teto é onde a sessão já deveria ter cortado, nunca onde ela começa a pensar no corte: os avisos chegam antes, em faixas. **Abaixo da última faixa (400k numa janela de 1M) não se corta por janela.** A partir dela a sessão avalia o corte limpo: procura a próxima fronteira limpa e corta nela.
 
 ## Faixas e teto
 
-| Janela | Faixas de aviso | Teto |
-| --- | --- | --- |
-| 1M | 250k · 300k · 400k | 500k |
-| 200k | 50k · 60k · 80k (proporcional) | 100k |
+| Janela | Faixas de aviso | Avalia o corte a partir de | Teto |
+| --- | --- | --- | --- |
+| 1M | 250k · 300k · 400k | 400k | 500k |
+| 200k | 50k · 60k · 80k (proporcional) | 80k | 100k |
+
+Valem para todo papel da condução (condutora e operária), contados do zero da janela. Decisão do operador (D17a, 16/11/2026), que trocou a régua do VEGA-37 T23 (teto a 100k acima da carga inicial, ~187k numa janela de 1M): cada passagem custou caro no VEGA-19 (canal e numeração de decisão perdidos, a anterior ociosa), e a diferença de erro medida na T2 do VEGA-37 é de 0,7% para 1,9%.
 
 Os números são do projeto, num arquivo só (na Sistoli, `.claude/state/janela-de-contexto.json`): faixas em fração da janela, teto, tamanho da janela por modelo e o texto de cada papel. Tamanho da janela: o do modelo declarado no arquivo, senão o padrão; contexto observado acima dele sobe ao tamanho seguinte.
 
@@ -17,15 +19,13 @@ Um hook do projeto lê, no transcript da própria sessão, o uso da última resp
 
 O aviso traz: janela atual e faixa, papel, crescimento por unidade fechada e por chamada, a projeção de onde a unidade atual fecha e quantas cabem até o teto, e o corte do papel.
 
-## Corte limpo e variável
+## Corte limpo
 
-A unidade é o que o papel fecha sem deixar nada aberto. Com o crescimento médio por unidade (`g`) e o contexto em que a unidade atual começou, a projeção dá onde ela fecha (`fim`):
+A unidade é o que o papel fecha sem deixar nada aberto. Com o crescimento médio por unidade (`g`) e o contexto em que a unidade atual começou, a projeção dá onde ela fecha (`fim`) e quantas cabem depois dela até o teto (`⌊(teto − fim) / g⌋`).
 
-- `fim` acima do teto ⇒ cortar no próximo ponto limpo da unidade atual;
-- `fim + g` acima do teto ⇒ cortar ao fechar a unidade atual;
-- senão ⇒ cabem `⌊(teto − fim) / g⌋` unidades depois dela: cortar na fronteira em que a seguinte já não caberia.
-
-Sem unidade medida na sessão, decidir na faixa seguinte, com a medida; na última faixa, cortar ao fechar a unidade atual. Passou do teto: não abrir unidade nova.
+- **Faixas abaixo de 400k** (250k, 300k): aviso só informativo, com a projeção. Seguir; não cortar por janela.
+- **A partir de 400k**: avaliar o corte limpo — procurar a próxima fronteira limpa e cortar nela, sem abrir unidade nova. Se `fim` passa do teto, a fronteira é o próximo ponto limpo dentro da unidade atual; senão, o fechamento dela.
+- **Passou do teto**: cortar na próxima fronteira, sem abrir unidade nova.
 
 ## Papéis
 
@@ -38,6 +38,8 @@ Sem unidade medida na sessão, decidir na faixa seguinte, com a medida; na últi
 
 ## A régua da condutora
 
-A régua conta tokens **acima da carga inicial** da sessão (o contexto da primeira resposta), nunca fração da janela: o sensor lê a carga do começo do transcript a cada leitura e classifica o uso pelas faixas e pelo teto acima dela (`regua` no config do projeto, com a medição citada). Na faixa em que a próxima task não cabe, a condutora de execução fecha as operárias abertas e passa o comando na fronteira limpa seguinte; não há nível acima vigiando a janela dela. "Maestra", o nível que vigiava a janela das condutoras, é termo aposentado.
+Desde a D17a a régua é a da tabela acima, em fração da janela (`regua: null` no config do projeto). A partir de 400k, a condutora de execução fecha as operárias abertas e passa o comando na fronteira limpa seguinte; não há nível acima vigiando a janela dela. "Maestra", o nível que vigiava a janela das condutoras, é termo aposentado.
+
+O sensor guarda a régua anterior como mecanismo: preencher `regua` (`faixasAcima`, `tetoAcima`, `cargaPadrao`) no config volta a contar faixas e teto em tokens **acima da carga inicial** da sessão (o contexto da primeira resposta, relido do começo do transcript a cada leitura).
 
 As decisões do operador que deram esta forma estão na página do projeto (campo `pagina` da declaração).

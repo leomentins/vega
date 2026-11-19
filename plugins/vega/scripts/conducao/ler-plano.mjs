@@ -139,6 +139,40 @@ function classificar(t) {
   return "comum";
 }
 
+// D18a do operador (16/11/2026): o sim do ciclo cobre toda task sensível; pede o sim de novo
+// (`task-sensivel`) só a que toca dado de paciente ou caminho clínico (`caminhosQuePerguntam` do
+// adaptador) ou publica apagando ou alterando algo existente. Publicação só de acréscimo
+// (migration aditiva, coluna nova, verbo novo) não pergunta — e só a anotação `**Publicação:**`
+// que a declara aditiva a dispensa: calada ou genérica, pergunta (lado conservador). A task que só
+// escreve num caminho protegido não clínico (migration, Edge Function), sem publicar, pergunta
+// quando o texto dela apaga ou altera.
+const PUBLICACAO_ADITIVA_DECLARADA = /\baditiv|\bacr[ée]scimo|s[óo] acrescenta/i;
+const PUBLICACAO_QUE_ALTERA_DECLARADA = /destrutiv|\bapag|\baltera|\bsubstitu|\bremov/i;
+const PUBLICACAO_QUE_ALTERA_NO_TEXTO =
+  /\bDROP\b|\bRENAME\b|\bTRUNCATE\b|\bDELETE\s+FROM\b|\bUPDATE\s+\S+\s+SET\b|\bALTER\s+COLUMN\b|\bALTER\s+POLICY\b|\bREVOKE\b|destrutiv/i;
+
+/**
+ * Por que a task pede o sim de novo, mesmo coberta pelo sim do ciclo:
+ * `caminho-clinico` · `publicacao-que-altera` · null (o sim do ciclo a cobre).
+ */
+export function simProprio({ clinica, publicacao, protegida = [], declarada, texto }) {
+  if (clinica.length) return "caminho-clinico";
+  // Caminho protegido que não é clínico (migration, Edge Function) é publicação em potência:
+  // a task que só escreve a migration destrutiva, sem citar o verbo, também pergunta.
+  if (!publicacao.length && !protegida.length) return null;
+  const d = typeof declarada === "string" ? declarada : "";
+  // `**Publicação:** não` diz que a task não publica, ainda que o texto cite o verbo ("não rodar db
+  // push"): só o caminho protegido segue pelo texto.
+  if (/^\s*n[ãa]o\b/i.test(d)) return protegida.length && PUBLICACAO_QUE_ALTERA_NO_TEXTO.test(texto) ? "publicacao-que-altera" : null;
+  // Alteração declarada vence: "aditiva; remove a coluna antiga" altera.
+  if (PUBLICACAO_QUE_ALTERA_DECLARADA.test(d)) return "publicacao-que-altera";
+  // "não aditiva" não é aditiva.
+  if (/n[ãa]o\s+aditiv/i.test(d)) return "publicacao-que-altera";
+  if (PUBLICACAO_ADITIVA_DECLARADA.test(d)) return null;
+  if (publicacao.length) return "publicacao-que-altera";
+  return PUBLICACAO_QUE_ALTERA_NO_TEXTO.test(texto) ? "publicacao-que-altera" : null;
+}
+
 /**
  * Plano parseado a partir do texto (puro — sem git). `codigo` é o código do
  * adaptador (`codigoDoAdaptador(repo)`); sem ele, o da árvore do núcleo.
@@ -188,6 +222,13 @@ export function lerPlano(texto, codigo = codigoDoNucleo()) {
       marcas: marcasDo(t.satisfiesRaw),
       publicacao: codigo.publicacao.filter((p) => texto.includes(p)),
       protegida: outputs.filter((o) => casaAlgum(o, codigo.caminhosProtegidos)),
+      simProprio: simProprio({
+        clinica: outputs.filter((o) => casaAlgum(o, codigo.caminhosQuePerguntam ?? codigo.caminhosProtegidos)),
+        publicacao: codigo.publicacao.filter((p) => texto.includes(p)),
+        protegida: outputs.filter((o) => casaAlgum(o, codigo.caminhosProtegidos)),
+        declarada: t.bullets.get("Publicação"),
+        texto,
+      }),
       tier: tierDaFase.get(t.phase) ?? TIER_PADRAO,
     };
     const tierDaTask = tierDeclarado(t.bullets.get("Tier"));

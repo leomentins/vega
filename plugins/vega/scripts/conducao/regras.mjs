@@ -13,6 +13,7 @@
  *   acao(tipo, alvo, tentativa, campos) — monta a ação com o nonce do HEAD;
  *   nonce, lerAviso e os auxiliares do plano (`diferencaDoPlano`,
  *     `mudancasQuePerguntam`, `mudancasDeAlcance`, `rulingDoReplano`,
+ *     `replanoSozinho`, `reciboDeVega`, `nomeDoOperador`,
  *     `tasksQueMudaramDeClasse`, `textoDaProximaSessao`, `textoDoFechamento`,
  *     `fechamentoDoCiclo`)
  *     — os de conducao.mjs e ler-plano.mjs, injetados para o núcleo não
@@ -20,7 +21,8 @@
  *   e os campos próprios de cada regra, no comentário dela.
  */
 
-import { CASOS, pedidoDeCaso, sensivelAditivaNaOrdem, simDaPublicacaoDoCiclo } from "./consentimento.mjs";
+import { CASOS, RESTRICAO_PERGUNTA, linhaDeConsentimentos, pedidoDeCaso, sensivelAditivaNaOrdem, simDaPublicacaoDoCiclo } from "./consentimento.mjs";
+import { blocoDaTask } from "./verbos.mjs";
 
 /**
  * Motivo da espera depois do encerramento do ciclo (HN-29 T39): o comando de
@@ -146,8 +148,10 @@ export function modeloDaTask(t, modeloDaFase, tiers = {}) {
 /**
  * Abrir as tasks de servidor prontas que cabem nas vagas, sem Outputs em
  * comum com as em voo nem entre si; as a reabrir vêm na frente de `servidor`.
- * Task sensível sem o sim da fase nem aprovação pelo nonce da tentativa
- * pergunta antes de abrir.
+ * Task sensível sai coberta pelo sim em vigor na fase (o dela ou o do ciclo,
+ * herdado); só a que pede o sim de novo (`simProprio`: caminho clínico ou
+ * publicação que altera, D18a) pergunta, uma vez por task, fora do sim dado à
+ * fase — a aprovação vale para a task em toda tentativa.
  *
  * Lê: `plano` (`fases`, `porId`, `largura`), `fase`, `servidor`, `vooAtivo`,
  * `reabrir` (Map task → tentativa que caiu), `maxTent` (Map task → última
@@ -194,7 +198,7 @@ export function regraAbrir(ctx) {
     .concat(semMapa.map((t) => `${t.id} declara o tier ${t.tier}, que a declaração não mapeia; abre com o modelo da fase`));
   const pendente = cobertaPelaFase
     ? null
-    : tarefas.find((x) => x.classe === "sensivel" && !aprovacoes.some((a) => a.task === x.task && a.nonce === x.nonce));
+    : tarefas.find((x) => x.classe === "sensivel" && pedeSimDeNovo(plano.porId.get(x.task), aprovacoes));
   if (pendente) {
     const t = plano.porId.get(pendente.task);
     return acao("perguntar", t.id, pendente.tentativa, {
@@ -202,6 +206,7 @@ export function regraAbrir(ctx) {
       fase: fase.id,
       task: t.id,
       tentativa: pendente.tentativa,
+      porque: t.simProprio,
       publicacao: t.publicacao,
       caminhosProtegidos: t.protegida,
     });
@@ -212,9 +217,19 @@ export function regraAbrir(ctx) {
     fase: fase.id,
     tarefas,
     ...(sensiveis.length && cobertaPelaFase ? { cobertasPelaFase: { autorizacao: ultimaAutorizacao.sha, tasks: sensiveis } } : {}),
+    ...(sensiveis.length && !cobertaPelaFase && ultimaAutorizacao ? { cobertasPeloCiclo: { autorizacao: ultimaAutorizacao.sha, tasks: sensiveis } } : {}),
     largura: { prontas: servidor.length, ciclo: plano.largura, teto, vivas, emVoo: vooAtivo.length, abertas: tarefas.length },
     ...(avisoOperador.length ? { avisoOperador } : {}),
   });
+}
+
+/**
+ * A task sensível fora do sim dado à fase pede o sim de novo só com
+ * `simProprio` (D18a) e sem aprovação dela — por task, nunca pelo nonce da
+ * tentativa: o sim dado na tentativa 1 cobre a 2 (caso da T10 do VEGA-19).
+ */
+function pedeSimDeNovo(t, aprovacoes) {
+  return Boolean(t?.simProprio) && !aprovacoes.some((a) => a.task === t.id);
 }
 
 // ── o contexto ──────────────────────────────────────────────────────────────
@@ -283,8 +298,9 @@ export function contextoDaDecisao(params, injetados) {
 
   // O sim do operador ao ciclo (`autorizar-ciclo`, ruling de 27/10/2026): vale para
   // toda fase enquanto nenhuma task mudar de classe ou sensibilidade em relação
-  // ao plano congelado nele. Os gates seguem pedindo: a primeira publicação do ciclo, task
-  // sensível de fase herdada pelo ciclo (por nonce), perguntas da vigia.
+  // ao plano congelado nele, e cobre as tasks sensíveis dela (D18a, 16/11/2026). Os gates
+  // seguem pedindo: a primeira publicação do ciclo, task de fase herdada que toca caminho
+  // clínico ou publica alterando o existente (`simProprio`, uma vez por task), perguntas da vigia.
   const cicloCobre = Boolean(
     autorizacaoDoCiclo && planoHead && planoHeadBlob && !mudancasQuePerguntam(autorizacaoDoCiclo.plano, planoHead).length,
   );
@@ -315,9 +331,10 @@ export function contextoDaDecisao(params, injetados) {
   // parou antes (`plano-mudou`) ou herdou (`herdar-autorizacao`).
   const ultimaAutorizacao = autorizacoes.at(-1) ?? null;
   const daFase = Boolean(fase) && ultimaAutorizacao?.fase === fase.id;
-  // Só cobre as tasks sensíveis o sim dado a ESTA fase: a autorização herdada
+  // O sim dado a ESTA fase cobre toda task sensível dela: a autorização herdada
   // aponta (`Conducao-Herdada`) a marca com o sim, e a herdada pelo sim do
-  // ciclo aponta a marca de outra fase — a task sensível dela pergunta por nonce.
+  // ciclo aponta a marca de outra fase — nela, só a task com `simProprio`
+  // (caminho clínico ou publicação que altera, D18a) pergunta, uma vez por task.
   const autoridade = ultimaAutorizacao?.herdada
     ? autorizacoes.find((a) => a.sha === ultimaAutorizacao.herdada) ?? null
     : ultimaAutorizacao;
@@ -404,6 +421,81 @@ function perguntaDoPlano(ctx, faseId, ids, tasksMudadas, campos = {}) {
 }
 
 /**
+ * O re-plano que segue sozinho e só avisa (T43, D-VEGA19-53), para a fase `f` — a em curso ou a
+ * reaberta: com todo commit do re-plano levando o trailer `Replano-Motivo` e a regra cumprida
+ * (`replanoSozinho` de `verbos.mjs`, injetada), a autorização da fase é herdada (origem `sozinho`),
+ * com o aviso ao operador, o `replano:<sha8>` e a linha de recibo de Vega, e o caso
+ * `replano-sozinho` registrado como decisão de Vega por delegação; o motivo que se repete no ciclo
+ * pergunta `replano-repetido` (consertar o molde ao lado de seguir). Sem o trailer, ou fora da
+ * regra, null: a pergunta (ou a herança) de hoje.
+ */
+function replanoQueSegueSozinho(ctx, f, campos = {}) {
+  const { acao, ciclo, plano, planoHead, planoHeadBlob, planoBlob, replanos, anteriores, reconhecer, autorizacoes, trazidas, planoHeadTexto } = ctx;
+  const { replanoSozinho, diferencaDoPlano, mudancasQuePerguntam, mudancasDeAlcance, reciboDeVega, nomeDoOperador } = ctx;
+  if (typeof replanoSozinho !== "function" || !Array.isArray(replanos) || !replanos.length || !replanos.every((c) => c.motivo)) return null;
+  const restricao = linhaDeConsentimentos(planoHeadTexto ?? "");
+  const restrita =
+    restricao.estado === "varias" || restricao.estado === "ilegivel" || restricao.pares.get(CASOS.replanoSozinho) === RESTRICAO_PERGUNTA || restricao.repetidos.has(CASOS.replanoSozinho);
+  const ids = planoHead.fases.find((x) => x.id === f.id)?.tasks ?? f.tasks;
+  const r = replanoSozinho(
+    { de: plano, para: planoHead, fase: f, replanos, anteriores: anteriores ?? [] },
+    {
+      ciclo,
+      reconhecer,
+      diferencaDoPlano,
+      mudancasQuePerguntam,
+      mudancasDeAlcance,
+      aditiva: (m) => sensivelAditivaNaOrdem({ de: plano, para: planoHead, faseId: f.id, mudanca: m }),
+      trazidas: ids.filter((id) => trazidas.has(id)),
+      textoDaTask: (id) => blocoDaTask(planoHeadTexto ?? "", id),
+      restrita,
+    },
+  );
+  const sha8 = replanos.at(-1).sha.slice(0, 8);
+  if (r.porque === "replano-repetido")
+    return acao("perguntar", `replano:${f.id}`, 0, {
+      motivo: "replano-repetido",
+      fase: f.id,
+      replanoMotivo: r.motivo,
+      ponteiro: `replano:${sha8}`,
+      replanos: replanos.map((c) => ({ sha: c.sha, replanoMotivo: c.motivo })),
+      anteriores: (anteriores ?? []).map((a) => ({ sha: a.sha, replanoMotivo: a.motivo })),
+      // O mesmo motivo duas vezes no ciclo é o molde que falha: o operador decide seguir, consertar
+      // o molde (`/write-plan`, contrato) ou os dois.
+      conserto: "molde",
+      planoNovo: planoHeadBlob,
+      planoAnterior: planoBlob,
+      ...campos,
+    });
+  if (!r.sozinho) return null;
+  const marca = autorizacoes.findLast((a) => a.fase === f.id);
+  if (!marca) return null;
+  const autorizacao = marca.herdada ?? marca.sha;
+  const tasksMudadas = diferencaDoPlano(plano, planoHead);
+  const aditivas = mudancasQuePerguntam(plano, planoHead).filter((m) => sensivelAditivaNaOrdem({ de: plano, para: planoHead, faseId: f.id, mudanca: m }));
+  const titular = typeof nomeDoOperador === "function" ? nomeDoOperador() : "o operador";
+  const recibo = typeof reciboDeVega === "function" ? reciboDeVega({ titular, regra: "re-plano dentro da fase, D-VEGA19-53" }) : null;
+  return acao("herdar-autorizacao", `herdar:${f.id}`, 0, {
+    fase: f.id,
+    origem: "sozinho",
+    autorizacao,
+    planoNovo: planoHeadBlob,
+    planoAnterior: planoBlob,
+    tasksMudadas,
+    replanos: replanos.map((c) => ({ sha: c.sha, ruling: ctx.rulingDoReplano(c.subject, ciclo, reconhecer) })),
+    replanoMotivo: r.motivo,
+    ponteiro: `replano:${sha8}`,
+    aviso: `${f.id} segue pelo re-plano ${replanos.map((c) => c.sha.slice(0, 8)).join(", ")} sem perguntar (motivo ${r.motivo}, replano:${sha8})${recibo ? ` — ${recibo}` : ""}`,
+    ...(recibo ? { recibo } : {}),
+    consentimento: pedidoDeCaso({ caso: CASOS.replanoSozinho, fase: f.id, origem: autorizacao }),
+    ...(aditivas.length
+      ? { consentimentos: aditivas.map((m) => pedidoDeCaso({ caso: CASOS.sensivelAditivaNaOrdem, fase: f.id, origem: autorizacao, task: m.task })) }
+      : {}),
+    ...campos,
+  });
+}
+
+/**
  * Fase reaberta por task nova (T27, D-VEGA22-34): a fase autorizada com o
  * último fechamento conferido e sem `Conducao-Encerrada` que ganha, no plano
  * do HEAD, task nascida nela e não feita volta pela pergunta de plano —
@@ -425,6 +517,9 @@ function reabrirFase(ctx, cand) {
   const ids = planoHead.fases.find((f) => f.id === cand.id)?.tasks ?? [];
   // O `/intra-plan` exige que toda fase termine em fechamento.
   const semFechamento = !nascidas.some((t) => t.fechamento);
+  // T43: com fechamento novo, o re-plano que cabe na regra herda a autorização e só avisa.
+  const sozinho = semFechamento ? null : replanoQueSegueSozinho(ctx, cand, { reaberta: true });
+  if (sozinho) return sozinho;
   return perguntaDoPlano(ctx, cand.id, ids, tasksMudadas, {
     reaberta: true,
     ...(semFechamento ? { motivo: "fase-reaberta-sem-fechamento" } : {}),
@@ -543,8 +638,9 @@ export function regraEncerrarSessao(ctx) {
 //      nota; a época sobe nessa escrita e a anterior para de gravar;
 //   5. `soltar-inscricao` (anterior) · `inscrever-na-proposta` e
 //      `confirmar-passagem` (herdeira);
-//   6. `arquivar-se` (anterior) e, com ela arquivada e a árvore limpa,
-//      `desmontar-anterior` (herdeira).
+//   6. `arquivar-anterior` (herdeira, logo depois da confirmação: a anterior
+//      não espera a confirmação, para depois de soltar a inscrição) e, com
+//      ela arquivada e a árvore limpa, `desmontar-anterior` (herdeira).
 // Sem confirmação no prazo, cada lado sabe quem é a dona pela época: parada,
 // a anterior segue dona (`retomar-da-passagem`, e na segunda falha a pergunta);
 // subida, a dona é a herdeira e a anterior para (`parar passagem-epoca-subiu`).
@@ -664,11 +760,16 @@ export function regraPassagem(ctx) {
   }
 
   if (papel === "anterior-destituida") {
-    // A época subiu: a dona é a herdeira. A anterior solta a inscrição, espera a confirmação e se arquiva.
+    // A época subiu: a dona é a herdeira. A anterior solta a inscrição e para; quem a arquiva é a
+    // herdeira, logo depois de confirmar (`arquivar-anterior`). Sem esperar a confirmação: a espera
+    // que cada condutora improvisava deixava a anterior ociosa (D19a do operador, 16/11/2026).
     if (entrada.inscrita === true) return acao("soltar-inscricao", `soltar:${a.sha}`, 0, { ...campos, ferramenta: "unsubscribe_pr_activity", proposta: entrada.proposta?.numero ?? null });
-    if (p.confirmadaNoRamo) return acao("arquivar-se", `arquivar-se:${a.sha}`, 0, { ...campos, sessao: entrada.sessaoMaestra ?? null, ferramenta: "archive_session" });
-    if (vencido) return acao("parar", `passagem:${a.sha}`, 0, { ...campos, motivo: "passagem-epoca-subiu", herdeira: herdeira?.sessao ?? null, prazoMin: prazoConfirmacaoMin });
-    return acao("esperar", `passagem:${a.sha}`, 0, { ...espera, motivo: "passagem-em-curso" });
+    if (vencido && !p.confirmadaNoRamo) return acao("parar", `passagem:${a.sha}`, 0, { ...campos, motivo: "passagem-epoca-subiu", herdeira: herdeira?.sessao ?? null, prazoMin: prazoConfirmacaoMin });
+    // Sem confirmação ainda, o motivo é outro: quem lê a parada leva ao operador o prazo da
+    // herdeira, porque a anterior não fica de olho (se a herdeira cair antes de confirmar, é ele).
+    if (!p.confirmadaNoRamo)
+      return acao("parar", `passagem:${a.sha}`, 0, { ...campos, motivo: "passagem-entregue-sem-confirmacao", herdeira: herdeira?.sessao ?? null, prazoMin: prazoConfirmacaoMin, minutos });
+    return acao("parar", `passagem:${a.sha}`, 0, { ...campos, motivo: "passagem-entregue", herdeira: herdeira?.sessao ?? null });
   }
 
   if (papel === "herdeira-sem-posse") {
@@ -690,19 +791,30 @@ export function regraPassagem(ctx) {
 }
 
 /**
- * O último passo da ordem (D-VEGA37-19): a herdeira, dona, desmonta a árvore
- * da anterior depois da confirmação, só com a anterior arquivada
- * (`entrada.anterior.estado`), a árvore achada e limpa. Anterior viva ⇒ nada
- * (a pasta fica para a limpeza do servidor); árvore suja já registrada na
- * confirmação ⇒ nada (o operador decide); suja depois dela ⇒ a pergunta.
+ * O último passo da ordem: a herdeira, dona, depois da confirmação, arquiva a
+ * anterior (`arquivar-anterior`, D19a do operador, 16/11/2026: `archive_session`
+ * da `entrada.anterior.sessao` ainda não arquivada) e desmonta a árvore dela
+ * (D-VEGA37-19), só com a anterior arquivada, a árvore achada e limpa. Árvore
+ * suja já registrada na confirmação ⇒ nada (o operador decide); suja depois
+ * dela ⇒ a pergunta.
  */
 function regraDesmonte(ctx) {
   const { acao, passagem: p, entrada } = ctx;
   const c = p.ultima;
   if (c?.tipo !== "confirmada" || p.posse?.estado !== "dona") return null;
+  const estadoDaAnterior = estadoDoLado(ctx, entrada.anterior);
+  // Estado ausente conta como viva: arquivar de novo é inofensivo, e calar deixaria a anterior
+  // ocupando vaga. Duas vezes executado sem `ARCHIVED` ⇒ a pergunta, como no `arquivar` da filha.
+  if (entrada.anterior?.sessao && estadoDaAnterior !== "ARCHIVED") {
+    const campos = { fase: c.fase, passagem: c.confirma ?? null, sessao: entrada.anterior.sessao };
+    const n = ctx.nonce(ctx.ciclo, `arquivar-anterior:${c.sha}`, 0, c.sha);
+    const vezes = (Array.isArray(entrada.anterior.arquivamentos) ? entrada.anterior.arquivamentos : []).filter((x) => x === n).length;
+    if (vezes >= 2) return acao("perguntar", `arquivar-anterior:${c.sha}`, 0, { ...campos, motivo: "falha-de-arquivamento", nonceArquivar: n, vezes });
+    return acao("arquivar-anterior", `arquivar-anterior:${c.sha}`, 0, { ...campos, ferramenta: "archive_session", nonceArquivar: n });
+  }
   const arvore = p.arvoreDaAnterior;
   if (!arvore?.caminho || c.arvoreSuja) return null;
-  if (estadoDoLado(ctx, entrada.anterior) !== "ARCHIVED") return null;
+  if (estadoDaAnterior !== "ARCHIVED") return null;
   const campos = { fase: c.fase, passagem: c.confirma ?? null, caminho: arvore.caminho, nome: arvore.nome };
   if (arvore.suja) return acao("perguntar", `desmontar:${c.sha}`, 0, { ...campos, motivo: "arvore-da-anterior-suja", detalhe: arvore.motivo ?? null });
   return acao("desmontar-anterior", `desmontar:${c.sha}`, 0, { ...campos, anterior: entrada.anterior.sessao ?? null });
@@ -803,6 +915,9 @@ export function regraReplano(ctx) {
   if (!emCurso(ctx) || !planoHead || !planoHeadBlob || planoHeadBlob === planoBlob) return null;
   const tasksMudadas = diferencaDoPlano(plano, planoHead);
   if (!tasksMudadas.length) return null;
+  // T43: o re-plano com `Replano-Motivo` que cabe na regra segue sozinho e só avisa.
+  const sozinho = daFase ? replanoQueSegueSozinho(ctx, fase) : null;
+  if (sozinho) return sozinho;
   const pergunta = perguntaDoPlano(ctx, fase.id, fase.tasks, tasksMudadas);
   // Task sensível nova, na ordem do plano e dentro da fase autorizada, não pergunta (VEGA-37 T19).
   const todasMudancas = mudancasQuePerguntam(plano, planoHead);
@@ -1046,16 +1161,17 @@ export function regraVigia(ctx) {
  * Lê: `daCondutora`, `cobertaPelaFase`, `aprovacoes`, `consentimentos`.
  */
 export function regraFazerCondutora(ctx) {
-  const { ciclo, head, acao, nonce, fase, daCondutora, cobertaPelaFase, aprovacoes } = ctx;
+  const { acao, fase, daCondutora, cobertaPelaFase, aprovacoes } = ctx;
   if (!emCurso(ctx) || !daCondutora.length) return null;
   const t = daCondutora[0];
   const sensivel = t.publicacao.length > 0 || t.protegida.length > 0;
-  if (sensivel && !cobertaPelaFase && !aprovacoes.some((a) => a.task === t.id && a.nonce === nonce(ciclo, t.id, 0, head)))
+  if (sensivel && !cobertaPelaFase && pedeSimDeNovo(t, aprovacoes))
     return acao("perguntar", t.id, 0, {
       motivo: "task-sensivel",
       fase: fase.id,
       task: t.id,
       tentativa: 0,
+      porque: t.simProprio,
       publicacao: t.publicacao,
       caminhosProtegidos: t.protegida,
     });

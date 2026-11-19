@@ -61,7 +61,9 @@
  * do `task-brief.mjs`) à frente do bloco da tarefa, verbatim, e das seções
  * "Restrições globais" e "Foco de revisão" do plano.
  */
-import { readFileSync, realpathSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -367,7 +369,8 @@ export function lerPlanoPublico(texto) {
     bullets.set("Outputs", [...lida.arquivos, ...(sensivel ? [MARCA_SENSIVEL] : [])].map((c) => `\`${c}\``).join(" · "));
     bullets.set("Steps", lida.passos.join("\n"));
     if (a.has("Verificação")) bullets.set("Verificação", `\`${a.get("Verificação")}\``);
-    if (publicacao) bullets.set("Publicação", MARCA_PUBLICACAO);
+    // Neste formato quem diz se a publicação altera o existente é `Sensível` (D18a): sem ela, aditiva.
+    if (publicacao) bullets.set("Publicação", sensivel ? MARCA_PUBLICACAO : `${MARCA_PUBLICACAO} (aditiva)`);
     if (lida.commit) bullets.set("Commit", lida.commit);
     if (a.has("Tier")) bullets.set("Tier", a.get("Tier"));
     tasks.push({ id: t.id, title: t.titulo, phase: fase, bullets, satisfiesRaw: marcas.length ? `(${marcas.join(", ")})` : "" });
@@ -472,6 +475,232 @@ function principal(args) {
     process.stderr.write(`superpowers: ${e.message}\n`);
     return 2;
   }
+}
+
+// ── o registro de perguntas no destino git (VEGA-19 T33, D-VEGA19-57) ──────
+
+/**
+ * O valor de `phi` que este adaptador declara: sem filtro de PHI próprio, o
+ * gate do caso faz as vezes dele (D-VEGA19-46). O núcleo
+ * (`conducao/consentimento.mjs`, `PHI_DO_CASO`) só o aceita de um embutido.
+ */
+export const PHI_DO_CASO = "gate-do-caso";
+
+const PREFIXO_DA_SESSAO = "sessao-";
+/**
+ * O leitor de prova e o da declaração, carregados só quando as peças do consentimento são pedidas
+ * (`consentimentoDoProjeto`): este arquivo também carrega copiado para fora do plugin (como código
+ * próprio de um projeto), e só essa chamada falha lá.
+ */
+const requerer = createRequire(import.meta.url);
+const pecasDoPlugin = () => ({ prova: requerer("../../pergunta/prova.mjs"), declaracao: requerer("../../vega/declaracao.mjs") });
+const PERGUNTA_ID_RE = /^p-[0-9a-f]{16}$/;
+const SESSAO_RE = /^[A-Za-z0-9_-]{1,128}$/;
+/** Os eventos que o consentimento grava (abertura e resposta); o resto do registro só se lê. */
+const EVENTOS_GRAVADOS = Object.freeze(["abertura", "resposta"]);
+const EVENTOS_LIDOS = Object.freeze(["abertura", "resposta", "autoria", "dispensa", "previsao", "destino"]);
+const VERSAO_DO_ESQUEMA = 1;
+/** CPF (com ou sem pontuação) e CNS (15 dígitos), fora de palavra: a forma, nunca o valor, vai à mensagem. */
+const FORMAS_DE_PACIENTE = Object.freeze([/(?<![\d.])\d{3}\.?\d{3}\.?\d{3}-?\d{2}(?!\d)/, /(?<!\d)\d{3}[ .]?\d{4}[ .]?\d{4}[ .]?\d{4}(?!\d)/]);
+
+/** As folhas de texto de um valor, com o nome de cada chave. */
+function folhasDe(v) {
+  if (typeof v === "string") return [v];
+  if (typeof v === "number") return [String(v)];
+  if (Array.isArray(v)) return v.flatMap(folhasDe);
+  if (v && typeof v === "object") return Object.entries(v).flatMap(([k, x]) => [k, ...folhasDe(x)]);
+  return [];
+}
+
+/** A pasta do registro: a do `decisoes.arquivo` com destino `git` na declaração; null sem ela. */
+export function pastaDoRegistro(repo) {
+  const { declaracao } = pecasDoPlugin();
+  if (!declaracao.existe(repo)) return null;
+  const { decisoes } = declaracao.lerDeclaracao(repo).declaracao;
+  if (decisoes?.destino !== "git" || !decisoes.arquivo) return null;
+  return path.dirname(path.join(path.resolve(repo), decisoes.arquivo));
+}
+
+/**
+ * Os eventos do registro (`sessao-<id>.jsonl` da pasta, em ordem de nome), na
+ * forma que o destino git grava (T13): linha ilegível, evento fora da forma e
+ * chave que não é a do evento (recalculada aqui) ficam fora, contados em
+ * `descartadas` (sem o conteúdo). A mesma chave com conteúdo diferente (fora a
+ * sessão) marca a pergunta em `divergentes`: quem a lê recusa, nunca escolhe uma.
+ * A sessão da linha que não a leva vem do nome do arquivo.
+ */
+export function lerEventosDoRegistro(pasta) {
+  const eventos = [];
+  let descartadas = 0;
+  let nomes = [];
+  try {
+    nomes = readdirSync(pasta).filter((n) => n.startsWith(PREFIXO_DA_SESSAO) && n.endsWith(".jsonl")).sort();
+  } catch (e) {
+    if (e.code !== "ENOENT") throw e;
+  }
+  const porChave = new Map();
+  const divergentes = new Set();
+  for (const nome of nomes) {
+    const sessao = nome.slice(PREFIXO_DA_SESSAO.length, -".jsonl".length);
+    for (const l of readFileSync(path.join(pasta, nome), "utf8").split("\n")) {
+      if (!l.trim()) continue;
+      let o;
+      try {
+        o = JSON.parse(l);
+      } catch {
+        descartadas++;
+        continue;
+      }
+      const valido =
+        o && typeof o === "object" && !Array.isArray(o) && EVENTOS_LIDOS.includes(o.evento) && PERGUNTA_ID_RE.test(o.pergunta_id ?? "") &&
+        !Number.isNaN(Date.parse(o.carimbo ?? "")) && o.chave === chaveDoEvento(o);
+      if (!valido) {
+        descartadas++;
+        continue;
+      }
+      const ev = o.sessao === undefined && SESSAO_RE.test(sessao) ? { ...o, sessao } : o;
+      const { sessao: _s, ...conteudo } = ev;
+      const json = canonico(conteudo);
+      const visto = porChave.get(ev.chave);
+      if (visto === undefined) {
+        porChave.set(ev.chave, json);
+        eventos.push(ev);
+      } else if (visto !== json) divergentes.add(ev.pergunta_id);
+    }
+  }
+  return { eventos, descartadas, divergentes };
+}
+
+/** JSON com as chaves em ordem, em todo nível: a ordem das chaves não conta como divergência. */
+function canonico(v) {
+  if (Array.isArray(v)) return `[${v.map((x) => (x === undefined ? "null" : canonico(x))).join(",")}]`;
+  if (v !== null && typeof v === "object")
+    return `{${Object.keys(v)
+      .sort()
+      .filter((k) => v[k] !== undefined)
+      .map((k) => `${JSON.stringify(k)}:${canonico(v[k])}`)
+      .join(",")}}`;
+  return JSON.stringify(v);
+}
+
+/** A chave do evento, a mesma conta do destino git e do banco (T10, `decisoes/destino.mjs` `chaveDoEvento`). */
+function chaveDoEvento(ev) {
+  const sha = (...partes) => createHash("sha256").update(partes.join("|")).digest("hex");
+  const p = ev.pergunta_id;
+  switch (ev.evento) {
+    case "abertura":
+    case "resposta":
+      return sha(ev.evento, p);
+    case "dispensa":
+      return sha("dispensa", p, ev.carimbo);
+    case "autoria":
+      return sha("autoria", p, ev.origem_resposta, ev.prova);
+    case "previsao":
+      return sha("previsao", p, ev.modelo, ev.versao_esquema ?? VERSAO_DO_ESQUEMA);
+    case "destino":
+      return sha("destino", p, ev.ponteiro);
+    default:
+      return null;
+  }
+}
+
+/**
+ * Grava os eventos do consentimento (abertura e resposta) no arquivo da sessão
+ * de cada um, só acrescentando a chave que o arquivo ainda não tem. Confere
+ * tudo antes de escrever: evento fora da forma, pergunta com dado de paciente
+ * ligado ou folha com a forma de CPF/CNS lançam, nada gravado.
+ */
+export function gravarEventosNoRegistro(pasta, eventos) {
+  if (!Array.isArray(eventos)) throw new Error("eventos: esperada lista");
+  const porArquivo = new Map();
+  for (const e of eventos) {
+    if (!EVENTOS_GRAVADOS.includes(e?.evento)) throw new Error("evento fora do consentimento (abertura, resposta)");
+    if (!PERGUNTA_ID_RE.test(e.pergunta_id ?? "")) throw new Error("evento.pergunta_id: esperado p-<16 hex>");
+    if (!SESSAO_RE.test(e.sessao ?? "")) throw new Error("evento.sessao: esperado id de sessão [A-Za-z0-9_-]");
+    if (Number.isNaN(Date.parse(e.carimbo ?? ""))) throw new Error("evento.carimbo: esperado data ISO");
+    if (e.has_patient_data !== false && e.has_patient_data !== undefined) throw new Error("evento com dado de paciente: o registro git deste adaptador não o grava");
+    const { has_patient_data: _h, chave: _c, versao_esquema: _v, evento, pergunta_id, carimbo, ...resto } = e;
+    const linha = { chave: chaveDoEvento(e), versao_esquema: VERSAO_DO_ESQUEMA, evento, pergunta_id, carimbo, ...resto };
+    const { chave: _k, ...varrido } = linha;
+    if (folhasDe(varrido).some((t) => FORMAS_DE_PACIENTE.some((re) => re.test(t)))) throw new Error(`a pergunta ${pergunta_id} tem dado com a forma de CPF/CNS: nada gravado`);
+    const arquivo = path.join(pasta, `${PREFIXO_DA_SESSAO}${e.sessao}.jsonl`);
+    porArquivo.set(arquivo, [...(porArquivo.get(arquivo) ?? []), linha]);
+  }
+  let gravados = 0;
+  let ja_existiam = 0;
+  const plano = [];
+  for (const [arquivo, linhas] of porArquivo) {
+    const texto = existsSync(arquivo) ? readFileSync(arquivo, "utf8") : "";
+    const existentes = new Set();
+    for (const l of texto.split("\n")) {
+      if (!l.trim()) continue;
+      try {
+        existentes.add(JSON.parse(l)?.chave);
+      } catch {
+        throw new Error(`${arquivo}: linha ilegível — conserte o arquivo antes de gravar`);
+      }
+    }
+    const novas = linhas.filter((l) => {
+      if (existentes.has(l.chave)) return (ja_existiam++, false);
+      existentes.add(l.chave);
+      return true;
+    });
+    plano.push({ arquivo, novas, semFim: texto.length > 0 && !texto.endsWith("\n") });
+  }
+  for (const { arquivo, novas, semFim } of plano) {
+    if (novas.length === 0) continue;
+    mkdirSync(path.dirname(arquivo), { recursive: true });
+    appendFileSync(arquivo, (semFim ? "\n" : "") + novas.map((l) => JSON.stringify(l)).join("\n") + "\n");
+    gravados += novas.length;
+  }
+  return { gravados, ja_existiam, enfileirados: 0 };
+}
+
+/**
+ * Os eventos de `id` no registro, com as descartadas avisadas no stderr (contagem, nunca o
+ * conteúdo). Pergunta com linhas divergentes lança: a leitura recusa, nunca escolhe uma.
+ */
+function eventosDaPergunta(pasta, id) {
+  const { eventos, descartadas, divergentes } = lerEventosDoRegistro(pasta);
+  if (descartadas > 0) process.stderr.write(`aviso: ${descartadas} linha(s) descartada(s) na leitura do registro git de perguntas (${pasta})\n`);
+  if (divergentes.has(id)) throw new Error(`a pergunta ${id} tem linhas divergentes com a mesma chave no registro git`);
+  return eventos.filter((e) => e.pergunta_id === id);
+}
+
+/**
+ * As peças do consentimento deste adaptador (VEGA-19 T33, D-VEGA19-57): o
+ * núcleo (`conducao/consentimento.mjs`, `pecasDoConsentimento`) chama esta
+ * função, exportada fora do `default`, e recebe:
+ *   — `phi`: `PHI_DO_CASO` — sem filtro de PHI próprio, o gate do caso
+ *     (D-VEGA19-46): o trazer, o regravar e o herdar com caso consentido
+ *     seguem passando sem perguntar;
+ *   — `perguntas`: o registro de perguntas sobre o destino `git` da
+ *     declaração (`decisoes.destino: "git"`), um evento por linha num arquivo
+ *     por sessão (T13): `gravar(eventos)` (abertura e resposta do
+ *     consentimento), `origemEfetiva(id)` e `perguntaDoAutorizar(id)`, que
+ *     reconferem a `autoria` contra o transcript por `pergunta/prova.mjs`.
+ *     Sem destino `git` declarado, `perguntas` sai nulo: a pergunta citada
+ *     recusa por `registro-nao-declarado`.
+ * Síncrona: a condução grava em série. `prova` troca o leitor nos testes.
+ */
+export function consentimentoDoProjeto({ repo = process.cwd(), prova = null } = {}) {
+  const pasta = pastaDoRegistro(repo);
+  if (!pasta) return Object.freeze({ phi: PHI_DO_CASO, perguntas: null });
+  const ler = prova ?? {};
+  const { prova: leitor } = pecasDoPlugin();
+  const daPergunta = (id) => {
+    if (!PERGUNTA_ID_RE.test(id ?? "")) throw new Error("pergunta fora da forma p-<16 hex>");
+    return { eventos: eventosDaPergunta(pasta, id), ...ler };
+  };
+  return Object.freeze({
+    phi: PHI_DO_CASO,
+    perguntas: Object.freeze({
+      destino: "git",
+      gravar: (eventos) => gravarEventosNoRegistro(pasta, eventos),
+      origemEfetiva: (id) => ({ ...leitor.origemEfetiva(id, daPergunta(id)), sem_registro: false }),
+      perguntaDoAutorizar: (id) => ({ ...leitor.perguntaDoAutorizar(id, daPergunta(id)), sem_registro: false }),
+    }),
+  });
 }
 
 export default Object.freeze({

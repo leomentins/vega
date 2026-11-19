@@ -482,7 +482,7 @@ test("depois da reautorizacao a fase reaberta emite a task nova e o encerramento
   a.replanejar(ANTES_DA_F2, T5 + T6 + ANTES_DA_F2);
   assert.equal(a.proximo().reaberta, true);
   // O "sim" de Rita: autorizar-ciclo sobre a fase já autorizada congela o plano do HEAD.
-  const r = a.cli("autorizar-ciclo", "F1", "--sim", "sim, reabre a F1");
+  const r = a.cli("autorizar-ciclo", "F1", "--sim", "sim, reabre a F1", "--pergunta", "p-00000000000000a1");
   assert.equal(r.status, 0, r.stderr);
   const verde = (x = a) => ({ ci: { sha: x.head(), veredito: "verde", run: 90 } });
   const ab = a.proximo(verde());

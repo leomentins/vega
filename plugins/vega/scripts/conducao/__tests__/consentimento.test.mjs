@@ -214,7 +214,8 @@ test("o que liga, desliga ou registra guard segue perguntando", () => {
     ".claude/skills/vega/hooks/hooks.json",
     ".husky/pre-push",
     ".github/workflows/ci.yml",
-    ".vega/sistoli.mjs",
+    // `.vega/**` declarado nos Outputs deixou de perguntar (D-VEGA19-32): o
+    // caso está em `consentimento-padrao-da-fabrica.test.mjs`.
   ]) seguePerguntando(p);
 });
 

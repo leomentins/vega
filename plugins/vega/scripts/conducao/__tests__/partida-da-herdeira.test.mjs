@@ -142,7 +142,7 @@ const ciFalso = (ci) => () => ci;
 
 test("herdeira retoma sem ler a conversa da anterior", (t) => {
   const a = ambiente(t);
-  autorizarCiclo({ repo: a.anterior, ciclo: CICLO, fase: "F1", sim: "sim, pode tocar a F1" });
+  autorizarCiclo({ repo: a.anterior, ciclo: CICLO, fase: "F1", sim: "sim, pode tocar a F1", pergunta: "p-00000000000000a1" });
   const ci = { proposta: { numero: 7, headRefOid: null }, run: { databaseId: 70, conclusion: "success" } };
   // O que a anterior teria feito a seguir, e o estado dela pelo git.
   const daAnterior = a.px(a.anterior);
@@ -203,7 +203,7 @@ test("herdeira retoma sem ler a conversa da anterior", (t) => {
 
 test("o pré-voo recusa herdeira com época divergente", (t) => {
   const a = ambiente(t);
-  autorizarCiclo({ repo: a.anterior, ciclo: CICLO, fase: "F1", sim: "sim" });
+  autorizarCiclo({ repo: a.anterior, ciclo: CICLO, fase: "F1", sim: "sim", pergunta: "p-00000000000000a1" });
   passar({ repo: a.anterior, ciclo: CICLO, fase: "F1", corpo: CORPO });
   a.g(a.anterior, "switch", "-q", "--detach");
   a.g(a.herdeira, "switch", "-q", RAMO);
@@ -282,6 +282,9 @@ test("o prompt da herdeira segue o laço da fase depois de confirmar a passagem"
     assert.ok(depois.includes(campo), `a entrada do laço nomeia ${campo}`);
   }
   assert.doesNotMatch(depois, /--entrada '\{/, "o laço não fixa a entrada do proximo");
-  assert.match(texto, /Não arquivar a anterior/, "o prompt segue sem mandar a herdeira arquivar a anterior");
-  assert.doesNotMatch(texto, /archive_session/, "o prompt não manda a herdeira arquivar a anterior");
+  // D19a (16/11/2026): quem arquiva a anterior é a herdeira, logo depois da confirmação, antes do desmonte.
+  assert.doesNotMatch(texto, /Não arquivar a anterior/);
+  const iArquivar = depois.indexOf("arquivar-anterior");
+  assert.ok(iArquivar >= 0 && iArquivar < depois.indexOf("desmontar-anterior"), "arquivar a anterior antes de desmontá-la");
+  assert.match(depois, /archive_session de session_x/, "o prompt manda a herdeira arquivar a anterior pelo id");
 });

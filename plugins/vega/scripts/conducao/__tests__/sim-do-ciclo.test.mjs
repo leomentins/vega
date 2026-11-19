@@ -135,7 +135,7 @@ test("o sim do ciclo atravessa duas fases sem novo pedido e para na task que mud
   assert.equal(pedido.motivo, "autorizar-ciclo");
   assert.equal(pedido.fase, "F1");
 
-  r.ok("autorizar-ciclo", "F1", "--sim", "sim, pode tocar o ciclo inteiro");
+  r.ok("autorizar-ciclo", "F1", "--sim", "sim, pode tocar o ciclo inteiro", "--pergunta", "p-00000000000000a1");
   const saidas = atravessarF1eF2(r);
   assert.deepEqual(
     saidas.filter((s) => s.acao === "perguntar"),
@@ -162,8 +162,9 @@ test("o sim do ciclo atravessa duas fases sem novo pedido e para na task que mud
   assert.match(velho.stderr, /autorizar-fase foi aposentado/);
   assert.equal(r.g("rev-parse", "HEAD"), antes);
 
-  // O sim do ciclo de novo, sob o plano novo: a T3, sensível, abre coberta pelo sim dado nesta fase.
-  r.ok("autorizar-ciclo", "F3", "--sim", "sim, a T3 pode publicar");
+  // O sim do ciclo de novo, sob o plano novo: a T3, sensível, abre coberta pelo sim dado nesta fase. Pergunta nova: a
+  // da F1 já autorizou uma marca, e reusá-la sai `pergunta-reusada` (D-VEGA19-45).
+  r.ok("autorizar-ciclo", "F3", "--sim", "sim, a T3 pode publicar", "--pergunta", "p-00000000000000a3");
   const a3 = r.proximo();
   assert.equal(a3.acao, "abrir", JSON.stringify(a3));
   assert.deepEqual(a3.tarefas.map((x) => [x.task, x.classe]), [["T3", "sensivel"]]);
@@ -172,7 +173,7 @@ test("o sim do ciclo atravessa duas fases sem novo pedido e para na task que mud
 
 test("contraprova: o mesmo re-plano sem mudar classe nem sensibilidade segue sob o sim do ciclo", (t) => {
   const r = novoRepo(t);
-  r.ok("autorizar-ciclo", "F1", "--sim", "sim, pode tocar o ciclo inteiro");
+  r.ok("autorizar-ciclo", "F1", "--sim", "sim, pode tocar o ciclo inteiro", "--pergunta", "p-00000000000000a1");
   atravessarF1eF2(r);
   r.replanejar("- **Objetivo:** tarefa T3", "- **Objetivo:** tarefa T3, reescrita", `${CICLO}-F2/D-TESTE1-9 — re-plano de T3: objetivo`);
   const h3 = r.proximo();

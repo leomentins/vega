@@ -47,7 +47,7 @@
  * quando a resposta é `perguntar`:
  *   autorizar-fase F<n> --sim <texto>
  *      aposentado (D-VEGA29-14): recusa, exit 1, e aponta o `autorizar-ciclo`
- *   autorizar-ciclo F<n> --sim <texto>
+ *   autorizar-ciclo F<n> --sim <texto> --pergunta <p-…>
  *      o sim do operador à fase de partida e às seguintes (ruling de 27/10/2026): cada fase nova, e re-plano
  *      sem ruling, sai `herdar-autorizacao` (origem `ciclo`) enquanto nenhuma task mudar de classe ou
  *      sensibilidade desde o sim; task sensível de fase herdada pelo ciclo pergunta por nonce
@@ -159,7 +159,7 @@
  * `comPassosDoRamo`) · encerrar-sessao (VEGA-37 T8; desde a T16 sem `criar`: a seguinte nasce
  * pela ordem da troca) · fechar-ciclo · parar · e a ordem da troca (VEGA-37 T16, `regraPassagem`
  * de regras.mjs): passar · desanexar-ramo · criar-condutora (a herdeira) · passar-posse ·
- * soltar-inscricao · confirmar-passagem · retomar-da-passagem · arquivar-se · desmontar-anterior. Toda ação leva nonce determinístico por ciclo, alvo,
+ * soltar-inscricao · confirmar-passagem · retomar-da-passagem · arquivar-anterior · desmontar-anterior. Toda ação leva nonce determinístico por ciclo, alvo,
  * tentativa e HEAD: o mesmo estado repetido emite a mesma ação com o mesmo
  * nonce. `arquivar <sessão>` (D-VEGA22-25) não depende do HEAD e vem antes de
  * toda outra ação.
@@ -179,13 +179,13 @@
  * entra no texto da próxima sessão, nunca na decisão. `proposta` é o
  * `gh pr view --json number,state` da proposta do ciclo: só o `MERGED` decide
  * (T22 — depois do merge o `proximo` não emite nada).
- * `aprovacoes` é o "sim" do operador, num turno dele, a uma pergunta de task com
- * publicação ou caminho clínico: vale só para o nonce perguntado (D-VEGA22-21).
- * Desde o F4.17 do ATRM-51 (ruling do operador, 23/10/2026) a pergunta só sai
- * quando a última autorização não é da fase em curso: o sim gravado na fase
- * (o `autorizar-ciclo` da fase de partida, ou o da fase reautorizada) cobre as
- * tasks sensíveis dela em toda tentativa, enquanto o plano congelado nele
- * valer. A publicação em si segue pedindo o sim por task (skill §Publicar).
+ * `aprovacoes` é o "sim" do operador, num turno dele, a uma pergunta de task
+ * (`task-sensivel`): vale para a task em toda tentativa (D18a do operador,
+ * 16/11/2026; antes, só para o nonce perguntado, D-VEGA22-21). O sim do ciclo
+ * cobre toda task sensível do plano congelado, inclusive nas fases herdadas; a
+ * pergunta só sai, fora do sim dado à fase, para a task que toca caminho
+ * clínico ou publica alterando o existente (`simProprio`, `ler-plano.mjs`).
+ * A publicação em si segue pedindo o sim por task (skill §Publicar).
  *
  * `arquivamentos` são os nonces de `arquivar` que a maestra já executou na
  * filha: o mesmo nonce 2 vezes sem `ARCHIVED` vira `perguntar`.
@@ -203,7 +203,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import * as adaptador from "./adaptador.mjs";
 import { BOTOES } from "./botoes.mjs";
 import * as gitConducao from "./git-conducao.mjs";
-import { gravarCasosHerdados, lerConsentimentos } from "./consentimento.mjs";
+import { escreverCasosHerdados, lerConsentimentos, pecasDoConsentimento, prepararCasosHerdados } from "./consentimento.mjs";
 import * as logEventos from "./log-eventos.mjs";
 import * as pergunta from "./pergunta.mjs";
 import { preVoo } from "./pre-voo.mjs";
@@ -233,7 +233,8 @@ import {
   regraWorkstation,
   vagasDoTeto,
 } from "./regras.mjs";
-import { casoDeConferencia, opcoesDaConferencia, rulingDoReplano } from "./verbos.mjs";
+import { TRAILER_REPLANO_MOTIVO, casoDeConferencia, opcoesDaConferencia, replanoSozinho, rulingDoReplano } from "./verbos.mjs";
+import { reciboDeVega } from "../pergunta/renderizar.mjs";
 import {
   ErroPlano,
   codigoDoPlano,
@@ -406,7 +407,11 @@ export function mudancasQuePerguntam(de, para, ids = null) {
     // As telas são do adaptador que leu cada plano (`codigoDoPlano`).
     const segA = JSON.stringify(gitConducao.segmentosDosSteps(a?.passos ?? [], codigoDoPlano(de)));
     const segB = JSON.stringify(gitConducao.segmentosDosSteps(b?.passos ?? [], codigoDoPlano(para)));
-    if (sensivel(a) !== sensivel(b) || (a && b && segA !== segB) || (!a && segB !== "[]")) out.push({ task: id, sensibilidade: true });
+    // `simProprio` (D18a) mudado — a task passou a alterar o existente, ou a tocar caminho clínico — é
+    // mudar sensibilidade: o sim antigo, do ciclo ou da task, não a cobre.
+    const simDe = a?.simProprio ?? null;
+    const simPara = b?.simProprio ?? null;
+    if (sensivel(a) !== sensivel(b) || (a && b && segA !== segB) || (!a && segB !== "[]") || (a && b && simDe !== simPara)) out.push({ task: id, sensibilidade: true });
     else if (
       sensivel(a) &&
       (JSON.stringify(a.publicacao) !== JSON.stringify(b.publicacao) ||
@@ -521,9 +526,9 @@ export function semSaidasGeradasNaVaga(ctx, geradas) {
  * `geradas` são os caminhos das saídas geradas declaradas (`semSaidasGeradasNaVaga`);
  * `consentimentos` são os casos do ciclo no git (`lerConsentimentos`).
  */
-export function contextoDoProximo({ ciclo, head, plano, planoBlob, planoHead, planoHeadBlob, diffPlano, autorizacoes, estado, entrada = {}, agora = null, reinicioEm = null, encerradas = new Set(), repo = null, replanos = null, reconhecer = parsePhaseCommit, autorizacaoDoCiclo = null, conferencia = [], temCi = true, geradas = [], tiers = {}, passagem = null, consentimentos = [] }, acao) {
+export function contextoDoProximo({ ciclo, head, plano, planoBlob, planoHead, planoHeadBlob, diffPlano, autorizacoes, estado, entrada = {}, agora = null, reinicioEm = null, encerradas = new Set(), repo = null, replanos = null, anteriores = [], planoHeadTexto = null, reconhecer = parsePhaseCommit, autorizacaoDoCiclo = null, conferencia = [], temCi = true, geradas = [], tiers = {}, passagem = null, consentimentos = [] }, acao) {
   const ctx = contextoDaDecisao(
-    { ciclo, head, plano, planoBlob, planoHead, planoHeadBlob, diffPlano, autorizacoes, estado, entrada, agora, reinicioEm, encerradas, repo, replanos, reconhecer, autorizacaoDoCiclo, conferencia, temCi, tiers, passagem, consentimentos },
+    { ciclo, head, plano, planoBlob, planoHead, planoHeadBlob, diffPlano, autorizacoes, estado, entrada, agora, reinicioEm, encerradas, repo, replanos, anteriores, planoHeadTexto, reconhecer, autorizacaoDoCiclo, conferencia, temCi, tiers, passagem, consentimentos },
     {
       acao,
       nonce,
@@ -533,6 +538,9 @@ export function contextoDoProximo({ ciclo, head, plano, planoBlob, planoHead, pl
       mudancasQuePerguntam,
       mudancasDeAlcance,
       rulingDoReplano,
+      replanoSozinho,
+      reciboDeVega,
+      nomeDoOperador: () => (repo ? adaptador.nomeDoOperador(repo) : "o operador"),
       tasksQueMudaramDeClasse,
       textoDaProximaSessao,
       textoDoFechamento,
@@ -753,7 +761,8 @@ export function resumoDaPassagem(repo, ciclo, marcas, { lerPosse = gitConducao.l
  * de posse da página do projeto, e o pré-voo da herdeira vem depois dele, que
  * é quem sobe a época conferida (VEGA-37 T49). Depois da confirmação, a
  * herdeira segue o laço da fase herdada — o desmonte da anterior, depois as
- * ações da fase até o fim (VEGA-37 T53, D-VEGA37-56). A anterior se arquiva sozinha.
+ * ações da fase até o fim (VEGA-37 T53, D-VEGA37-56). Quem arquiva a anterior é a
+ * herdeira, logo depois da confirmação (`arquivar-anterior`, D19a).
  */
 export function textoDaHerdeira({ ciclo, fase, sessao, nota, trazer }) {
   const verbos = `node ${RAIZ_DOS_VERBOS}/scripts/conducao/conducao.mjs`;
@@ -762,9 +771,10 @@ export function textoDaHerdeira({ ciclo, fase, sessao, nota, trazer }) {
     `Conduzir ${ciclo} — ${fase}, como herdeira da condutora ${anterior}, pela skill ${RAIZ_DOS_VERBOS}/skills/conducao/SKILL.md. <árvore> é o diretório de trabalho desta sessão.`,
     `1. ${verbos} trazer-ramo --repo <árvore> --ciclo ${ciclo} --ramo ${trazer.ramo ?? "<ramo do ciclo>"} --passagem ${trazer.passagem} --tentativa ${trazer.tentativa} --nonce ${trazer.nonce}`,
     `2. ${verbos} proximo --repo <árvore> --ciclo ${ciclo} e seguir passar-posse e inscrever-na-proposta. O passar-posse vai pelo verbo de posse que a página do projeto nomeia (campo pagina da declaração), com o lock_id e a época da ação; a época sobe nessa escrita.`,
+    `Canal e contador: fale com o operador pelo "Canal do operador" que a nota de passagem diz em Ponteiros (relé por send_message, com recibo, quando é o caso; nunca só nesta sessão se ele não a vê), e numere a próxima decisão pela "Próxima decisão" dela, sem recomeçar.`,
     `3. Depois do passar-posse, rotina de partida, nesta ordem e só com o git, o estado do harness e a nota (nunca a conversa da anterior): pré-voo (${verbos} pre-voo --repo <árvore> --ciclo ${ciclo} --herdeira --entrada '{"inscrita":true}'; exit 1 ⇒ cada falha ao operador e parar) · estado pelo git (${verbos} retomar --repo <árvore> --ciclo ${ciclo}: tasks, avisos das operárias, CI da proposta) · a nota de passagem ${nota ?? "(campo nota do retomar)"} · a lista de tasks da fase no canonico.`,
-    `4. ${verbos} proximo --repo <árvore> --ciclo ${ciclo} --entrada '{"inscrita":true,"anterior":{"sessao":"${anterior}","estado":"<estado no get_session>"}}' e seguir a ação: inscrever-na-proposta, depois confirmar-passagem. Não arquivar a anterior: ela se arquiva ao ver a confirmação.`,
-    `5. Depois do confirmar-passagem, seguir o laço do proximo da skill na fase herdada (${fase}), chamando ${verbos} proximo --repo <árvore> --ciclo ${ciclo} --entrada <arquivo> a cada ação, com a entrada montada pela §2 da skill (filhas, agora, ci, proposta, aprovacoes, sessaoMaestra), somando inscrita: true e anterior (sessao ${anterior}, estado no get_session) enquanto a anterior não for desmontada: primeiro o desmontar-anterior, que o proximo emite quando o get_session dá a anterior arquivada; depois as ações da fase, até o encerrar-sessao ou o fechar-ciclo, ou até uma pergunta ao operador.`,
+    `4. ${verbos} proximo --repo <árvore> --ciclo ${ciclo} --entrada '{"inscrita":true,"anterior":{"sessao":"${anterior}","estado":"<estado no get_session>"}}' e seguir a ação: inscrever-na-proposta, depois confirmar-passagem.`,
+    `5. Depois do confirmar-passagem, seguir o laço do proximo da skill na fase herdada (${fase}), chamando ${verbos} proximo --repo <árvore> --ciclo ${ciclo} --entrada <arquivo> a cada ação, com a entrada montada pela §2 da skill (filhas, agora, ci, proposta, aprovacoes, sessaoMaestra), somando inscrita: true e anterior (sessao ${anterior}, estado no get_session) enquanto a anterior não for desmontada: primeiro o arquivar-anterior (archive_session de ${anterior}, que já soltou a inscrição e parou; somar o nonceArquivar executado em anterior.arquivamentos), depois o desmontar-anterior, que o proximo emite quando o get_session dá a anterior arquivada; depois as ações da fase, até o encerrar-sessao ou o fechar-ciclo, ou até uma pergunta ao operador.`,
   ].join("\n");
 }
 
@@ -1240,8 +1250,11 @@ export function problemasDaEntrada(entrada) {
   for (const lado of ["herdeira", "anterior"]) {
     tipo(lado, entrada[lado], objeto, "objeto");
     if (!objeto(entrada[lado])) continue;
-    for (const k of Object.keys(entrada[lado])) if (!["sessao", "estado", "criadaEm"].includes(k)) out.push(`${lado}: campo desconhecido: ${k}`);
+    // `arquivamentos` (só a anterior): os `nonceArquivar` do `arquivar-anterior` já executados (D19a).
+    const campos = lado === "anterior" ? ["sessao", "estado", "criadaEm", "arquivamentos"] : ["sessao", "estado", "criadaEm"];
+    for (const k of Object.keys(entrada[lado])) if (!campos.includes(k)) out.push(`${lado}: campo desconhecido: ${k}`);
     for (const k of ["sessao", "estado"]) tipo(`${lado}.${k}`, entrada[lado][k], texto, "texto");
+    tipo(`${lado}.arquivamentos`, entrada[lado].arquivamentos, (a) => Array.isArray(a) && a.every(texto), "lista de textos");
     tipo(`${lado}.criadaEm`, entrada[lado].criadaEm, (v) => epoch(v) !== null, "instante ISO ou epoch em segundos");
   }
   return out;
@@ -1373,16 +1386,16 @@ export function proximo({ repo, ciclo, entrada = {}, entradaErro = null, reinici
   // pergunta. Merge de origin/main que não muda o canonico do ciclo fica de
   // fora (C24 do VEGA-28: o `--full-history` o listava porque o main tem outra
   // versão do canonico). Canonico em outro caminho ⇒ null, sem herança.
+  // T43 (D-VEGA19-53): junto do subject, o trailer `Replano-Motivo` de cada re-plano, e os
+  // re-planos anteriores do ciclo que o levam — a regra do re-plano sozinho recusa o motivo repetido.
   const replanos =
-    diffPlano && noHead.caminho === congelado.caminho
-      ? git(repo, ["log", "--first-parent", "--format=%H%x1f%s", `${ultima.sha}..HEAD`, "--", noHead.caminho])
-          .split("\n")
-          .filter(Boolean)
-          .map((l) => {
-            const [sha, subject = ""] = l.split("\x1f");
-            return { sha, subject };
-          })
-      : null;
+    diffPlano && noHead.caminho === congelado.caminho ? commitsDoCanonico(repo, `${ultima.sha}..HEAD`, noHead.caminho) : null;
+  const doReplano = new Set((replanos ?? []).map((c) => c.sha));
+  // Os anteriores pela história inteira, não só a linha do ciclo: re-plano que entrou por merge conta.
+  const anteriores = replanos?.length
+    ? commitsDoCanonico(repo, "HEAD", noHead.caminho, { linhaDoCiclo: false }).filter((c) => c.motivo && !doReplano.has(c.sha))
+    : [];
+  const planoHeadTexto = replanos?.length ? git(repo, ["cat-file", "-p", noHead.blob]) : null;
   // O último sim do operador ao ciclo (`autorizar-ciclo`), com o plano congelado
   // nele: a régua do que o sim cobre. Marca ilegível não cobre nada.
   const marcaDoCiclo = autorizacoes.findLast((m) => m.ciclo) ?? null;
@@ -1400,6 +1413,16 @@ export function proximo({ repo, ciclo, entrada = {}, entradaErro = null, reinici
   for (const r of estado.trazidas.values()) {
     const falta = gitConducao.faltaDaTrazida(repo, ciclo, r);
     if (falta !== null && !falta.length) continue;
+    // Registro ilegível: o regravar não tem o que reler — sobe ao operador, sem laço (VEGA-19 T16).
+    if (falta === null)
+      return pergunta.perguntar({
+        acao: "perguntar",
+        nonce: nonce(ciclo, r.task, r.tentativa, head),
+        ciclo,
+        head,
+        motivo: "trazida-ilegivel",
+        ...gitConducao.camposDaTrazidaIlegivel({ task: r.task, tentativa: r.tentativa, registro: r.ref }),
+      });
     return pergunta.perguntar({
       acao: "perguntar",
       nonce: nonce(ciclo, r.task, r.tentativa, head),
@@ -1437,6 +1460,8 @@ export function proximo({ repo, ciclo, entrada = {}, entradaErro = null, reinici
     encerradas,
     repo,
     replanos,
+    anteriores,
+    planoHeadTexto,
     // Casos de conferência do operador que o adaptador declara (T14) e se o
     // projeto tem CI da proposta (T15, 5-a).
     conferencia: decl.conferencia,
@@ -1452,6 +1477,23 @@ export function proximo({ repo, ciclo, entrada = {}, entradaErro = null, reinici
   });
   // Os passos do ramo no fechamento (T9) vêm depois da ordem das regras, sobre a ação que ela decidiu.
   return comAEntradaDoVerbo(comPassosDoRamo(decidida, { ramo: gitConducao.ramoNoOrigin(repo), temCi: decl.ci !== false, entrada }));
+}
+
+/**
+ * Os commits da linha do ciclo (`--first-parent`) que mexeram em `caminho` no intervalo `faixa`,
+ * com o subject e o trailer `Replano-Motivo` (T43): `{ sha, subject, motivo }`, `motivo` null sem
+ * o trailer. Registro por `%x1e`: o trailer vem depois do subject e pode faltar.
+ */
+function commitsDoCanonico(repo, faixa, caminho, { linhaDoCiclo = true } = {}) {
+  const fmt = `--format=%H%x1f%s%x1f%(trailers:key=${TRAILER_REPLANO_MOTIVO},valueonly=true,separator=%x2c)%x1e`;
+  return git(repo, ["log", ...(linhaDoCiclo ? ["--first-parent"] : []), fmt, faixa, "--", caminho])
+    .split("\x1e")
+    .map((r) => r.replace(/^\n+/, ""))
+    .filter(Boolean)
+    .map((r) => {
+      const [sha, subject = "", motivo = ""] = r.split("\x1f");
+      return { sha: sha.trim(), subject, motivo: motivo.trim() || null };
+    });
 }
 
 /**
@@ -1472,19 +1514,34 @@ export function herdarAutorizacao({ repo, ciclo, fase, nonce: n }) {
       "heranca-recusada",
       `o proximo devolve ${p.acao}${p.motivo ? ` ${p.motivo}` : ""}${p.fase ? ` ${p.fase}` : ""} (nonce ${p.nonce}), não herdar-autorizacao ${fase} ${n}`,
     );
-  // VEGA-37 T20 (D-VEGA37-35): os casos que a ação traz ficam no git antes da marca herdada, com o
-  // sim lido da marca de origem e o gate irmão que só aceita esse corpo, byte a byte. Falha aqui
-  // ⇒ nada de herança: o próximo `herdar-autorizacao` refaz o registro.
-  const consentimentos = gravarCasosHerdados({
+  // VEGA-37 T20 (D-VEGA37-35), VEGA-19 T16: os casos que a ação traz ficam registrados antes da
+  // marca herdada, com o sim lido da marca de origem, o gate irmão que só aceita esse corpo, byte a
+  // byte, o de PHI do projeto e — com a pergunta citada pelo sim do ciclo — a origem humana dela
+  // (D-VEGA19-39). Ordem: conferir os casos e a herança sem escrever; só então gravar os casos e a
+  // herança (débito `conducao-gravar-casos-herdados-antes-da-heranca`). Falha ao conferir ⇒ nada
+  // gravado: o próximo `herdar-autorizacao` refaz.
+  // D-VEGA19-41: a pergunta citada pela marca de origem se confere aqui, mesmo sem casos a gravar —
+  // o ciclo, a fase e o sim da marca que a usou, a opção escolhida e o uso único. Peças carregadas
+  // uma vez para as duas conferências; falha de carga recusa (nunca vira consentimento).
+  const pecas = pecasDoConsentimento(repo);
+  gitConducao.conferirPerguntaDaHeranca({ repo, ciclo, autorizacao: p.autorizacao, pecas });
+  const preparados = prepararCasosHerdados({
     repo,
     ciclo,
     pedidos: [p.consentimento, ...(p.consentimentos ?? [])],
     quem: adaptador.nomeDoOperador(repo),
+    pecas,
+  });
+  gitConducao.conferirHeranca({ repo, ciclo, fase, autorizacao: p.autorizacao, replanos: p.replanos, planoNovo: p.planoNovo, origem: p.origem ?? "replano", replanoMotivo: p.replanoMotivo ?? null });
+  const consentimentos = escreverCasosHerdados({
+    repo,
+    preparados,
     cerca: () => gitConducao.exigirPosse({ repo, ciclo }),
-  }).map((c) => ({ sha: c.sha, caso: c.registro.caso, ...(c.registro.task ? { task: c.registro.task } : {}) }));
-  const r = gitConducao.registrarHeranca({ repo, ciclo, fase, autorizacao: p.autorizacao, replanos: p.replanos, planoNovo: p.planoNovo, origem: p.origem ?? "replano" });
+  }).map((c) => ({ sha: c.sha, caso: c.registro.caso, ...(c.registro.task ? { task: c.registro.task } : {}), ...(c.pergunta ? { pergunta: c.pergunta } : {}) }));
+  const r = gitConducao.registrarHeranca({ repo, ciclo, fase, autorizacao: p.autorizacao, replanos: p.replanos, planoNovo: p.planoNovo, origem: p.origem ?? "replano", replanoMotivo: p.replanoMotivo ?? null });
   process.stderr.write(`conducao: ${p.aviso}\n`);
-  return { ...r, aviso: p.aviso, consentimentos };
+  // T43: o re-plano que seguiu sozinho passa o aviso ao operador com o motivo e o `replano:<sha8>`.
+  return { ...r, aviso: p.aviso, consentimentos, ...(p.origem === "sozinho" ? { avisarOperador: true, replanoMotivo: p.replanoMotivo, ponteiro: p.ponteiro, recibo: p.recibo ?? null } : {}) };
 }
 
 /** Aspas simples de shell. */
@@ -2261,10 +2318,10 @@ function verboDeGit(verbo, resto, { repo, ciclo }) {
       // para o ciclo inteiro. Recusa antes de gravar qualquer marca.
       throw new ErroPlano(
         "verbo-aposentado",
-        "autorizar-fase foi aposentado: o sim vale para o ciclo inteiro — autorizar-ciclo F<n> --sim <texto>; mudança de classe ou de sensibilidade e publicação seguem perguntando",
+        "autorizar-fase foi aposentado: o sim vale para o ciclo inteiro — autorizar-ciclo F<n> --sim <texto> --pergunta <p-…>; mudança de classe ou de sensibilidade e publicação seguem perguntando",
       );
     case "autorizar-ciclo":
-      return gitConducao.autorizarCiclo({ repo, ciclo, fase: resto.find((a) => /^F\d{1,2}$/.test(a)), sim: flag(resto, "--sim") });
+      return gitConducao.autorizarCiclo({ repo, ciclo, fase: resto.find((a) => /^F\d{1,2}$/.test(a)), sim: flag(resto, "--sim"), pergunta: flag(resto, "--pergunta") ?? null });
     case "abrir": {
       // P19 do ATRM-51: a filha nasce no modo de permissão da maestra, e o
       // `create_session` recusa modo mais permissivo que o de quem chama. Fora
@@ -2395,7 +2452,8 @@ function verboDeGit(verbo, resto, { repo, ciclo }) {
       if (entrada.erro) throw new ErroPlano("entrada-invalida", entrada.erro);
       // Filha viva = a mesma conta do teto da ponte (`vagasDoTeto`): toda que não está arquivada.
       const filhas = Array.isArray(entrada.valor.filhas) ? entrada.valor.filhas : [];
-      const vivas = filhas.filter((f) => f.estado !== "ARCHIVED").map((f) => f.sessao ?? f.task ?? "?");
+      // Caixa normalizada como no `proximo` (`estadoDaFilha`): `archived` do get_session é arquivada.
+      const vivas = filhas.filter((f) => estadoDaFilha(f.estado) !== "ARCHIVED").map((f) => f.sessao ?? f.task ?? "?");
       const estado = estadoDasTasks(lerMarcas(repo), lerRefsLocais(repo, ciclo), gitConducao.lerTrazidas(repo, ciclo));
       const r = gitConducao.passar({ repo, ciclo, fase, corpo, emVoo: [...estado.emVoo.values()], trazidas: [...estado.trazidas.values()], vivas });
       // Ao entrar em passagem a anterior desanexa o ramo e fica com a posse (VEGA-37 T16): a herdeira o traz.

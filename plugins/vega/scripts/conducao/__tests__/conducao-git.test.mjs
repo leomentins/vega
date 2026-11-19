@@ -166,7 +166,7 @@ function ambiente(t, { tasks = [task("T1"), task("T2")], largura = 3 } = {}) {
     return f("rev-parse", "HEAD");
   };
 
-  const autorizar = () => ok("autorizar-ciclo", "F1", "--sim", "sim, pode tocar a F1");
+  const autorizar = () => ok("autorizar-ciclo", "F1", "--sim", "sim, pode tocar a F1", "--pergunta", "p-00000000000000a1");
   const abrir = (tk, n = 1, nonce = `nonce${tk}${n}`) => ok("abrir", tk, "--tentativa", String(n), "--nonce", nonce, "--modo-maestra", "auto");
   const proximo = (entrada = {}) => {
     const r = cli("proximo", "--entrada", JSON.stringify(entrada));

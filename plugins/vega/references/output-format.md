@@ -13,8 +13,8 @@ pergunta de distância, e simplificar corta ruído, nunca corta opção.
 ## Regra — formato obrigatório
 
 ```
-**Decisão de operador — <assunto — do que o bloco trata, em poucas palavras>**
-(plural com mais de um item: **Decisões de operador — …**; outro papel: **Decisão de <outro papel> — …**)
+**Decisão de engenharia — <assunto — do que o bloco trata, em poucas palavras>**
+(plural com mais de um item: **Decisões de engenharia — …**; outro mandato: **Decisão societária — …** ou outro rótulo de mandato que o projeto nomeia)
 
 Dk. <título em linguagem de comportamento/UX — nunca de schema, coluna, função ou diff>
 
@@ -113,7 +113,7 @@ nunca no cabeçalho (regra 7).
    em citação, com o comentário em crase só para aparecer aqui; na conversa o bloco sai solto e o
    comentário cru, sem crase:
 
-   > **Decisão de operador — teste de recuperação da condução**
+   > **Decisão de engenharia — teste de recuperação da condução**
    >
    > D3. A recuperação depois de queda não tem como ser testada no servidor
    >
@@ -138,15 +138,14 @@ nunca no cabeçalho (regra 7).
    saída de comando) vive no artefato da origem — o relatório do revisor, a revisão do esboço, a
    nota do ciclo, o registro de débito que o projeto declara. Bloco simplificado sem o cru
    persistido em lugar nenhum = perda silenciosa do fato, não economia de contexto.
-7. **Cabeçalho `Decisão de <papel> — <assunto>`, sem número.** O cabeçalho em negrito diz **para
-   quem** o bloco sobe e, depois do travessão, **do que** trata, em poucas palavras:
-   `**Decisão de operador — prazo da entrega**`; com mais de um item, `**Decisões de operador — …**`
-   (o singular ou o plural concorda com o número de itens); fora do operador, o papel que o
-   projeto nomeia para o eixo, com a preposição que concorda com ele (`de operador`,
-   `do responsável técnico`). Papel, nunca nome civil — eixos diferentes têm donos diferentes (a
+7. **Cabeçalho `Decisão de <mandato> — <assunto>`, sem número.** O cabeçalho em negrito diz **o
+   mandato** de quem decide e, depois do travessão, **do que** trata, em poucas palavras:
+   `**Decisão de engenharia — prazo da entrega**`; com mais de um item, `**Decisões de engenharia — …**`
+   (o singular ou o plural concorda com o número de itens); com outro mandato, o rótulo dele
+   (`Decisão societária`, ou outro rótulo que o projeto nomeia). Mandato, nunca nome civil — eixos diferentes têm donos diferentes (a
    tabela de escalonamento do projeto diz qual), e um bloco sem destinatário chega a quem o leu
    primeiro, não a quem pode cravar. O papel do cabeçalho cobre todos os itens; o item que foge
-   dele declara o seu numa linha `_Decide:_ <papel>` dentro do item. **Número no cabeçalho,
+   dele declara o seu numa linha `_Decide:_ <titular>` dentro do item. **Número no cabeçalho,
    nenhum** — nem contagem, nem a sequência da sessão: os números vivem só nos itens (regra 5), no
    fecho e na chave escondida. Com dois números disputando o cabeçalho (contagem do bloco ×
    sequência da sessão), bloco de UMA decisão sai como "2 decisões", "3 decisões" — o N tomado
@@ -227,6 +226,10 @@ a definição citada de \<termo\>, estas N opções levam a comportamentos difer
 não sobrevive à pergunta sai — e sair **não** é o corte calado do invariante acima: o corte
 proibido é sumir com uma DECISÃO, este é sumir com um SINÔNIMO.
 
+## Implementação — renderizador e registro
+
+O bloco acima é o que o renderizador (`scripts/pergunta/renderizar.mjs`) escreve a partir da pergunta na forma de `scripts/pergunta/forma.mjs`, e o comando `scripts/pergunta/comando.mjs` grava a pergunta antes de mostrá-la, no lugar que o projeto declara (banco ou arquivo no git). O agente que para diante do operador abre a pergunta pelo comando e mostra o bloco que ele devolve; o texto é o canal em todo host. A pergunta com opções que diferem no que se vê aponta um visual durável.
+
 ## Onde se aplica
 
 Toda superfície que renderiza decisão ao operador — e, pela regra 9, toda saída que para diante
@@ -250,8 +253,8 @@ o operador não pode cravar.
 - ❌ Colar o achado cru do revisor (severidade + correção técnica) como se fosse o bloco de decisão.
 - ❌ Bloco dentro de bloco de código (cartão copiável) — inclusive o de divergência.
 - ❌ Bloco sem `→ Recomendo` — salvo os itens de conserto do julgamento de tela (§Exceção única).
-- ❌ Cabeçalho sem papel — decisão sem destinatário declarado (regra 7).
-- ❌ Número no cabeçalho — contagem (`2 decisões`) ou sequência (`Decisão de operador: 5`); o
+- ❌ Cabeçalho sem mandato — decisão sem destinatário declarado (regra 7).
+- ❌ Número no cabeçalho — contagem (`2 decisões`) ou sequência (`Decisão de engenharia: 5`); o
   número da decisão vive no item (regra 7). E plural com um item só, ou singular com vários.
 - ❌ Opção "(c) outra" / "outro caminho" num item — a alternativa livre é sempre aceita e não se
   lista (regra 8).

@@ -235,7 +235,7 @@ test("declaracao recusa ci fora de booleano e lista de modos vazia ou com campo 
 
 test("com a declaracao do projeto de teste, criadora em bypassPermissions pergunta modo-da-maestra e nada e gravado", (t) => {
   const a = ambiente(t, declaracao({}));
-  assert.equal(a.cli("autorizar-ciclo", "F1", "--sim", "sim, pode tocar a F1").status, 0);
+  assert.equal(a.cli("autorizar-ciclo", "F1", "--sim", "sim, pode tocar a F1", "--pergunta", "p-00000000000000a1").status, 0);
   const head = a.head();
   const r = a.cli("abrir", "T1", "--tentativa", "1", "--nonce", "nonceT11", "--modo-maestra", "bypassPermissions");
   assert.equal(r.status, 1, r.stderr);
@@ -250,7 +250,7 @@ test("com a declaracao do projeto de teste, criadora em bypassPermissions pergun
 
 test("com declaracao que aceita bypassPermissions, a filha abre", (t) => {
   const a = ambiente(t, declaracao({ sessao: { modosSemClique: ["auto", "bypassPermissions"] } }));
-  assert.equal(a.cli("autorizar-ciclo", "F1", "--sim", "sim, pode tocar a F1").status, 0);
+  assert.equal(a.cli("autorizar-ciclo", "F1", "--sim", "sim, pode tocar a F1", "--pergunta", "p-00000000000000a1").status, 0);
   const head = a.head();
   const r = a.cli("abrir", "T1", "--tentativa", "1", "--nonce", "nonceT11", "--modo-maestra", "bypassPermissions");
   assert.equal(r.status, 0, r.stderr);

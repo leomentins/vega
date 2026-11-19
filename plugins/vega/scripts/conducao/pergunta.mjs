@@ -17,15 +17,35 @@
  * e da recomendação nunca entra no log; segue onde a maestra o escreve, na
  * conversa. O banco do harness não ganha tipo nem verbo (ruling 26-a do
  * plan-review v1); o registro em catálogo fica com o VEGA-19.
+ *
+ * Desde a T7 do VEGA-19 a forma da pergunta é peça do corpo
+ * (`../pergunta/forma.mjs`): destinatário e número se conferem por ela, e
+ * `formaDe` constrói a pergunta da forma a partir da saída da condução. O que
+ * a maestra lê (`perguntar`, `decisaoDe`, o evento do log) não muda.
+ *
+ * Desde a T8 do VEGA-19 quem responde vem da camada da empresa
+ * (`../pergunta/destinatarios.mjs`), com o nível da condução (`condutora`):
+ * `perguntar` confere o destinatário contra essa tabela e devolve ao
+ * `operador` o que nunca desce (guard, instruções de sessão,
+ * `canonico-do-ciclo`, `caminho-clinico-fora-dos-outputs`).
  */
 import { createHash } from "node:crypto";
 import * as logEventos from "./log-eventos.mjs";
+import { DESTINATARIOS_PADRAO, ErroForma, conferirDestinatario, conferirNumero, criarPergunta } from "../pergunta/forma.mjs";
+import { carregar as carregarDestinatarios, destinatarioEfetivo } from "../pergunta/destinatarios.mjs";
 
 export const ACAO = "perguntar";
 /** Ação do evento que a gravação deixa no log (≠ a intenção `perguntar`). */
 export const EVENTO = "pergunta";
-/** Papéis que recebem a pergunta (`dev-discipline.md` §Escalation). */
-export const DESTINATARIOS = Object.freeze(["operador", "responsavel-clinico"]);
+/** Papéis da forma do corpo (`dev-discipline.md` §Escalation), sem camada nem condução. */
+export const DESTINATARIOS = DESTINATARIOS_PADRAO;
+/**
+ * A tabela de quem responde: a camada da empresa mais a `condutora`
+ * (T8). Camada presente e ilegível recusa na carga — nunca cai no padrão.
+ */
+export const TABELA_DE_DESTINATARIOS = carregarDestinatarios();
+/** Papéis que a condução aceita como destinatário: os da tabela. */
+export const DESTINATARIOS_DA_CONDUCAO = TABELA_DE_DESTINATARIOS.papeis;
 
 const MOTIVO = /^[A-Za-z0-9._:/+@-]{1,200}$/;
 const ID_DE_OPCAO = /^[a-z0-9][a-z0-9-]{0,31}$/;
@@ -33,7 +53,7 @@ const ID_DE_OPCAO = /^[a-z0-9][a-z0-9-]{0,31}$/;
 /** Saídas que nasceram do construtor; `gravar` só aceita estas. */
 const CONSTRUIDAS = new WeakSet();
 
-export class ErroPergunta extends Error {
+export class ErroPergunta extends ErroForma {
   constructor(message) {
     super(message);
     this.name = "ErroPergunta";
@@ -53,9 +73,9 @@ function conferirDecisao(saida) {
     if (saida.recomendada !== undefined && !ids.has(saida.recomendada)) throw new ErroPergunta(`recomendada: ${saida.recomendada} não é opção`);
   } else if (saida.recomendada !== undefined) throw new ErroPergunta("recomendada sem opcoes");
   if (saida.recomendacao !== undefined && typeof saida.recomendacao !== "string") throw new ErroPergunta("recomendacao: esperado texto");
-  if (saida.destinatario !== undefined && !DESTINATARIOS.includes(saida.destinatario))
-    throw new ErroPergunta(`destinatario: esperado ${DESTINATARIOS.join(" | ")}`);
-  if (saida.numero !== undefined && !(Number.isInteger(saida.numero) && saida.numero > 0)) throw new ErroPergunta("numero: esperado inteiro positivo");
+  if (saida.destinatario !== undefined) conferirDestinatario(saida.destinatario, "destinatario", ErroPergunta, DESTINATARIOS_DA_CONDUCAO);
+  if (saida.caminhos !== undefined && !(Array.isArray(saida.caminhos) && saida.caminhos.every((c) => typeof c === "string"))) throw new ErroPergunta("caminhos: esperada lista de texto");
+  if (saida.numero !== undefined) conferirNumero(saida.numero, "numero", ErroPergunta);
 }
 
 /**
@@ -63,13 +83,18 @@ function conferirDecisao(saida) {
  * `acao` vira `perguntar` (campo `acao` do chamador nunca mascara a pergunta).
  * Campos da decisão, todos opcionais: `opcoes` ([{ id, texto }]),
  * `recomendada` (id de uma opção), `recomendacao` (texto), `destinatario`
- * (papel, default `operador`) e `numero` (o da sessão, que a maestra dá).
+ * (papel da tabela, default `operador`) e `numero` (o da sessão, que a maestra
+ * dá). Destinatário `condutora` em caso que nunca desce (pelo `motivo` ou
+ * pelos `caminhos`) sai `operador`.
  */
 export function perguntar(saida) {
   if (!saida || typeof saida !== "object" || Array.isArray(saida)) throw new ErroPergunta("pergunta: esperado objeto");
   if (typeof saida.motivo !== "string" || !MOTIVO.test(saida.motivo)) throw new ErroPergunta(`pergunta sem motivo legível: ${JSON.stringify(saida.motivo ?? null)}`);
   conferirDecisao(saida);
   const p = { ...saida, acao: ACAO, motivo: saida.motivo };
+  if (saida.destinatario !== undefined) {
+    p.destinatario = destinatarioEfetivo({ papel: saida.destinatario, motivo: saida.motivo, caminhos: saida.caminhos ?? [] }, TABELA_DE_DESTINATARIOS);
+  }
   CONSTRUIDAS.add(p);
   return p;
 }
@@ -139,4 +164,43 @@ export function eventoDa(saida) {
 export function gravar(saida, decl, { quando } = {}) {
   if (!decl?.pastaDaPergunta) throw new ErroPergunta("adaptador sem pastaDaPergunta");
   return logEventos.registrar(eventoDa(saida), { procedencia: "intencao", quando, pasta: decl.pastaDaPergunta });
+}
+
+/**
+ * A pergunta na forma do corpo (`../pergunta/forma.mjs`) a partir da saída
+ * construída: um item, o `motivo` como assunto e título, o destinatário como
+ * papel, as opções na ordem, em letras (`a`, `b`, …), com o texto ou, sem
+ * ele, o id da opção. Exige número e ao menos duas opções — a forma não aceita
+ * decisão sem menu. Sem `recomendada` (a conferência: só o operador sabe), o
+ * item sai com `semRecomendacao`. A marca de paciente é do chamador, explícita:
+ * o texto das opções e da recomendação é livre, e a forma não presume que ele
+ * venha limpo. `sessao` (e `tentativa`, ignorada quando não é inteiro
+ * positivo) derivam o id opaco.
+ */
+export function formaDe(saida, { sessao, tentativa = null, has_patient_data } = {}) {
+  if (!foiConstruida(saida)) throw new ErroPergunta("forma de saída que não passou pelo construtor");
+  if (saida.numero === undefined) throw new ErroPergunta("forma: pergunta sem número da sessão");
+  if (typeof has_patient_data !== "boolean") throw new ErroPergunta("forma: marca de paciente obrigatória (has_patient_data)");
+  const t = tentativa ?? saida.tentativa ?? null;
+  const umaLinha = (x) => (typeof x === "string" ? x.replace(/\s+/g, " ").trim() : "");
+  const opcoes = saida.opcoes ?? [];
+  const recomendada = saida.recomendada === undefined ? null : "abcdefghijklmnopqrstuvwxyz"[opcoes.findIndex((o) => o.id === saida.recomendada)];
+  return criarPergunta(
+    {
+      sessao,
+      tentativa: Number.isInteger(t) && t > 0 ? t : null,
+      numero: saida.numero,
+      assunto: saida.motivo,
+      papel: saida.destinatario ?? "operador",
+      has_patient_data,
+      itens: [
+        {
+          titulo: saida.motivo,
+          opcoes: opcoes.map((o) => ({ texto: o.texto ?? o.id })),
+          ...(recomendada ? { recomendada, motivo: umaLinha(saida.recomendacao) || saida.recomendada } : { semRecomendacao: "só quem decide sabe" }),
+        },
+      ],
+    },
+    { destinatarios: DESTINATARIOS_DA_CONDUCAO, Erro: ErroPergunta },
+  );
 }

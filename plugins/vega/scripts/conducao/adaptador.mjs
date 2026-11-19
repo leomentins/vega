@@ -645,7 +645,7 @@ function funcao(v, onde) {
 }
 
 const OBRIGATORIOS_DO_CODIGO = Object.freeze(["plano", "publicacao", "caminhosProtegidos", "telasProtegidasDosSteps", "foraDasTelasDosSteps", "carimbo", "ci"]);
-const OPCIONAIS_DO_CODIGO = Object.freeze(["marcasDeRodadas", "alcanceDosHooks", "fechamentoDoCiclo", "capacidade", "esperandoAVez"]);
+const OPCIONAIS_DO_CODIGO = Object.freeze(["marcasDeRodadas", "alcanceDosHooks", "fechamentoDoCiclo", "capacidade", "esperandoAVez", "caminhosQuePerguntam"]);
 // Nome antigo → nome novo (HN-29 T41): lido até a migração dos adaptadores na F5.
 const NOMES_ANTIGOS_DO_CODIGO = Object.freeze([
   ["caminhosClinicos", "caminhosProtegidos"],
@@ -685,7 +685,11 @@ function comNomesNovos(c, onde) {
  * `capacidade` (HN-29 T24: a função que mede quantas filhas novas cabem agora,
  * lida só quando a declaração diz `capacidade: "codigo"`; default `null`);
  * `esperandoAVez` (HN-29 T52: a função que devolve as sessões com build
- * esperando a vez na fila do projeto; default `null`).
+ * esperando a vez na fila do projeto; default `null`); `caminhosQuePerguntam`
+ * (D18a do operador, 16/11/2026: os globs de dado de paciente ou caminho
+ * clínico, cuja task pede o sim de novo mesmo coberta pelo sim do ciclo;
+ * default `caminhosProtegidos`, que o projeto estreita quando parte deles é só
+ * publicação).
  * Ausente vale o default; presente com tipo errado recusa.
  * Nome antigo de campo (`NOMES_ANTIGOS_DO_CODIGO`) carrega com aviso (`comNomesNovos`).
  */
@@ -722,10 +726,13 @@ export function validarCodigo(bruto, onde = "código do adaptador") {
   }
   const capacidade = c.capacidade === undefined ? null : funcao(c.capacidade, `${onde}.capacidade`);
   const esperandoAVez = c.esperandoAVez === undefined ? null : funcao(c.esperandoAVez, `${onde}.esperandoAVez`);
+  const caminhosProtegidos = lista(c.caminhosProtegidos, `${onde}.caminhosProtegidos`);
+  const caminhosQuePerguntam = c.caminhosQuePerguntam === undefined ? caminhosProtegidos : lista(c.caminhosQuePerguntam, `${onde}.caminhosQuePerguntam`);
   return Object.freeze({
     plano: Object.freeze({ raiz: p.raiz, casa: funcao(p.casa, `${onde}.plano.casa`), ler: funcao(p.ler, `${onde}.plano.ler`), brief: funcao(p.brief, `${onde}.plano.brief`) }),
     publicacao: lista(c.publicacao, `${onde}.publicacao`),
-    caminhosProtegidos: lista(c.caminhosProtegidos, `${onde}.caminhosProtegidos`),
+    caminhosProtegidos,
+    caminhosQuePerguntam,
     telasProtegidasDosSteps: lista(c.telasProtegidasDosSteps, `${onde}.telasProtegidasDosSteps`),
     foraDasTelasDosSteps: lista(c.foraDasTelasDosSteps, `${onde}.foraDasTelasDosSteps`),
     carimbo,

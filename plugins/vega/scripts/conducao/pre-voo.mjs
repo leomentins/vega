@@ -49,6 +49,12 @@
  *
  * A passagem lida é a aberta no HEAD, ou a que a última `confirmada` confirma.
  *
+ * Partida (com `--ciclo` e sem `--herdeira`): `posse-do-ciclo` — a posse, pelo
+ * leitor da cerca, é desta árvore antes da primeira task. Ciclo `sem-posse`
+ * para aqui, e não na primeira passagem (`passagem-sem-posse`, caso do VEGA-19):
+ * o remédio é tomar a posse pelo verbo da página do projeto. Projeto sem leitor
+ * de posse passa com o pulo.
+ *
  * O núcleo não nomeia host, ponte, modelo nem fornecedor: o binário, os
  * arquivos de configuração, a variável, a unidade e o mapa tier → modelo vêm
  * da declaração (v5). Toda execução externa vai por `spawnSync` sem shell, com
@@ -426,6 +432,26 @@ function arvoreNaPonta(repo, p) {
   return conferida(C, "ok", `${p.ramo} anexado, descendendo da passagem ${p.sha.slice(0, 8)}`);
 }
 
+/** A partida exige a posse do ciclo: sem ela a primeira passagem para em `passagem-sem-posse`. */
+export function posseDoCiclo(repo, ciclo, lerPosse = lerPosseDaCerca) {
+  const C = "posse-do-ciclo";
+  let posse;
+  try {
+    posse = lerPosse(repo, ciclo);
+  } catch (e) {
+    posse = { estado: "nao-li", motivo: e.message };
+  }
+  if (posse === null) return conferida(C, "ok", "projeto sem leitor de posse (pulo)");
+  // Dona sem época válida passaria aqui e cairia na cerca na primeira gravação (`posse-sem-epoca`).
+  if (posse?.estado === "dona" && Number.isSafeInteger(posse.epoca) && posse.epoca >= 1) return conferida(C, "ok", `dona na época ${posse.epoca}`);
+  if (posse?.estado === "dona") return conferida(C, "falha", `dona sem época válida (${JSON.stringify(posse.epoca ?? null)})`, "regravar a posse pelo verbo de posse do projeto: a cerca recusa gravar sem época");
+  const remedio =
+    posse?.estado === "sem-posse"
+      ? "tomar a posse do ciclo nesta árvore pelo verbo de posse que a página do projeto nomeia (tomar-posse), antes da primeira task: sem ela a primeira passagem para em passagem-sem-posse"
+      : "parar: a posse do ciclo não é desta árvore ou não foi lida — o operador decide";
+  return conferida(C, "falha", `posse ${posse?.estado ?? "não declarada"}${posse?.motivo ? ` (${posse.motivo})` : ""}`, remedio);
+}
+
 function epocaDaPosse(repo, p, lerPosse, ciclo) {
   const C = "epoca-da-posse";
   const daNota = epocaDe(p?.epoca);
@@ -491,7 +517,7 @@ export function preVoo({ repo, ciclo = null, env = process.env, prazoMs = PRAZO_
     const h = conferenciasDaHerdeira({ repo, ciclo, entrada, temCi: decl.ci !== false, lerPosse });
     conferencias.push(...h.conferencias);
     daHerdeira = { passagem: h.passagem?.sha ?? null, epocaDaNota: epocaDe(h.passagem?.epoca) };
-  }
+  } else if (ciclo) conferencias.push(posseDoCiclo(repo, ciclo, lerPosse));
   const avisos = conferencias.filter((c) => c.estado === "nao-declarada").map((c) => ({ tipo: "nao-declarada", conferencia: c.conferencia, remedio: c.remedio }));
   if (ciclo) {
     try {

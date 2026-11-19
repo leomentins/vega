@@ -102,7 +102,7 @@ test("a ordem completa da troca segue o esboço, na fronteira e no meio da fase"
   assert.deepEqual(criar.trazer, { ramo: RAMO, passagem: MARCA.sha, tentativa: 1, nonce: nonce(CICLO, `herdeira:${MARCA.sha}`, 1, MARCA.sha) });
   assert.match(criar.texto, /trazer-ramo .*--ramo ciclo-teste --passagem a{40} --tentativa 1 --nonce [0-9a-f]{16}/);
   assert.match(criar.texto, /herdeira da condutora session_anterior/);
-  assert.match(criar.texto, /Não arquivar a anterior/);
+  assert.match(criar.texto, /arquivar-anterior \(archive_session de session_anterior/);
   // Herdeira criada, dentro do prazo: a anterior espera.
   const viva = { sessao: "session_h", estado: "idle", criadaEm: ISO(AGORA - 60) };
   assert.equal(passo({ posse: DONA1, anexado: false }, { herdeira: viva }).motivo, "passagem-em-curso");
@@ -120,9 +120,11 @@ test("a ordem completa da troca segue o esboço, na fronteira e no meio da fase"
   const confirmar = passo({ posse: DONA2, anexado: true }, { inscrita: true, ci });
   assert.equal(confirmar.acao, "confirmar-passagem");
   assert.deepEqual([confirmar.epocaNova, confirmar.ci], [2, ci]);
-  // 6. A anterior vê a confirmação na ponta do ramo e se arquiva.
-  const arquivar = passo({ posse: OUTRA, anexado: false, confirmadaNoRamo: true }, { herdeira: viva, sessaoMaestra: "session_anterior" });
-  assert.deepEqual([arquivar.acao, arquivar.sessao], ["arquivar-se", "session_anterior"]);
+  // 6. A anterior destituída, inscrição solta, para sem esperar a confirmação (D19a), confirmada ou não.
+  const entregue = passo({ posse: OUTRA, anexado: false }, { herdeira: viva, sessaoMaestra: "session_anterior" });
+  assert.deepEqual([entregue.acao, entregue.motivo, entregue.prazoMin], ["parar", "passagem-entregue-sem-confirmacao", PRAZO]);
+  const entregueConfirmada = passo({ posse: OUTRA, anexado: false, confirmadaNoRamo: true }, { herdeira: viva, sessaoMaestra: "session_anterior" });
+  assert.deepEqual([entregueConfirmada.acao, entregueConfirmada.motivo], ["parar", "passagem-entregue"]);
   // Época subida e prazo vencido sem confirmação: a dona é a herdeira; a anterior não retoma, para e avisa.
   const parada = passo({ posse: OUTRA, anexado: false }, { herdeira: { ...viva, criadaEm: ISO(AGORA - (PRAZO + 1) * 60) } });
   assert.deepEqual([parada.acao, parada.motivo], ["parar", "passagem-epoca-subiu"]);
@@ -131,7 +133,13 @@ test("a ordem completa da troca segue o esboço, na fronteira e no meio da fase"
   const confirmada = { tipo: "confirmada", sha: "c".repeat(40), fase: "F1", confirma: MARCA.sha, arvoreSuja: null };
   const arvore = { caminho: "/tmp/bridge-cse_anterior", nome: "bridge-cse_anterior", suja: false, motivo: null };
   const depois = (entrada, a = arvore, c = confirmada) => regraPassagem(ctxDe({ passagem: { aberta: null, ultima: c, posse: DONA2, anexado: true, arvoreDaAnterior: a }, entrada }));
-  assert.equal(depois({ anterior: { sessao: "session_anterior", estado: "idle" } }), null, "anterior viva: a pasta fica para a limpeza");
+  // D19a: anterior viva depois da confirmação ⇒ a herdeira a arquiva, antes do desmonte.
+  const arquivar = depois({ anterior: { sessao: "session_anterior", estado: "idle" } });
+  assert.deepEqual([arquivar.acao, arquivar.sessao, arquivar.ferramenta], ["arquivar-anterior", "session_anterior", "archive_session"]);
+  assert.equal(depois({}), null, "sem a anterior na entrada, nada");
+  assert.equal(depois({ anterior: { sessao: "session_anterior" } }).acao, "arquivar-anterior", "sem estado, conta como viva");
+  const duas = { sessao: "session_anterior", estado: "idle", arquivamentos: [arquivar.nonceArquivar, arquivar.nonceArquivar] };
+  assert.deepEqual([depois({ anterior: duas }).acao, depois({ anterior: duas }).motivo], ["perguntar", "falha-de-arquivamento"]);
   const desmontar = depois({ anterior: { sessao: "session_anterior", estado: "archived" } });
   assert.deepEqual([desmontar.acao, desmontar.caminho, desmontar.nome], ["desmontar-anterior", arvore.caminho, arvore.nome]);
   assert.equal(depois({ anterior: { estado: "ARCHIVED" } }, { ...arvore, suja: true, motivo: "1 caminho(s) no status" }).motivo, "arvore-da-anterior-suja");
@@ -241,7 +249,7 @@ function ambiente(t) {
   ]);
   const antes = trocarLeitorDaPosse((repo) => posse.get(real(repo)) ?? { estado: "outra", motivo: "fora da troca" });
   t.after(() => trocarLeitorDaPosse(antes));
-  autorizarCiclo({ repo: anterior, ciclo: CICLO, fase: "F1", sim: "sim, pode tocar a F1" });
+  autorizarCiclo({ repo: anterior, ciclo: CICLO, fase: "F1", sim: "sim, pode tocar a F1", pergunta: "p-00000000000000a1" });
   /** A anterior entra em passagem como o verbo `passar` faz: nota, marca e o ramo desanexado. */
   const entrarEmPassagem = () => {
     const r = passar({ repo: anterior, ciclo: CICLO, fase: "F1", corpo: CORPO });
@@ -420,12 +428,12 @@ test("herdeira desmonta a árvore limpa da anterior arquivada", (t) => {
   const marca = lerMarcas(a.herdeira).at(-1);
   assert.deepEqual([marca.tipo, marca.confirma, marca.epoca], ["confirmada", em.sha, "2"]);
 
-  // A anterior vê a confirmação na ponta do ramo e se arquiva.
-  assert.equal(a.px(a.anterior, { herdeira: viva, sessaoMaestra: "session_anterior" }).acao, "arquivar-se");
+  // A anterior não espera a confirmação: para (D19a).
+  assert.equal(a.px(a.anterior, { herdeira: viva, sessaoMaestra: "session_anterior" }).motivo, "passagem-entregue");
 
-  // Anterior ainda viva: a herdeira não desmonta e segue a fase.
+  // Anterior ainda viva: a herdeira a arquiva antes de desmontar (D19a).
   const segue = a.px(a.herdeira, { inscrita: true, anterior: { sessao: "session_anterior", estado: "idle" } });
-  assert.notEqual(segue.acao, "desmontar-anterior");
+  assert.deepEqual([segue.acao, segue.sessao], ["arquivar-anterior", "session_anterior"]);
   assert.ok(existsSync(a.anterior));
 
   // Arquivada, mas com nota sensível ignorada (o `worktree remove` a apagaria calado): pergunta.

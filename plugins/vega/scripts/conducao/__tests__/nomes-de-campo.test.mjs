@@ -128,12 +128,12 @@ const ctx = (t, over = {}) => ({
 });
 
 test("perguntar de task protegida: os caminhos saem em caminhosProtegidos", () => {
-  const t = task("T1", { classe: "sensivel", outputs: ["app/fichas/laudo.tsx"], protegida: ["app/fichas/laudo.tsx"] });
+  const t = task("T1", { classe: "sensivel", outputs: ["app/fichas/laudo.tsx"], protegida: ["app/fichas/laudo.tsx"], simProprio: "caminho-clinico" });
   const r = regraAbrir(ctx(t));
   assert.equal(r.acao, "perguntar");
   assert.equal(r.motivo, "task-sensivel");
   assert.deepEqual(r.caminhosProtegidos, ["app/fichas/laudo.tsx"]);
-  assert.deepEqual(Object.keys(r).sort(), ["acao", "caminhosProtegidos", "ciclo", "fase", "head", "motivo", "nonce", "plano", "publicacao", "task", "tentativa"]);
+  assert.deepEqual(Object.keys(r).sort(), ["acao", "caminhosProtegidos", "ciclo", "fase", "head", "motivo", "nonce", "plano", "porque", "publicacao", "task", "tentativa"]);
 });
 
 test("abrir com aviso do reinício: o aviso sai em avisoOperador", () => {

@@ -145,9 +145,15 @@ function ambiente(t, tasks, extras = {}) {
   return { g, maestra, ok, abrir, maquina };
 }
 
-/** Declaração do repositório conduzido, com a página (v3) e sem código: o leitor do plano é o do núcleo. */
+/**
+ * Declaração do repositório conduzido, com a página (v3). O código é o do projeto de teste
+ * (`canonico.mjs`, resolvido na árvore do núcleo): o leitor do plano é o mesmo de sem código, e o
+ * registro de perguntas do `autorizar-ciclo --pergunta` é o dublê dele — sem código nenhum, a
+ * pergunta citada recusa (`registro-nao-declarado`, VEGA-19 T33, D-VEGA19-57).
+ */
 const COM_PAGINA = {
   versao: 3,
+  codigo: "canonico.mjs",
   pagina: "docs/conducao.md",
   projeto: "teste",
   operadores: [{ handle: "o", nome: "O" }],
@@ -161,7 +167,7 @@ const NAO = "não abriu no celular\n\nna tela 2 o botão some; o log tem ```erro
 
 test("a tentativa 2, depois de um não por pergunta, leva a página e o texto do não, como gravado", (t) => {
   const a = ambiente(t, [task("T1", "[AC-TESTE38-1] (conferencia-do-operador)")], DECLARADA);
-  a.ok("autorizar-ciclo", "F1", "--sim", "sim");
+  a.ok("autorizar-ciclo", "F1", "--sim", "sim", "--pergunta", "p-00000000000000a1");
 
   const b1 = a.abrir("T1", 1);
   assert.ok(b1.includes(SECAO_PAGINA), b1);
@@ -187,7 +193,7 @@ test("página declarada que não está no HEAD: o abrir pergunta pagina-inexiste
   const { "docs/conducao.md": _fora, ...semArquivo } = DECLARADA;
   void _fora;
   const a = ambiente(t, [task("T1", "[AC-TESTE38-1]")], semArquivo);
-  a.ok("autorizar-ciclo", "F1", "--sim", "sim");
+  a.ok("autorizar-ciclo", "F1", "--sim", "sim", "--pergunta", "p-00000000000000a1");
   const p = a.ok("proximo", "--entrada", "{}");
   const x = p.tarefas.find((y) => y.task === "T1");
   const r = spawnSync(process.execPath, [SCRIPT, "abrir", "T1", "--tentativa", "1", "--nonce", x.nonce, "--modo-maestra", "auto", "--repo", a.maestra, "--ciclo", CICLO], {
@@ -216,10 +222,10 @@ test("repositório sem declaração própria não herda a página do núcleo", (
 });
 
 test("projeto sem o campo: o brief não ganha seção da página; task comum não ganha a do não", (t) => {
-  const semPagina = { projeto: "teste", operadores: [{ handle: "o", nome: "O" }], estado: { pasta: "teste/conducao" }, log: { pasta: "." }, pergunta: { destino: "log" } };
+  const semPagina = { versao: 2, codigo: "canonico.mjs", projeto: "teste", operadores: [{ handle: "o", nome: "O" }], estado: { pasta: "teste/conducao" }, log: { pasta: "." }, pergunta: { destino: "log" } };
   const a = ambiente(t, [task("T1", "[AC-TESTE38-1]")], { ".altair/adaptador.json": JSON.stringify(semPagina) });
   assert.equal(paginaDoProjeto(a.maestra), null);
-  a.ok("autorizar-ciclo", "F1", "--sim", "sim");
+  a.ok("autorizar-ciclo", "F1", "--sim", "sim", "--pergunta", "p-00000000000000a1");
   const b = a.abrir("T1", 1);
   assert.ok(!b.includes(SECAO_PAGINA), b);
   assert.ok(!b.includes(SECAO_NAO), b);

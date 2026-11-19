@@ -32,17 +32,25 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { codigoDoAdaptador, lerAdaptador, nomeDoOperador, paginaDoProjeto, posseDoProjeto } from "./adaptador.mjs";
 import { ENV_GIT, PRAZO_REDE_MS, git as rodar, tentarGit as tentar } from "./git-exec.mjs";
 import { ErroPlano, caminhoDoCanonico, lerPlanoCongelado, lerPlanoNoCommit } from "./ler-plano.mjs";
 import { RE, lerMarcas, trailers as lerTrailers, ultimaAutorizacao } from "./marcas.mjs";
 import {
   CASOS,
+  camposDoCarimbo,
+  consentidoPorDecisaoDaTask,
   devolverAosMotivos,
   gateDaConferenciaPublicada,
   gravarConsentimento,
   gravarRegistrosDoTrazer,
   lerConsentimentos,
+  exigirPerguntaDoAutorizar,
+  pecasDoConsentimento,
+  registroDoConsentimento,
+  PERGUNTA_ID_RE,
+  TRAILER_DA_PERGUNTA,
   registrosDoTrazer,
   simDaPublicacaoDoCiclo,
   simDoCorpo,
@@ -58,6 +66,33 @@ const { TASK_RE, SHA_PREFIXO_RE, exigir, perguntar, shaDoCherryPick } = verbos;
 // A política dos verbos mora em `verbos.mjs` (VEGA-29 T8); daqui saem só os
 // nomes que o CLI e os testes já importavam deste módulo.
 export { lerApproval, segmentosDosSteps, TETO_RODADAS_GATE, vereditoAprova } from "./verbos.mjs";
+
+/**
+ * O caminho do `contrato.md` da condução relativo à raiz do repositório que
+ * contém este plugin (`skills/conducao/references/contrato.md` a partir da
+ * raiz do plugin), ou null quando o plugin não mora num repositório git (plugin
+ * instalado fora da fonte): aí o padrão da fábrica não se lê do HEAD e os três
+ * casos perguntam (fail-closed, D-VEGA19-29).
+ */
+export function caminhoDoContrato() {
+  const aqui = path.dirname(fileURLToPath(import.meta.url));
+  const raiz = tentar(aqui, ["rev-parse", "--show-toplevel"]);
+  if (raiz.status !== 0 || !raiz.saida) return null;
+  const rel = path.relative(raiz.saida, path.resolve(aqui, "../../skills/conducao/references/contrato.md")).split(path.sep).join("/");
+  return rel.startsWith("..") ? null : rel;
+}
+
+/** O TEXTO do `contrato.md` da condução no HEAD de `repo`, ou "" quando não se lê (o padrão da fábrica pergunta). */
+export function contratoDoHead(repo, caminho = caminhoDoContrato()) {
+  return contratoNoCommit(repo, "HEAD", caminho);
+}
+
+/** O TEXTO do `contrato.md` da condução no commit `rev`, ou "" quando não se lê. */
+export function contratoNoCommit(repo, rev, caminho = caminhoDoContrato()) {
+  if (!caminho) return "";
+  const r = tentar(repo, ["show", `${rev}:${caminho}`]);
+  return r.status === 0 ? r.saida : "";
+}
 
 function revOuNull(repo, ref) {
   const r = tentar(repo, ["rev-parse", "--verify", "-q", `${ref}^{commit}`]);
@@ -465,15 +500,30 @@ function copiaNoOrigin(repo, ciclo) {
  * do canonico no HEAD em `Conducao-Plano` — o plano que a T6 congela. A
  * maestra só chama depois da resposta dele, num turno dele.
  */
-export function autorizarFase({ repo, ciclo, fase, sim, doCiclo = false }) {
+export function autorizarFase({ repo, ciclo, fase, sim, doCiclo = false, pergunta = null, pecas = null }) {
   const verbo = doCiclo ? "autorizar-ciclo" : "autorizar-fase";
   exigir(FASE_RE.test(fase ?? ""), "uso", `${verbo} exige a fase F<n>, veio ${JSON.stringify(fase ?? null)}`);
   exigir(sim && sim.trim(), "sim-ausente", `${verbo} exige o texto do sim de ${nomeDoOperador(repo)} (--sim)`);
+  // D-VEGA19-39: o sim do ciclo cita a pergunta registrada em que o operador o deu.
+  if (doCiclo || pergunta !== null)
+    exigir(PERGUNTA_ID_RE.test(pergunta ?? ""), "pergunta-ausente", `${verbo} exige --pergunta <p-…>, a pergunta registrada em que ${nomeDoOperador(repo)} deu o sim (D-VEGA19-39), veio ${JSON.stringify(pergunta ?? null)}`);
+  // D-VEGA19-41/44: a pergunta citada prova o sim DESTE ciclo e DESTA fase — resposta humana, a
+  // abertura do ciclo e da fase, a opção escolhida com o texto do --sim, e nunca usada antes. Sem
+  // registro (adaptador que não carrega, export ausente, registro não declarado) recusa: falha de
+  // carga nunca vira consentimento. D-VEGA19-57: vale igual sem código próprio de adaptador — o
+  // embutido lê a pergunta do registro do destino `git`; sem registro nenhum, recusa.
+  // D-VEGA19-48: o `--sim` entra aparado, no mesmo aparo do `simDoCorpo` com que a herança relê a
+  // marca: a conferência de agora e a da herança comparam o mesmo texto.
+  const simAparado = sim.trim();
+  if (pergunta) {
+    const pc = pecas ?? pecasDoConsentimento(repo);
+    exigirPerguntaDoAutorizar({ repo, perguntas: registroDoConsentimento(pc, pergunta), pergunta_id: pergunta, ciclo, fase, sim: simAparado });
+  }
   const { blob, plano } = lerPlanoNoCommit(repo, "HEAD", ciclo);
   exigir(plano.fases.some((f) => f.id === fase), "fase-ausente", `${fase} não está no plano ${blob}`);
-  const trailers = { "Conducao-Plano": blob, ...(doCiclo ? { "Conducao-Ciclo": "sim" } : {}) };
-  const sha = commitVazio(repo, ciclo, `Conducao: ${fase} autorizada`, { corpo: sim, trailers });
-  return comCopia(repo, ciclo, { acao: "autorizada", ciclo, fase, sha, plano: blob, ...(doCiclo ? { doCiclo: true } : {}) });
+  const trailers = { "Conducao-Plano": blob, ...(doCiclo ? { "Conducao-Ciclo": "sim" } : {}), ...(pergunta ? { [TRAILER_DA_PERGUNTA]: pergunta } : {}) };
+  const sha = commitVazio(repo, ciclo, `Conducao: ${fase} autorizada`, { corpo: simAparado, trailers });
+  return comCopia(repo, ciclo, { acao: "autorizada", ciclo, fase, sha, plano: blob, ...(doCiclo ? { doCiclo: true } : {}), ...(pergunta ? { pergunta } : {}) });
 }
 
 /**
@@ -486,9 +536,12 @@ export function autorizarFase({ repo, ciclo, fase, sim, doCiclo = false }) {
  * em relação ao plano congelado aqui. Seguem pedindo: publicação por task,
  * task sensível de fase herdada (por nonce) e as perguntas da vigia.
  */
-export function autorizarCiclo({ repo, ciclo, fase, sim }) {
-  return autorizarFase({ repo, ciclo, fase, sim, doCiclo: true });
+export function autorizarCiclo({ repo, ciclo, fase, sim, pergunta = null, pecas = null }) {
+  return autorizarFase({ repo, ciclo, fase, sim, doCiclo: true, pergunta, pecas });
 }
+
+/** As origens da autorização herdada: o re-plano de ruling, o sim do ciclo e o re-plano que seguiu sozinho (T43). */
+export const ORIGENS_DA_HERANCA = Object.freeze(["replano", "ciclo", "sozinho"]);
 
 /**
  * Autorização herdada pelo re-plano de ruling (F4.17): `Conducao: F<n>
@@ -498,19 +551,15 @@ export function autorizarCiclo({ repo, ciclo, fase, sim }) {
  * `conducao.mjs`, que refaz o `proximo`; aqui só se confere que o plano do
  * HEAD é o que ele viu.
  */
-export function registrarHeranca({ repo, ciclo, fase, autorizacao, replanos, planoNovo, origem = "replano" }) {
-  exigir(FASE_RE.test(fase ?? ""), "uso", `fase inválida: ${fase}`);
-  exigir(/^[0-9a-f]{40}$/.test(autorizacao ?? ""), "uso", `autorização herdada sem sha: ${autorizacao}`);
-  exigir(origem === "replano" || origem === "ciclo", "uso", `origem da herança inválida: ${origem}`);
-  // Só a herança pelo sim do ciclo existe sem commit de re-plano (fase nova).
-  exigir(Array.isArray(replanos) && (replanos.length > 0 || origem === "ciclo"), "uso", "herança sem commit de re-plano");
-  const { blob } = lerPlanoNoCommit(repo, "HEAD", ciclo);
-  exigir(blob === planoNovo, "plano-divergente", `plano do HEAD ${blob}, a herança decidiu sobre ${planoNovo}`);
+export function registrarHeranca({ repo, ciclo, fase, autorizacao, replanos, planoNovo, origem = "replano", replanoMotivo = null }) {
+  const { blob } = conferirHeranca({ repo, ciclo, fase, autorizacao, replanos, planoNovo, origem, replanoMotivo });
   const lista = replanos.map((r) => `${r.sha.slice(0, 8)} (${r.ruling ?? "sem ruling"})`).join(", ");
   const corpo =
     origem === "ciclo"
       ? `Autorizada pelo sim do ciclo de ${autorizacao.slice(0, 8)} (autorizar-ciclo, ruling de 27/10/2026)${lista ? `, re-plano ${lista}` : ""}: nenhuma task mudou de classe ou sensibilidade desde o sim. Task sensível desta fase segue pedindo o sim por task.`
-      : `Herdada pelo re-plano ${lista}: o sim do operador de ${autorizacao.slice(0, 8)} segue valendo — nenhuma task mudou de classe e nenhuma trazida está pendente (F4.17).`;
+      : origem === "sozinho"
+        ? `Seguiu sozinha pelo re-plano ${lista} (motivo ${replanoMotivo}): o sim do operador de ${autorizacao.slice(0, 8)} segue valendo — o re-plano ficou dentro da fase, sem caminho clínico, publicação que altera nem a proposta do ciclo, e o motivo não se repetiu (D-VEGA19-53). Vega decidiu por delegação; o operador recebeu o aviso.`
+        : `Herdada pelo re-plano ${lista}: o sim do operador de ${autorizacao.slice(0, 8)} segue valendo — nenhuma task mudou de classe e nenhuma trazida está pendente (F4.17).`;
   const sha = commitVazio(repo, ciclo, `Conducao: ${fase} autorizada`, {
     corpo,
     trailers: {
@@ -518,9 +567,71 @@ export function registrarHeranca({ repo, ciclo, fase, autorizacao, replanos, pla
       "Conducao-Herdada": autorizacao,
       ...(replanos.length ? { "Conducao-Replano": replanos.map((r) => r.sha).join(" ") } : {}),
       ...(origem === "ciclo" ? { "Conducao-Origem": "ciclo" } : {}),
+      // T43: o re-plano que seguiu sozinho diz a origem e o motivo do `/intra-plan`.
+      ...(origem === "sozinho" ? { "Conducao-Origem": "sozinho", "Conducao-Replano-Motivo": replanoMotivo } : {}),
+      // A pergunta em que o operador deu o sim viaja com a herança (D-VEGA19-39).
+      ...(perguntaDaAutorizacao(repo, autorizacao) ? { [TRAILER_DA_PERGUNTA]: perguntaDaAutorizacao(repo, autorizacao) } : {}),
     },
   });
   return comCopia(repo, ciclo, { acao: "autorizacao-herdada", ciclo, fase, sha, plano: blob, herdada: autorizacao, origem });
+}
+
+/**
+ * As conferências de `registrarHeranca`, sem escrever: quem grava casos
+ * herdados confere a herança ANTES de gravá-los (débito
+ * `conducao-gravar-casos-herdados-antes-da-heranca`). Devolve `{ blob }`.
+ */
+export function conferirHeranca({ repo, ciclo, fase, autorizacao, replanos, planoNovo, origem = "replano", replanoMotivo = null }) {
+  exigir(FASE_RE.test(fase ?? ""), "uso", `fase inválida: ${fase}`);
+  exigir(/^[0-9a-f]{40}$/.test(autorizacao ?? ""), "uso", `autorização herdada sem sha: ${autorizacao}`);
+  exigir(ORIGENS_DA_HERANCA.includes(origem), "uso", `origem da herança inválida: ${origem}`);
+  // T43: a herança do re-plano sozinho leva o motivo do `/intra-plan`, um `<tipo>:<chave>` por re-plano.
+  if (origem === "sozinho")
+    exigir(
+      typeof replanoMotivo === "string" && replanoMotivo.split(",").every((m) => verbos.motivoDoReplano(m)),
+      "uso",
+      `herança sozinha sem o motivo do re-plano na forma <tipo>:<chave>: ${JSON.stringify(replanoMotivo)}`,
+    );
+  // Só a herança pelo sim do ciclo existe sem commit de re-plano (fase nova).
+  exigir(Array.isArray(replanos) && (replanos.length > 0 || origem === "ciclo"), "uso", "herança sem commit de re-plano");
+  const { blob } = lerPlanoNoCommit(repo, "HEAD", ciclo);
+  exigir(blob === planoNovo, "plano-divergente", `plano do HEAD ${blob}, a herança decidiu sobre ${planoNovo}`);
+  return { blob };
+}
+
+/**
+ * A pergunta citada pela autorização que a herança segue, conferida de novo
+ * contra a marca que a usou (D-VEGA19-41): sobe a cadeia `Conducao-Herdada`
+ * até a marca `autorizada` não herdada e confere, por
+ * `exigirPerguntaDoAutorizar`, o ciclo, a fase e o sim DELA, e que só ela cita
+ * a pergunta. Roda mesmo sem casos a gravar. Marca legada (sem pergunta) ⇒
+ * null, o caminho antigo. Devolve o id conferido.
+ */
+export function conferirPerguntaDaHeranca({ repo, ciclo, autorizacao, pecas = null }) {
+  const pergunta = perguntaDaAutorizacao(repo, autorizacao);
+  if (!pergunta) return null;
+  let raiz = autorizacao;
+  for (let i = 0; ; i++) {
+    exigir(i < 64, "pergunta-ilegivel", `a cadeia de herança de ${autorizacao.slice(0, 8)} não chega à marca do sim`);
+    const de = lerTrailers(rodar(repo, ["log", "-1", "--format=%b", raiz]))["Conducao-Herdada"];
+    if (!de) break;
+    exigir(/^[0-9a-f]{40}$/.test(de), "pergunta-ilegivel", `${raiz.slice(0, 8)} herda de ${JSON.stringify(de)}, fora da forma`);
+    raiz = de;
+  }
+  const subject = rodar(repo, ["log", "-1", "--format=%s", raiz]).trim();
+  const fase = RE.autorizada.exec(subject)?.[1] ?? null;
+  exigir(fase !== null, "pergunta-ilegivel", `a origem ${raiz.slice(0, 8)} da herança não é marca autorizada: ${JSON.stringify(subject)}`);
+  exigir(perguntaDaAutorizacao(repo, raiz) === pergunta, "pergunta-ilegivel", `${autorizacao.slice(0, 8)} cita ${pergunta}, a marca do sim ${raiz.slice(0, 8)} não`);
+  const sim = simDoCorpo(rodar(repo, ["log", "-1", "--format=%b", raiz]));
+  const pc = pecas ?? pecasDoConsentimento(repo);
+  exigirPerguntaDoAutorizar({ repo, perguntas: registroDoConsentimento(pc, pergunta), pergunta_id: pergunta, ciclo, fase, sim, marca: raiz });
+  return pergunta;
+}
+
+/** O `Conducao-Pergunta` da marca `autorizacao`, ou null (marca legada). */
+function perguntaDaAutorizacao(repo, autorizacao) {
+  const v = lerTrailers(rodar(repo, ["log", "-1", "--format=%b", autorizacao]))[TRAILER_DA_PERGUNTA];
+  return v && PERGUNTA_ID_RE.test(v) ? v : null;
 }
 
 // ── 1. abrir ─────────────────────────────────────────────────────────────────
@@ -980,18 +1091,26 @@ export function trazer({ repo, ciclo, task, tentativa, shaAvisado = null, sessao
     consentimentos: lerConsentimentos(repo, { ciclo }),
     ciclo,
     fase: t.fase,
+    // D-VEGA19-58: a revisão aprovada da tentativa cobre o que ela viu; o leitor é o do `conferir-carimbo`.
+    carimbo: carimboDaTentativa(repo, { faixa, ponta, publicacao: Boolean(t.publicacao?.length || t.simProprio) }),
   });
   const doCanonico = tentar(repo, ["show", `HEAD:${canonico}`]);
+  const textoDoCanonico = doCanonico.status === 0 ? doCanonico.saida : "";
+  // D-VEGA19-33: o que sobrou e uma decisão do canonico do HEAD cita junto com a task segue sem pergunta.
+  const porDecisao = consentidoPorDecisaoDaTask({ motivos: decidido.motivos, canonico: textoDoCanonico, task, instrucoes: lerAdaptador(repo).sessao.instrucoes });
+  // D-VEGA19-29: sem par na linha `**Consentimentos:**`, os três casos gravam o padrão da fábrica do contrato do HEAD.
   const doTrazer = registrosDoTrazer({
-    consentidos: decidido.consentidos,
-    canonico: doCanonico.status === 0 ? doCanonico.saida : "",
+    consentidos: [...decidido.consentidos, ...porDecisao.consentidos],
+    canonico: textoDoCanonico,
+    contrato: contratoDoHead(repo),
     ciclo,
     fase: t.fase,
     task,
+    tentativa,
     quem: nomeDoOperador(repo),
     quando: new Date().toISOString(),
   });
-  const motivos = devolverAosMotivos(decidido.motivos, doTrazer.voltam);
+  const motivos = devolverAosMotivos(porDecisao.motivos, doTrazer.voltam);
   const semAprovacao = verbos.exigirAprovacao({ base, ponta, aprovado, motivos, confere: () => aprovadoConfere(repo, aprovado, ponta) });
   if (semAprovacao) return semAprovacao;
 
@@ -1062,6 +1181,7 @@ function consentidoDoRegistro(r) {
     quem: r.quem,
     quando: r.quando,
     ...(r.origem ? { origem: r.origem } : {}),
+    ...(r.tentativa ? { tentativa: r.tentativa } : {}),
   };
 }
 
@@ -1072,6 +1192,25 @@ function gravarComPergunta({ repo, ciclo, registros, gravarRegistros }) {
   } catch (e) {
     return { erro: String(e?.message ?? e).split("\n")[0] || "erro sem mensagem" };
   }
+}
+
+/**
+ * O registro `trazida` cujos casos não se leem (trailer `Conducao-Consentidos`
+ * ilegível, ou sem `Conducao-Base`): pergunta ao operador, SEM o remédio
+ * `regravar-consentimentos` — ele relê o mesmo trailer e voltaria aqui.
+ */
+export function perguntaTrazidaIlegivel(campos) {
+  return perguntar("trazida-ilegivel", camposDaTrazidaIlegivel(campos));
+}
+
+/** Os campos da pergunta `trazida-ilegivel`, para quem a monta pelo próprio construtor (o `proximo`). */
+export function camposDaTrazidaIlegivel(campos) {
+  return {
+    trazido: true,
+    remedio: "operador",
+    detalhe: `o trabalho da ${campos.task} foi trazido e fica; os casos do registro trazida não se leem, e o regravar-consentimentos não tem o que reler. O operador decide: refazer a task numa tentativa nova, ou descartar o registro (git update-ref -d ${campos.registro ?? "<registro>"}) e seguir sem o registro dos casos.`,
+    ...campos,
+  };
 }
 
 function perguntaSemRegistro(campos, erro, total) {
@@ -1085,7 +1224,9 @@ function perguntaSemRegistro(campos, erro, total) {
   });
 }
 
-const CHAVE_CONSENTIMENTO = (c) => JSON.stringify([c.fase, c.caso, c.motivo ?? null, [...(c.caminhos ?? [])].sort(), c.origem ?? null]);
+// A chave leva a tentativa (débito `conducao-chave-da-falta-sem-tentativa`): o registro de uma
+// tentativa anterior da mesma task não cobre a falta desta. Registro antigo, sem tentativa, casa só com caso antigo.
+const CHAVE_CONSENTIMENTO = (c) => JSON.stringify([c.fase, c.caso, c.motivo ?? null, [...(c.caminhos ?? [])].sort(), c.origem ?? null, c.tentativa ?? null]);
 
 /**
  * Os casos do `trazida` ainda sem registro no git (`lerConsentimentos` do HEAD,
@@ -1113,7 +1254,7 @@ export function faltaDaTrazida(repo, ciclo, trazida) {
  * marca de origem da pergunta repetida. `canonicoTexto` e `gravarRegistros`
  * são injetáveis para o teste.
  */
-export function regravarConsentimentos({ repo, ciclo, task, tentativa, gravarRegistros = gravarRegistrosDoTrazer, canonicoTexto = null }) {
+export function regravarConsentimentos({ repo, ciclo, task, tentativa, gravarRegistros = gravarRegistrosDoTrazer, canonicoTexto = null, contratoTexto = null }) {
   exigir(TASK_RE.test(task ?? ""), "uso", `task inválida: ${task}`);
   exigir(Number.isInteger(tentativa) && tentativa > 0, "uso", `tentativa inválida: ${tentativa}`);
   exigirPosse({ repo, ciclo });
@@ -1122,13 +1263,20 @@ export function regravarConsentimentos({ repo, ciclo, task, tentativa, gravarReg
   if (!t) return perguntar("sem-trazida", { ...base, detalhe: `nenhum registro trazida pendente de ${task} tentativa ${tentativa}: nada a regravar` });
   const gravados = lerConsentimentos(repo, { ciclo });
   const falta = consentimentosEmFalta({ consentidos: t.consentidos, gravados, task });
-  if (falta === null) return perguntaSemRegistro({ ...base, registro: t.ref }, "os casos do registro trazida não se leem", 0);
+  // Trailer ilegível: regravar não tem o que reler, e devolver a mesma pergunta seria laço sem saída
+  // (débito `conducao-regravar-consentimentos-laco-sem-saida`). Sobe ao operador.
+  if (falta === null) return perguntaTrazidaIlegivel({ ...base, registro: t.ref });
   if (!falta.length) return { acao: "regravados", ...base, registro: t.ref, consentimentos: [], jaGravados: t.consentidos.length };
+  // O canonico e o contrato de `Conducao-Base` (o HEAD de antes do trazer), não do HEAD de agora: o
+  // plano mudado pela própria trazida não reescreve o sim (débito `conducao-regravar-le-canonico-do-head`).
+  const rev = t.base && /^[0-9a-f]{40}$/.test(t.base) ? t.base : null;
+  if (rev === null && (canonicoTexto === null || contratoTexto === null)) return perguntaTrazidaIlegivel({ ...base, registro: t.ref, detalhe: `o registro trazida de ${task} tentativa ${tentativa} não tem Conducao-Base: sem a base, o sim não se relê` });
   let texto = canonicoTexto;
   if (texto === null) {
-    const doHead = tentar(repo, ["show", `HEAD:${caminhoDoCanonico(repo, "HEAD", ciclo)}`]);
-    texto = doHead.status === 0 ? doHead.saida : "";
+    const naBase = tentar(repo, ["show", `${rev}:${caminhoDoCanonico(repo, rev, ciclo)}`]);
+    texto = naBase.status === 0 ? naBase.saida : "";
   }
+  const contrato = contratoTexto ?? contratoNoCommit(repo, rev);
   const porOrigem = new Map(gravados.map((g) => [g.sha, g]));
   const registros = [];
   const voltam = [];
@@ -1136,16 +1284,19 @@ export function regravarConsentimentos({ repo, ciclo, task, tentativa, gravarReg
     const r = registrosDoTrazer({
       consentidos: [{ ...c, sim: c.origem ? (porOrigem.get(c.origem)?.sim ?? null) : null }],
       canonico: texto,
+      contrato,
       ciclo,
       fase: c.fase,
       task,
+      // Só a do caso: a trazida de antes da T16 não leva tentativa, e a chave tem de casar.
+      tentativa: c.tentativa ?? null,
       quem: c.quem,
       quando: c.quando,
     });
     registros.push(...r.registros);
     voltam.push(...r.voltam);
   }
-  if (voltam.length) return perguntaSemRegistro({ ...base, registro: t.ref }, `${voltam.length} caso(s) sem o sim no canonico do HEAD nem na marca de origem`, falta.length);
+  if (voltam.length) return perguntaSemRegistro({ ...base, registro: t.ref }, `${voltam.length} caso(s) sem o sim no canonico de Conducao-Base nem na marca de origem`, falta.length);
   const g = gravarComPergunta({ repo, ciclo, registros, gravarRegistros });
   if (g.erro) return comCopia(repo, ciclo, perguntaSemRegistro({ ...base, registro: t.ref }, g.erro, falta.length));
   return comCopia(repo, ciclo, { acao: "regravados", ...base, registro: t.ref, consentimentos: g.consentimentos, jaGravados: t.consentidos.length - falta.length });
@@ -1268,6 +1419,36 @@ function ultimoCodigoNoHead(repo) {
 }
 
 /**
+ * O carimbo de revisão da tentativa, lido na árvore da ponta pelo mesmo
+ * leitor do `conferir-carimbo` (`carimbo.achar` do adaptador): o do último
+ * commit não-prosa da faixa ou, quando ele é um cherry-pick sem carimbo
+ * próprio, o do sha de origem (`orfao`, `para` = esse commit). Devolve os
+ * campos que `carimboCobreAPonta` confere, ou null — sem carimbo, sem
+ * adaptador que o ache, ou erro de leitura: o trazer pergunta como antes.
+ */
+function carimboDaTentativa(repo, { faixa, ponta, publicacao }) {
+  try {
+    const achar = codigoDoAdaptador(repo).carimbo?.achar;
+    const ultimo = ultimoCommitDeCodigo(repo, faixa);
+    if (!achar || !ultimo) return null;
+    const arquivosDoHead = rodar(repo, ["ls-tree", "-r", "--name-only", ponta]).split("\n");
+    const lerArquivo = (p) => rodar(repo, ["show", `${ponta}:${p}`]);
+    let caminho = achar({ sha: ultimo, arquivosDoHead, lerArquivo });
+    let orfao = null;
+    if (!caminho) {
+      const de = shaDoCherryPick(rodar(repo, ["log", "-1", "--format=%B", ultimo]));
+      if (!de) return null;
+      caminho = achar({ sha: de, arquivosDoHead, lerArquivo });
+      if (!caminho) return null;
+      orfao = { de, para: ultimo };
+    }
+    return { ...camposDoCarimbo(lerArquivo(caminho)), caminho, ultimo, ponta, orfao, publicacao };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Cherry-pick muda o sha de todo commit trazido: carimbo que a filha gravou
  * para o último commit de código dela fica órfão no ramo, e o rito do brief
  * (que procura `<sha8>.md` do último commit não-prosa por `ls-tree`) refaz a
@@ -1313,7 +1494,8 @@ function gravarTrazida(repo, d) {
       `Conducao-Base: ${d.base}`,
       `Conducao-Ate: ${d.ate}`,
       `Conducao-Modo: ${d.modo}`,
-      ...(d.consentidos?.length ? [`Conducao-Consentidos: ${Buffer.from(JSON.stringify(d.consentidos), "utf8").toString("base64url")}`] : []),
+      // Sempre, mesmo vazio: ausente ≠ vazio (débito `conducao-consentidos-do-trailer-ausente-vazio`).
+      `Conducao-Consentidos: ${Buffer.from(JSON.stringify(d.consentidos ?? []), "utf8").toString("base64url")}`,
     ].join("\n"),
   ].join("\n");
   const obj = rodar(repo, ["commit-tree", vazia, "-p", d.ponta, "-m", msg]);
@@ -1322,9 +1504,14 @@ function gravarTrazida(repo, d) {
   return ref;
 }
 
-/** Os casos do trailer `Conducao-Consentidos`: [] sem ele, null quando não se lê. */
-function consentidosDoTrailer(v) {
-  if (v === undefined) return [];
+/**
+ * Os casos do trailer `Conducao-Consentidos`: a lista, ou null quando não se
+ * lê. Ausente ⇒ `undefined`, distinto do vazio: o `trazer` grava o trailer
+ * sempre desde a VEGA-19 T16, e a trazida sem ele é de antes da T33 (sem caso
+ * a registrar).
+ */
+export function consentidosDoTrailer(v) {
+  if (v === undefined) return undefined;
   try {
     const lista = JSON.parse(Buffer.from(v, "base64url").toString("utf8"));
     return Array.isArray(lista) && lista.every((c) => c && typeof c.caso === "string" && typeof c.fase === "string") ? lista : null;
@@ -1360,7 +1547,8 @@ export function lerTrazidas(repo, ciclo) {
       base: tr["Conducao-Base"] ?? null,
       ate: tr["Conducao-Ate"] ?? null,
       modo: tr["Conducao-Modo"] ?? null,
-      consentidos: consentidosDoTrailer(tr["Conducao-Consentidos"]),
+      // Ausente ⇒ [] (trazida de antes da T33, sem caso a registrar); ilegível segue null.
+      consentidos: tr["Conducao-Consentidos"] === undefined ? [] : consentidosDoTrailer(tr["Conducao-Consentidos"]),
     });
   }
   return out;
@@ -1492,7 +1680,8 @@ export function registrarConferencia({ repo, ciclo, task, verificacao, publicaca
   // Caso consentido da trazida ainda sem registro (ou registro ilegível): a mesma
   // pergunta do `proximo`, sem gravar a conferência nem apagar a trazida (D-VEGA37-37).
   const falta = faltaDaTrazida(repo, ciclo, r);
-  if (falta === null || falta.length) {
+  if (falta === null) return perguntaTrazidaIlegivel({ ciclo, task, tentativa: r.tentativa, registro: r.ref });
+  if (falta.length) {
     return perguntar("consentimento-nao-gravado", {
       ciclo,
       task,
@@ -1537,7 +1726,17 @@ function casoDaPublicacao({ repo, ciclo, task, p, sim, sha }) {
       origem: sha,
     };
     const corpo = simDoCorpo(rodar(repo, ["log", "-1", "--format=%b", sha]));
-    const g = gravarConsentimento({ repo, registro, phi: gateDaConferenciaPublicada(corpo), cerca: () => exigirPosse({ repo, ciclo }) });
+    const { phi, perguntas } = pecasDoConsentimento(repo);
+    const g = gravarConsentimento({
+      repo,
+      registro,
+      gate: gateDaConferenciaPublicada(corpo),
+      phi,
+      perguntas,
+      origem_resposta: "agente",
+      ponteiro: `conferida:${sha}`,
+      cerca: () => exigirPosse({ repo, ciclo }),
+    });
     return { consentimento: { sha: g.sha, caso: g.registro.caso } };
   } catch (e) {
     const erro = String(e?.message ?? e).split("\n")[0] || "erro sem mensagem";

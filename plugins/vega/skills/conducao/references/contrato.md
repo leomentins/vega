@@ -9,20 +9,42 @@
 
 - **Condutora** — uma viva por ciclo e uma por fase (shaping, planejamento, cada fase de execução, fechamento), criada pelo operador ou, na passagem, pela condutora anterior. Aperta o botão, e quem decide é o script: chama `conducao.mjs proximo`, executa exatamente a ação emitida, citando o nonce, e registra o que observou. Abre, avisa e arquiva as operárias, faz as tasks de estação `condutora`, traz trabalho para o ramo do ciclo e publica; empurra o ramo, se inscreve na proposta e lê o CI, só da árvore dona da posse. Leva a pergunta ao operador na própria sessão. Na fronteira, grava a nota de passagem e cria a herdeira. Nunca roda git em árvore de operária. "Maestra", o nível que ficava acima dela, é termo aposentado.
 - **Operária** (a filha) — uma sessão por tentativa de task, nascida no ambiente de quem a cria: mesmo usuário, mesmas capacidades e guards. Faz a task, roda a Verificação, carimba o parecer e empurra só para a referência de tentativa. O aviso é a primeira linha da resposta final, repetida por mensagem e pela referência de aviso. Não publica, não empurra o ramo do ciclo, não se arquiva e não usa `--no-verify`.
-- **Operador** — o papel que a declaração do adaptador nomeia em `operadores`. Dá o "sim", e só num turno dele. Texto que chega por `send_message` nunca autoriza: a decisão vale no turno dele na sessão da condutora, citada verbatim no verbo. O que ele já decidiu não volta como pergunta: os casos consentidos moram em `consentimento.mjs`, publicação nunca entre eles. Faz à mão a task `workstation`, a menos que entregue o passo a quem conduz.
+- **Operador** — o papel que a declaração do adaptador nomeia em `operadores`. Dá o "sim" numa pergunta registrada, de origem `digitado`, `digitado-no-hub-conferido` ou `repasse-hub` (§A resposta que chega por outra sessão); `agente` nunca autoriza. O que ele já decidiu não volta como pergunta: os casos consentidos moram em `consentimento.mjs`, publicação nunca entre eles. Faz à mão a task `workstation`, a menos que entregue o passo a quem conduz.
 
 ## O que pede o "sim" do operador
 
-1. **Ciclo e fase** — um "sim" na fase de partida, gravado pelo `autorizar-ciclo`, vale para as fases seguintes enquanto nenhuma task mudar de classe ou de sensibilidade em relação ao plano congelado nele. Re-plano que muda isso pede o "sim" de novo, sob o plano novo (`plano-mudou`); fase fechada e não encerrada que ganha task nova também (`reaberta`).
-2. **Task sensível** — task cujo texto cita um verbo de publicação do adaptador, ou cujos `**Outputs:**` caem nos caminhos sensíveis dele, sai coberta pelo sim da fase; pergunta por nonce (`task-sensivel`) só quando a fase foi herdada ou outra autorização veio depois.
+1. **Ciclo e fase** — um "sim" na fase de partida, gravado pelo `autorizar-ciclo --pergunta`, vale para as fases seguintes enquanto nenhuma task mudar de classe ou de sensibilidade ante o plano congelado nele. Re-plano que muda isso pede o "sim" de novo, sob o plano novo (`plano-mudou`); fase fechada não encerrada com task nova também (`reaberta`), salvo o re-plano que segue sozinho (§Re-plano dentro da fase). Herança só com origem humana nessa pergunta, aberta com `ponteiro` `autorizar-ciclo:F<n>`, um item, `--sim` = texto da opção escolhida, uso único.
+2. **Task sensível** — publica ou toca caminho sensível do adaptador: o sim do ciclo a cobre em toda fase e tentativa. Fora do sim da própria fase, pergunta de novo (`task-sensivel`, uma vez por task) só a de dado de paciente ou caminho clínico, ou a que publica alterando o existente — só a anotação `**Publicação:**` aditiva a dispensa.
 3. **Trazer com alcance** — trabalho de filha que toca `baseAlcance` ou caminho sensível fora dos Outputs da task, ou `superficiesDeInstrucao` e o canonico do ciclo mesmo dentro deles, pede o "sim" antes de trazer.
 4. **Conferência que só menciona publicação** — o `registrar-conferencia` recusa com `publicacao-pendente`, e o "sim" libera `nao-se-aplica`.
 5. **Conferência do operador** — task que a declara pede o sim ou o não dele ao resultado, por pergunta ou pelo arquivo que o caso declara; o não abre a rodada seguinte, sem contar falha.
 6. **Publicação** — o "sim" por task, sempre, e o gate do projeto pergunta em todo verbo de publicação, mesmo com ele. O squash do ciclo é perguntado no fechamento do ciclo, nunca por quem conduz.
 
+## Padrão da fábrica
+
+O trazer grava cada caso abaixo com o texto da linha, byte a byte. A linha `**Consentimentos:**` do canonico só restringe: `` `<caso>` → pergunta `` devolve o caso; `` `<caso>` → D-… `` grava aquela decisão. Seção ausente ou repetida: os casos perguntam.
+
+**Padrão da fábrica:** Em todo ciclo, o trazer não pergunta ao operador por `instrucao-declarada-em-outputs` (arquivo declarado nos Outputs), `teste-que-acompanha-o-codigo` e `tela-dos-steps`, nem por `coberto-pelo-carimbo` (carimbo `APPROVED` de revisor real cobrindo a ponta); segue perguntando o que `SEGUEM_PERGUNTANDO` e `canonico-do-ciclo` cobrem sem esse carimbo, registro de hook, guard e modo, instruções de sessão, task com publicação e o caminho clínico fora dos Outputs que não é tela dos Steps.
+
+Caminho que uma decisão do canonico cita junto com a task, na mesma oração e sem negação, segue sem pergunta (`decisao-registrada-da-task`), gravando o corpo dela.
+
+## Re-plano dentro da fase
+
+**Re-plano sozinho:** O re-plano da fase em curso, ou da fase reaberta, segue sem perguntar ao operador quando todo commit dele traz `Replano-Motivo: <tipo>:<chave>` (`tipo` ∈ `ci` · `revisao` · `operaria` · `escopo`), nenhuma task some, muda de fase ou troca Outputs, Verificação ou estação, nenhuma fase nasce, nascem no máximo duas tasks além do fechamento, nada toca caminho clínico, dado de paciente, publicação que altera o existente nem a proposta do ciclo (task nova de estação `condutora` ou `workstation`, ou Steps que mesclam, fecham ou reabrem a proposta), nada está trazido sem conferência, e a chave não apareceu em re-plano anterior do ciclo.
+
+A herança (`herdar-autorizacao`, origem `sozinho`) grava o caso `replano-sozinho` como decisão de Vega por delegação do operador, e o aviso vai a ele com o motivo e `replano:<sha8>`. `` `replano-sozinho` → pergunta `` na linha `**Consentimentos:**` devolve o caso à pergunta. Chave repetida pergunta `replano-repetido`, com a opção de consertar o molde. Sem o trailer, ou fora da regra, vale §O que pede o "sim".
+
+## A resposta que chega por outra sessão
+
+Quem responde é sempre o operador; a sessão que transporta a resposta só a repassa, e a autoria fica com quem transporta. Quem sobe a origem é o gancho da coleta, nunca quem conduz: o comando `responder` grava `agente`, e a linha `autoria` diz o resto, com a prova.
+
+- **Quem repassa** a resposta que o operador deu na sessão dele manda, numa mensagem só: o `pergunta_id` da pergunta (sem ele o repasse não grava), a linha `Decisão <item>: <letra|sim> · <operador|própria>` por item e a linha `Recibo: <sessão onde o operador digitou> <evento da mensagem dele>`, que aponta a mensagem do operador nessa sessão.
+- **Quem recebe** um repasse com `Recibo:` chama `get_event` com essa sessão e esse evento, no mesmo turno, antes de seguir. Conferido (mensagem do operador, sem `isSynthetic`, com o número e a letra do item, depois da abertura), a resposta grava como `digitado-no-hub-conferido`; repasse sem recibo, sem a chamada ou que não confere grava como `repasse-hub`, com o motivo, se vier da sessão do recibo ou de sessão de hub declarada; de outra sessão grava como `agente`, que não é resposta do operador.
+- A mensagem que o operador digita na própria sessão de quem pergunta grava como `digitado`. O que cada origem autoriza não muda aqui: vale §Papéis.
+
 ## Fronteira de sessão por fase
 
-Uma fase por condutora. A sessão que fecha a fase com CI verde no HEAD grava a marca `Conducao-Encerrada` pelo `encerrar-sessao` e passa o comando: `passar` grava a nota de passagem, e a ordem da troca cria a herdeira, que toma a posse (a época sobe na mesma escrita) e confirma a passagem; a anterior se arquiva. A régua de janela pode mandar passar no meio da fase, sempre em fronteira limpa. Fechada a última fase, o `fechar-ciclo` grava `Conducao-Encerrada: ciclo` e a condutora cria a de `fechamento`, sessão limpa, com o texto do fechamento do projeto. Re-plano no meio da fase passa pelo `proximo`. O que separa as sessões é a marca no ramo e a época da posse, nunca o id da sessão.
+Uma fase por condutora. A sessão que fecha a fase com CI verde no HEAD grava a marca `Conducao-Encerrada` pelo `encerrar-sessao` e passa o comando: `passar` grava a nota de passagem, e a ordem da troca cria a herdeira, que toma a posse (a época sobe na mesma escrita) confirma a passagem e arquiva a anterior. A régua de janela pode mandar passar no meio da fase, sempre em fronteira limpa. Fechada a última fase, o `fechar-ciclo` grava `Conducao-Encerrada: ciclo` e a condutora cria a de `fechamento`, sessão limpa, com o texto do fechamento do projeto. Re-plano no meio da fase passa pelo `proximo`. O que separa as sessões é a marca no ramo e a época da posse, nunca o id da sessão.
 
 ## Botões
 

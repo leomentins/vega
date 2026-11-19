@@ -140,7 +140,7 @@ const DONA = Object.freeze({ estado: "dona", ciclo: CICLO, lock_id: "11111111-22
 
 test("em passagem o abrir e a publicação recusam", (t) => {
   const a = ambiente(t);
-  a.ok("autorizar-ciclo", "F1", "--sim", "sim, pode tocar a F1");
+  a.ok("autorizar-ciclo", "F1", "--sim", "sim, pode tocar a F1", "--pergunta", "p-00000000000000a1");
   const p = a.ok("passar", "F1", "--nota", a.nota);
   assert.equal(p.acao, "em-passagem");
   assert.equal(p.nota, `${PASTA}/notes/passagem-F1-1.md`);
@@ -165,7 +165,7 @@ test("em passagem o abrir e a publicação recusam", (t) => {
 
 test("passar só em fronteira limpa: tentativa em voo e filha viva recusam", (t) => {
   const a = ambiente(t);
-  a.ok("autorizar-ciclo", "F1", "--sim", "sim");
+  a.ok("autorizar-ciclo", "F1", "--sim", "sim", "--pergunta", "p-00000000000000a1");
   const viva = a.cli("passar", "F1", "--nota", a.nota, "--entrada", JSON.stringify({ filhas: [{ sessao: "session_x", task: "T2", estado: "RUNNING" }] }));
   assert.equal(viva.status, 1);
   assert.match(viva.stderr, /fronteira-suja.*session_x/);
@@ -187,7 +187,7 @@ test("nota fora do molde ou acima do alvo é recusada", () => {
 test("a nota leva na cabeça a época, o lock_id e a ponta, e a seguinte numera k+1", (t) => {
   const a = ambiente(t);
   comPosse(t, DONA);
-  autorizarCiclo({ repo: a.arvore, ciclo: CICLO, fase: "F1", sim: "sim" });
+  autorizarCiclo({ repo: a.arvore, ciclo: CICLO, fase: "F1", sim: "sim", pergunta: "p-00000000000000a1" });
   const ponta = a.g("rev-parse", "HEAD");
   const p = passar({ repo: a.arvore, ciclo: CICLO, fase: "F1", corpo: corpoNoMolde() });
   assert.equal(p.epoca, 2);
@@ -216,19 +216,19 @@ test("marca com época velha é recusada", (t) => {
   const antes = a.g("rev-parse", "HEAD");
   // A árvore gravou a época 2; a posse está na 3 com o mesmo lock_id: a sessão não é a da posse.
   comPosse(t, { ...DONA, epoca: 3, epoca_gravada: 2 });
-  recusa(() => autorizarCiclo({ repo: a.arvore, ciclo: CICLO, fase: "F1", sim: "sim" }), "epoca-velha");
+  recusa(() => autorizarCiclo({ repo: a.arvore, ciclo: CICLO, fase: "F1", sim: "sim", pergunta: "p-00000000000000a1" }), "epoca-velha");
   assert.equal(a.g("rev-parse", "HEAD"), antes, "nada gravado com a época velha");
   assert.equal(a.g("ls-remote", "origin", `refs/conducao/${CICLO}/copia`), "", "a cópia não subiu");
   // Igualdade, nunca "menor": a posse nova que recomeça em 1 também recusa a sessão da época 2.
   comPosse(t, { ...DONA, epoca: 1, epoca_gravada: 2 });
-  recusa(() => autorizarCiclo({ repo: a.arvore, ciclo: CICLO, fase: "F1", sim: "sim" }), "epoca-velha");
+  recusa(() => autorizarCiclo({ repo: a.arvore, ciclo: CICLO, fase: "F1", sim: "sim", pergunta: "p-00000000000000a1" }), "epoca-velha");
   // Sem a chave gravada, a época da árvore é 1 (como no leitor da posse).
   const { epoca_gravada: _, ...semGravada } = DONA;
   comPosse(t, semGravada);
-  recusa(() => autorizarCiclo({ repo: a.arvore, ciclo: CICLO, fase: "F1", sim: "sim" }), "epoca-velha");
+  recusa(() => autorizarCiclo({ repo: a.arvore, ciclo: CICLO, fase: "F1", sim: "sim", pergunta: "p-00000000000000a1" }), "epoca-velha");
   // O par igual passa: marca e cópia.
   comPosse(t, DONA);
-  const ok = autorizarCiclo({ repo: a.arvore, ciclo: CICLO, fase: "F1", sim: "sim" });
+  const ok = autorizarCiclo({ repo: a.arvore, ciclo: CICLO, fase: "F1", sim: "sim", pergunta: "p-00000000000000a1" });
   assert.equal(ok.acao, "autorizada");
   assert.equal(ok.copia.empurrada, true);
 });
@@ -244,12 +244,12 @@ test("marca com banco fora é recusada", (t) => {
     [{}, "posse-ilegivel"],
   ]) {
     comPosse(t, posse);
-    recusa(() => autorizarCiclo({ repo: a.arvore, ciclo: CICLO, fase: "F1", sim: "sim" }), codigo);
+    recusa(() => autorizarCiclo({ repo: a.arvore, ciclo: CICLO, fase: "F1", sim: "sim", pergunta: "p-00000000000000a1" }), codigo);
   }
   assert.equal(a.g("rev-parse", "HEAD"), antes, "nada gravado sem a posse lida");
   // Sem posse no banco (D-VEGA26-18), passa.
   comPosse(t, { estado: "sem-posse", ciclo: CICLO });
-  assert.equal(autorizarCiclo({ repo: a.arvore, ciclo: CICLO, fase: "F1", sim: "sim" }).acao, "autorizada");
+  assert.equal(autorizarCiclo({ repo: a.arvore, ciclo: CICLO, fase: "F1", sim: "sim", pergunta: "p-00000000000000a1" }).acao, "autorizada");
 });
 
 test("a cópia não sobe com a posse passada: a marca fica e o desfecho diz o remédio", (t) => {
@@ -257,7 +257,7 @@ test("a cópia não sobe com a posse passada: a marca fica e o desfecho diz o re
   let chamada = 0;
   // A posse passa entre a marca e a cópia: a primeira leitura é a da dona, a segunda já não.
   comPosse(t, () => (++chamada === 1 ? DONA : { estado: "outra", motivo: "posse de outra árvore" }));
-  const s = autorizarCiclo({ repo: a.arvore, ciclo: CICLO, fase: "F1", sim: "sim" });
+  const s = autorizarCiclo({ repo: a.arvore, ciclo: CICLO, fase: "F1", sim: "sim", pergunta: "p-00000000000000a1" });
   assert.equal(s.acao, "registrado-sem-copia");
   assert.equal(s.motivo, "posse-alheia");
   assert.equal(a.g("ls-remote", "origin", `refs/conducao/${CICLO}/copia`), "");

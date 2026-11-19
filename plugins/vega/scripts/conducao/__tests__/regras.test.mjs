@@ -124,7 +124,10 @@ const abrirCtx = (over = {}) => {
   };
 };
 const vivas = (n) => Array.from({ length: n }, (_, i) => ({ sessao: `v${i}`, estado: "RUNNING" }));
-const sensivel = task("T1", { classe: "sensivel", publicacao: ["db push"] });
+const sensivel = task("T1", { classe: "sensivel", publicacao: ["db push"], simProprio: "publicacao-que-altera" });
+// D18a (16/11/2026): publicação só de acréscimo sai coberta pelo sim do ciclo, sem perguntar.
+const aditiva = task("T1", { classe: "sensivel", publicacao: ["db push"], simProprio: null });
+const clinica = task("T1", { classe: "sensivel", protegida: ["apps/x/labs/a.tsx"], simProprio: "caminho-clinico" });
 
 const ABRIR = [
   { caso: "nada pronto", over: { servidor: [] }, espera: null },
@@ -138,8 +141,19 @@ const ABRIR = [
   { caso: "sensível sem sim pergunta", over: { tasks: [sensivel] }, espera: "perguntar:task-sensivel" },
   { caso: "sensível coberta pela fase abre", over: { tasks: [sensivel], cobertaPelaFase: true }, espera: "abrir:T1" },
   { caso: "sensível aprovada pelo nonce da tentativa abre", over: { tasks: [sensivel], aprovacoes: [{ task: "T1", nonce: nT("T1", 1) }] }, espera: "abrir:T1" },
-  { caso: "aprovação de outra tentativa não vale", over: { tasks: [sensivel], aprovacoes: [{ task: "T1", nonce: nT("T1", 2) }] }, espera: "perguntar:task-sensivel" },
+  { caso: "aprovação de outra tentativa vale (D18a: o sim é da task)", over: { tasks: [sensivel], aprovacoes: [{ task: "T1", nonce: nT("T1", 2) }] }, espera: "abrir:T1" },
+  { caso: "aprovação de outra task não vale", over: { tasks: [sensivel], aprovacoes: [{ task: "T2", nonce: nT("T2", 1) }] }, espera: "perguntar:task-sensivel" },
+  { caso: "publicação aditiva de fase herdada sai coberta pelo sim do ciclo", over: { tasks: [aditiva] }, espera: "abrir:T1" },
+  { caso: "caminho clínico de fase herdada pergunta", over: { tasks: [clinica] }, espera: "perguntar:task-sensivel" },
 ];
+
+test("regraAbrir — a coberta pelo sim do ciclo sai com cobertasPeloCiclo; a pergunta diz o porquê", () => {
+  const r = regraAbrir(abrirCtx({ tasks: [aditiva], ultimaAutorizacao: { sha: "a".repeat(40), fase: "F0" } }));
+  assert.deepEqual(r.cobertasPeloCiclo, { autorizacao: "a".repeat(40), tasks: ["T1"] });
+  assert.equal(r.cobertasPelaFase, undefined);
+  const p = regraAbrir(abrirCtx({ tasks: [clinica] }));
+  assert.equal(p.porque, "caminho-clinico");
+});
 
 for (const c of ABRIR)
   test(`regraAbrir — ${c.caso} ⇒ ${c.espera ?? "null"}`, () => {
@@ -397,7 +411,8 @@ const TABELA = {
   ],
   regraFazerCondutora: [
     { caso: "task da condutora", ctx: { fases: [["F1", [task("T1", { estacao: "condutora" })]]] }, espera: "fazer-condutora" },
-    { caso: "task da condutora sensível sem sim", ctx: { fases: [["F1", [task("T1", { estacao: "condutora", publicacao: ["db push"] })]]], autorizacoes: [AUT("F0"), AUT("F1", { herdada: "a".repeat(40) })] }, espera: "perguntar:task-sensivel" },
+    { caso: "task da condutora sensível sem sim", ctx: { fases: [["F1", [task("T1", { estacao: "condutora", publicacao: ["db push"], simProprio: "publicacao-que-altera" })]]], autorizacoes: [AUT("F0"), AUT("F1", { herdada: "a".repeat(40) })] }, espera: "perguntar:task-sensivel" },
+    { caso: "task da condutora que só acrescenta, em fase herdada", ctx: { fases: [["F1", [task("T1", { estacao: "condutora", publicacao: ["db push"], simProprio: null })]]], autorizacoes: [AUT("F0"), AUT("F1", { herdada: "a".repeat(40) })] }, espera: "fazer-condutora" },
     { caso: "só task de servidor", ctx: { fases: [["F1", [task("T1")]]] }, espera: null },
   ],
   regraEsperar: [

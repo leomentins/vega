@@ -173,7 +173,7 @@ function ambiente(t, { saidas = [{ caminho: GERADA, comando: "node gerar.mjs" }]
     return f("rev-parse", "HEAD");
   };
 
-  ok("autorizar-ciclo", "F1", "--sim", "sim, pode tocar a F1");
+  ok("autorizar-ciclo", "F1", "--sim", "sim, pode tocar a F1", "--pergunta", "p-00000000000000a1");
   return { maestra, g, cli, ok, filhaTrabalha };
 }
 

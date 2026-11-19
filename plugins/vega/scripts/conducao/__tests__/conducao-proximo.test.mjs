@@ -237,7 +237,7 @@ test("task com publicacao ou caminho clinico: o sim da fase cobre; fora da fase 
         {
           id: "F1",
           tasks: [
-            task("T1", { extra: ["**Estação:** servidor", "**Independente:** sim"], steps: "aplica a migration com `db-publish.mjs … db push`" }),
+            task("T1", { extra: ["**Estação:** servidor", "**Independente:** sim"], steps: "aplica a migration que faz DROP COLUMN com `db-publish.mjs … db push`" }),
             task("T2", { extra: ["**Estação:** servidor", "**Independente:** sim"], outputs: "`app/telas/fichas/laudo/page.tsx` (modify)" }),
             task("T3", { extra: ["**Estação:** servidor", "**Independente:** sim"] }),
           ],
@@ -252,7 +252,7 @@ test("task com publicacao ou caminho clinico: o sim da fase cobre; fora da fase 
   assert.equal(coberta.acao, "abrir");
   assert.deepEqual(coberta.tarefas.map((x) => x.task), ["T1", "T2", "T3"]);
   assert.deepEqual(coberta.cobertasPelaFase.tasks, ["T1", "T2"]);
-  // Última autorização de outra fase: a pergunta por task e nonce de antes.
+  // Última autorização de outra fase: pergunta a task que altera o existente ou toca caminho clínico (D18a).
   r.autorizar("F2");
   const p1 = proximo(r.dir);
   assert.equal(p1.acao, "perguntar");
@@ -269,9 +269,11 @@ test("task com publicacao ou caminho clinico: o sim da fase cobre; fora da fase 
   assert.equal(a.acao, "abrir");
   assert.deepEqual(a.tarefas.map((x) => x.task), ["T1", "T2", "T3"]);
   assert.equal(a.tarefas[0].nonce, p1.nonce, "abrir sai com o nonce que Rita aprovou");
-  // Aprovação de outro estado (nonce velho) não destrava.
+  // D18a: o sim é da task, não do estado — segue valendo depois de commit novo (outra tentativa,
+  // outro HEAD); plano mudado nas tasks para antes, no `plano-mudou`.
   r.vazio("commit qualquer");
-  assert.equal(proximo(r.dir, { aprovacoes: aprov }).acao, "perguntar");
+  assert.equal(proximo(r.dir, { aprovacoes: aprov }).acao, "abrir");
+  assert.equal(proximo(r.dir, { aprovacoes: [aprov[0]] }).acao, "perguntar", "sem o sim da T2, ela pergunta");
 });
 
 test("task de estacao workstation pronta emite parar, depois das filhas em voo", (t) => {
@@ -321,7 +323,7 @@ test("task de estacao condutora que publica: o sim da fase cobre o fazer-conduto
     canonico({
       largura: 1,
       fases: [
-        { id: "F1", tasks: [task("T1", { extra: ["**Estação:** condutora"], steps: "publica com `vercel --prod`" })] },
+        { id: "F1", tasks: [task("T1", { extra: ["**Estação:** condutora", "**Publicação:** sim, altera a versão publicada"], steps: "publica com `vercel --prod`" })] },
         { id: "F2", tasks: [task("T2", { extra: ["**Estação:** servidor"] })] },
       ],
     }),

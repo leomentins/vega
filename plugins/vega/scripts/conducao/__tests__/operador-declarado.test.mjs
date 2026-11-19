@@ -87,7 +87,7 @@ function auditarCom(t, { declaracao, corpo = null, trailerExtra = [] }) {
       encoding: "utf8",
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
     });
-  const aut = cli("autorizar-ciclo", "F1", "--sim", "pode tocar a F1");
+  const aut = cli("autorizar-ciclo", "F1", "--sim", "pode tocar a F1", "--pergunta", "p-00000000000000a1");
   assert.equal(aut.status, 0, aut.stderr);
   const trailers = [
     "Conducao-Task: T1",

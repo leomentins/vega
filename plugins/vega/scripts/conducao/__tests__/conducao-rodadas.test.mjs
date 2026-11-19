@@ -178,7 +178,7 @@ function ambiente(t, tasks = [GATE, task("T2")]) {
 
 test("rodada NEEDS_REWORK abre a tentativa n+1 da mesma task, sem contar falha", (t) => {
   const a = ambiente(t, [GATE]);
-  a.ok("autorizar-ciclo", "F1", "--sim", "sim, pode tocar a F1");
+  a.ok("autorizar-ciclo", "F1", "--sim", "sim, pode tocar a F1", "--pergunta", "p-00000000000000a1");
 
   // Rodada A: gate, approval NEEDS_REWORK rodada 1.
   a.abrirPeloProximo("T1", 1);
@@ -221,7 +221,7 @@ test("rodada NEEDS_REWORK abre a tentativa n+1 da mesma task, sem contar falha",
 test("verdict SHIP e SHIP_WITH_DEBT recusam --rodada; a trazida segue pendente", (t) => {
   for (const verdict of ["SHIP", "SHIP_WITH_DEBT"]) {
     const a = ambiente(t, [GATE]);
-    a.ok("autorizar-ciclo", "F1", "--sim", "sim");
+    a.ok("autorizar-ciclo", "F1", "--sim", "sim", "--pergunta", "p-00000000000000a1");
     a.abrirPeloProximo("T1", 1);
     a.rodada("T1", 1, { [APPROVAL]: approval(verdict, 1) });
     a.recusa("approval-nao-pede-rodada", "registrar-conferencia", "T1", "--rodada", "needs-rework");
@@ -233,7 +233,7 @@ test("verdict SHIP e SHIP_WITH_DEBT recusam --rodada; a trazida segue pendente",
 
 test("task que não é conferência do operador recusa --rodada, mesmo com approval NEEDS_REWORK no HEAD", (t) => {
   const a = ambiente(t, [task("T2", { outputs: `\`${APPROVAL}\` (create)` })]);
-  a.ok("autorizar-ciclo", "F1", "--sim", "sim");
+  a.ok("autorizar-ciclo", "F1", "--sim", "sim", "--pergunta", "p-00000000000000a1");
   a.abrirPeloProximo("T2", 1);
   a.rodada("T2", 1, { [APPROVAL]: approval("NEEDS_REWORK", 1) });
   a.recusa("rodada-fora-da-conferencia", "registrar-conferencia", "T2", "--rodada", "needs-rework");
@@ -246,7 +246,7 @@ test("task que não é conferência do operador recusa --rodada, mesmo com appro
 
 test("approval ausente no HEAD recusa --rodada", (t) => {
   const a = ambiente(t, [GATE]);
-  a.ok("autorizar-ciclo", "F1", "--sim", "sim");
+  a.ok("autorizar-ciclo", "F1", "--sim", "sim", "--pergunta", "p-00000000000000a1");
   a.abrirPeloProximo("T1", 1);
   a.rodada("T1", 1, { "src/t1.mjs": "export const t1 = 1;\n" });
   a.recusa("approval-ausente", "registrar-conferencia", "T1", "--rodada", "needs-rework");
@@ -255,7 +255,7 @@ test("approval ausente no HEAD recusa --rodada", (t) => {
 
 test("teto do rito: approval NEEDS_REWORK com rodada 3 pergunta a Rita e não abre rodada além", (t) => {
   const a = ambiente(t, [GATE]);
-  a.ok("autorizar-ciclo", "F1", "--sim", "sim");
+  a.ok("autorizar-ciclo", "F1", "--sim", "sim", "--pergunta", "p-00000000000000a1");
   a.abrirPeloProximo("T1", 1);
   a.rodada("T1", 1, { [APPROVAL]: approval("NEEDS_REWORK", 3) });
   const r = a.cli("registrar-conferencia", "T1", "--rodada", "needs-rework");
@@ -272,7 +272,7 @@ test("teto do rito: approval NEEDS_REWORK com rodada 3 pergunta a Rita e não ab
 
 test("--rodada recusa valor desconhecido e mistura com flags da conferência", (t) => {
   const a = ambiente(t, [GATE]);
-  a.ok("autorizar-ciclo", "F1", "--sim", "sim");
+  a.ok("autorizar-ciclo", "F1", "--sim", "sim", "--pergunta", "p-00000000000000a1");
   a.abrirPeloProximo("T1", 1);
   a.rodada("T1", 1, { [APPROVAL]: approval("NEEDS_REWORK", 1) });
   a.recusa("uso", "registrar-conferencia", "T1", "--rodada", "ship");
@@ -293,7 +293,7 @@ test("lerApproval lê verdict e rodada só do frontmatter; rodada ausente conta 
 /** A · B · C até o approval da vez; devolve o ambiente com a última tentativa trazida e sem registro. */
 function ateRodada(t, approvals) {
   const a = ambiente(t, [GATE]);
-  a.ok("autorizar-ciclo", "F1", "--sim", "sim");
+  a.ok("autorizar-ciclo", "F1", "--sim", "sim", "--pergunta", "p-00000000000000a1");
   approvals.forEach((arquivos, i) => {
     if (i > 0) a.ok("registrar-conferencia", "T1", "--rodada", "needs-rework");
     a.abrirPeloProximo("T1", i + 1);
@@ -405,7 +405,7 @@ test("trazer por cherry-pick avisa carimboOrfao quando o carimbo da filha cobre 
 
 test("trazer sem carimbo órfão não avisa: fast-forward com carimbo, e cherry-pick sem carimbo na ponta", (t) => {
   const ff = ambiente(t, [GATE]);
-  ff.ok("autorizar-ciclo", "F1", "--sim", "sim");
+  ff.ok("autorizar-ciclo", "F1", "--sim", "sim", "--pergunta", "p-00000000000000a1");
   ff.abrirPeloProximo("T1", 1);
   empurrarFilha(ff, 1, [{ "src/t1.mjs": "export const t1 = 1;\n" }, ([c]) => ({ [carimboDoCiclo(c)]: carimbo(c) })]);
   const sff = ff.ok("trazer", "T1", "--tentativa", "1", "--sessao", "filha");
@@ -413,7 +413,7 @@ test("trazer sem carimbo órfão não avisa: fast-forward com carimbo, e cherry-
   assert.equal(sff.carimboOrfao, undefined);
 
   const a = ambiente(t, [GATE]);
-  a.ok("autorizar-ciclo", "F1", "--sim", "sim");
+  a.ok("autorizar-ciclo", "F1", "--sim", "sim", "--pergunta", "p-00000000000000a1");
   a.abrirPeloProximo("T1", 1);
   empurrarFilha(a, 1, [{ "src/t1.mjs": "export const t1 = 1;\n" }]);
   notaDaMaestra(a);
@@ -523,7 +523,7 @@ test("--rodada carimbo recusa carimbo fora dos destinos, carimbo apagado, approv
   ship.recusa("approval-nao-pede-rodada", "registrar-conferencia", "T1", "--rodada", "carimbo");
 
   const comum = ambiente(t, [task("T2", { outputs: `\`${APPROVAL}\` (create)` })]);
-  comum.ok("autorizar-ciclo", "F1", "--sim", "sim");
+  comum.ok("autorizar-ciclo", "F1", "--sim", "sim", "--pergunta", "p-00000000000000a1");
   comum.abrirPeloProximo("T2", 1);
   comum.rodada("T2", 1, { [carimboDoCiclo(SHA_QUALQUER)]: carimbo(SHA_QUALQUER) });
   comum.recusa("rodada-fora-da-conferencia", "registrar-conferencia", "T2", "--rodada", "carimbo");
@@ -554,7 +554,7 @@ function abrirDepoisDoReplano(a, tk, tentativa) {
   for (let i = 0; i < 4; i++) {
     const p = a.proximo();
     if (p.acao === "herdar-autorizacao") a.ok("herdar-autorizacao", p.fase, "--nonce", p.nonce);
-    else if (p.acao === "perguntar" && p.motivo === "plano-mudou") a.ok("autorizar-ciclo", "F1", "--sim", "sim, o re-plano");
+    else if (p.acao === "perguntar" && p.motivo === "plano-mudou") a.ok("autorizar-ciclo", "F1", "--sim", "sim, o re-plano", "--pergunta", "p-00000000000000a1");
     else if (p.acao === "abrir") {
       const x = p.tarefas.find((y) => y.task === tk);
       assert.ok(x, `esperava abrir ${tk}: ${JSON.stringify(p)}`);

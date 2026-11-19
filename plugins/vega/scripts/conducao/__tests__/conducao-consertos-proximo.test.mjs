@@ -68,6 +68,8 @@ function canonico(fases, largura = 1) {
 }
 
 const PUBLICA = "aplica a migration com `db-publish.mjs … db push`";
+// D18a (16/11/2026): publicação que apaga ou altera o existente pede o sim de novo em fase herdada.
+const PUBLICA_ALTERA = "aplica a migration que faz DROP COLUMN com `db-publish.mjs … db push`";
 
 /** F1 com a T1 sensível e T2/T3 comuns; F2 com a T4 (comum ou sensível) e a T5. */
 const PADRAO = ({ t4 = "faz" } = {}) =>
@@ -221,7 +223,7 @@ function fecharF1(r) {
 
 test("autorizar-ciclo: o sim cobre a fase de partida e as seguintes herdam sem pergunta", (t) => {
   const r = novoRepo(t);
-  const a = ok(r, "autorizar-ciclo", "F1", "--sim", "sim, pode tocar o ciclo inteiro");
+  const a = ok(r, "autorizar-ciclo", "F1", "--sim", "sim, pode tocar o ciclo inteiro", "--pergunta", "p-00000000000000a1");
   assert.equal(a.acao, "autorizada");
   assert.equal(a.doCiclo, true);
   assert.match(r.g("log", "-1", "--format=%B"), /^Conducao-Ciclo: sim$/m);
@@ -244,9 +246,21 @@ test("autorizar-ciclo: o sim cobre a fase de partida e as seguintes herdam sem p
   assert.equal(ab.fase, "F2");
 });
 
-test("autorizar-ciclo: task sensivel de fase herdada pelo ciclo segue pedindo o sim por task", (t) => {
-  const r = novoRepo(t, PADRAO({ t4: PUBLICA }));
-  ok(r, "autorizar-ciclo", "F1", "--sim", "sim, pode tocar o ciclo inteiro");
+test("autorizar-ciclo: publicação só de acréscimo em fase herdada sai coberta pelo sim do ciclo (D18a)", (t) => {
+  const r = novoRepo(t, PADRAO({ t4: `${PUBLICA}\n- **Publicação:** sim, aditiva` }));
+  ok(r, "autorizar-ciclo", "F1", "--sim", "sim, pode tocar o ciclo inteiro", "--pergunta", "p-00000000000000a1");
+  fecharF1(r);
+  const h = r.proximo();
+  assert.equal(h.acao, "herdar-autorizacao", JSON.stringify(h));
+  ok(r, "herdar-autorizacao", "F2", "--nonce", h.nonce);
+  const ab = r.proximo();
+  assert.equal(ab.acao, "abrir", JSON.stringify(ab));
+  assert.deepEqual(ab.cobertasPeloCiclo?.tasks, ["T4"], JSON.stringify(ab));
+});
+
+test("autorizar-ciclo: task de fase herdada que publica alterando o existente segue pedindo o sim por task", (t) => {
+  const r = novoRepo(t, PADRAO({ t4: PUBLICA_ALTERA }));
+  ok(r, "autorizar-ciclo", "F1", "--sim", "sim, pode tocar o ciclo inteiro", "--pergunta", "p-00000000000000a1");
   fecharF1(r);
   const h = r.proximo();
   assert.equal(h.acao, "herdar-autorizacao", JSON.stringify(h));
@@ -255,6 +269,7 @@ test("autorizar-ciclo: task sensivel de fase herdada pelo ciclo segue pedindo o 
   assert.equal(p.acao, "perguntar", JSON.stringify(p));
   assert.equal(p.motivo, "task-sensivel");
   assert.equal(p.task, "T4");
+  assert.equal(p.porque, "publicacao-que-altera");
   // O sim de Rita àquela pergunta (task + nonce, num turno dele) abre a T4.
   const ab = r.proximo({ aprovacoes: [{ task: "T4", nonce: p.nonce }] });
   assert.equal(ab.acao, "abrir", JSON.stringify(ab));
@@ -263,7 +278,7 @@ test("autorizar-ciclo: task sensivel de fase herdada pelo ciclo segue pedindo o 
 
 test("autorizar-ciclo: task que muda de classe depois do sim do ciclo pede o sim do ciclo de novo", (t) => {
   const r = novoRepo(t);
-  ok(r, "autorizar-ciclo", "F1", "--sim", "sim, pode tocar o ciclo inteiro");
+  ok(r, "autorizar-ciclo", "F1", "--sim", "sim, pode tocar o ciclo inteiro", "--pergunta", "p-00000000000000a1");
   fecharF1(r);
   r.replanejar("#### T4 — tarefa T4\n\n- **Objetivo:** tarefa T4", "#### T4 — tarefa T4\n\n- **Objetivo:** tarefa T4 com `vercel --prod`", `${CICLO}-F2/D-TESTE1-9 — re-plano de T4: publica`);
   const p = r.proximo();
@@ -274,7 +289,7 @@ test("autorizar-ciclo: task que muda de classe depois do sim do ciclo pede o sim
 
 test("autorizar-ciclo: re-plano sem ruling e sem mudanca de classe herda sob o sim do ciclo; sem ele pergunta", (t) => {
   const r = novoRepo(t);
-  ok(r, "autorizar-ciclo", "F1", "--sim", "sim, pode tocar o ciclo inteiro");
+  ok(r, "autorizar-ciclo", "F1", "--sim", "sim, pode tocar o ciclo inteiro", "--pergunta", "p-00000000000000a1");
   r.replanejar(...DEP_T3, `${CICLO}-F1/T3 — ajusta a T3`);
   const h = r.proximo();
   assert.equal(h.acao, "herdar-autorizacao", JSON.stringify(h));
@@ -295,12 +310,12 @@ test("autorizar-ciclo exige a fase de partida e o texto do sim", (t) => {
 
 test("autorizar-ciclo: re-plano sem ruling que troca Outputs ou Verificacao pergunta, mesmo sob o sim do ciclo", (t) => {
   const r = novoRepo(t);
-  ok(r, "autorizar-ciclo", "F1", "--sim", "sim, pode tocar o ciclo inteiro");
+  ok(r, "autorizar-ciclo", "F1", "--sim", "sim, pode tocar o ciclo inteiro", "--pergunta", "p-00000000000000a1");
   r.replanejar("- **Outputs:** `src/t3.mjs` (create)", "- **Outputs:** `src/t3.mjs` (create) · `.husky/pre-commit` (modify)", `${CICLO}-F1/T3 — ajusta a T3`);
   assert.equal(r.proximo().motivo, "plano-mudou");
 
   const s = novoRepo(t);
-  ok(s, "autorizar-ciclo", "F1", "--sim", "sim, pode tocar o ciclo inteiro");
+  ok(s, "autorizar-ciclo", "F1", "--sim", "sim, pode tocar o ciclo inteiro", "--pergunta", "p-00000000000000a1");
   // Verificação trocada no meio da fase não é adotada: a condução segue no plano congelado.
   s.replanejar("`echo verificacao-T3`", "`echo outra-coisa`", `${CICLO}-F1/T3 — ajusta a T3`);
   assert.notEqual(s.proximo().acao, "herdar-autorizacao");
@@ -317,7 +332,7 @@ test("C24: braco de case em varias linhas confere o comando do braco, nao o padr
 
 test("autorizar-ciclo: re-plano sem ruling que acrescenta segmento de tela protegida aos Steps pergunta", (t) => {
   const r = novoRepo(t);
-  ok(r, "autorizar-ciclo", "F1", "--sim", "sim, pode tocar o ciclo inteiro");
+  ok(r, "autorizar-ciclo", "F1", "--sim", "sim, pode tocar o ciclo inteiro", "--pergunta", "p-00000000000000a1");
   r.replanejar("- **Steps:** faz\n- **Verificação:** `echo verificacao-T3`", "- **Steps:** muda `app/telas/agenda/agenda/page.tsx`\n- **Verificação:** `echo verificacao-T3`", `${CICLO}-F1/T3 — ajusta a T3`);
   // Steps não estão em CAMPOS_DO_PLANO: o re-plano não é adotado no meio da fase; na fase nova, o sim do ciclo não o cobre.
   assert.notEqual(r.proximo().acao, "herdar-autorizacao");

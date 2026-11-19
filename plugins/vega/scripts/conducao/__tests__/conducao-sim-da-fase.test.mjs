@@ -75,7 +75,7 @@ function canonico(fases, largura = 1) {
 /** F1 com a T1 sensível (publica por `db push`) e T2/T3 comuns; F2 com a T4. */
 const PADRAO = () =>
   canonico([
-    { id: "F1", tasks: [task("T1", { steps: "aplica a migration com `db-publish.mjs … db push`" }), task("T2"), task("T3")] },
+    { id: "F1", tasks: [task("T1", { steps: "aplica a migration com `db-publish.mjs … db push`\n- **Publicação:** sim, aditiva" }), task("T2"), task("T3")] },
     { id: "F2", tasks: [task("T4", { fase: "F2" })] },
   ]);
 
@@ -147,22 +147,20 @@ test("fase autorizada com task sensivel abre sem pergunta na tentativa 1 e na te
 
 // ── 2. sem autorização da fase, pergunta ──────────────────────────────────────
 
-test("fase nao autorizada pede o sim do ciclo, e task sensivel fora da fase da ultima autorizacao pergunta por nonce", (t) => {
+test("fase nao autorizada pede o sim do ciclo, e task que só acrescenta fora da fase da ultima autorizacao sai coberta (D18a)", (t) => {
   const r = novoRepo(t);
   const p = r.proximo();
   assert.equal(p.acao, "perguntar");
   assert.equal(p.motivo, "autorizar-ciclo");
 
-  // F1 autorizada e, depois, F2: a última autorização não é da fase em curso — o sim da F1 não cobre.
+  // F1 autorizada e, depois, F2: a última autorização não é da fase em curso. A T1 só
+  // acrescenta (migration sem DROP nem RENAME): o sim em vigor a cobre, sem perguntar.
   r.autorizar("F1");
   r.autorizar("F2");
-  const s = r.proximo();
-  assert.equal(s.acao, "perguntar", JSON.stringify(s));
-  assert.equal(s.motivo, "task-sensivel");
-  assert.equal(s.task, "T1");
-  const a = r.proximo({ aprovacoes: [{ task: "T1", nonce: s.nonce }] });
-  assert.equal(a.acao, "abrir");
+  const a = r.proximo();
+  assert.equal(a.acao, "abrir", JSON.stringify(a));
   assert.equal(a.cobertasPelaFase, undefined);
+  assert.deepEqual(a.cobertasPeloCiclo?.tasks, ["T1"]);
 });
 
 // ── 2-bis. o verbo do sim por fase foi aposentado (D-VEGA29-14) ──────────────

@@ -266,7 +266,7 @@ function ambienteGit(t) {
 
 test("registro não gravado no trazer pergunta e mantém o trabalho", (t) => {
   const a = ambienteGit(t);
-  assert.equal(a.cli("autorizar-ciclo", "F1", "--sim", "sim, pode tocar a F1").status, 0);
+  assert.equal(a.cli("autorizar-ciclo", "F1", "--sim", "sim, pode tocar a F1", "--pergunta", "p-00000000000000a1").status, 0);
   const aberta = a.cli("abrir", "T1", "--tentativa", "1", "--nonce", "nonceT11", "--modo-maestra", "auto");
   assert.equal(aberta.status, 0, aberta.stderr + aberta.linhas.join("\n"));
   a.filhaTrabalha();
@@ -322,7 +322,7 @@ test("registro não gravado no trazer pergunta e mantém o trabalho", (t) => {
 
 test("conferir com registro pendente pergunta e não apaga a trazida", (t) => {
   const a = ambienteGit(t);
-  assert.equal(a.cli("autorizar-ciclo", "F1", "--sim", "sim, pode tocar a F1").status, 0);
+  assert.equal(a.cli("autorizar-ciclo", "F1", "--sim", "sim, pode tocar a F1", "--pergunta", "p-00000000000000a1").status, 0);
   const aberta = a.cli("abrir", "T1", "--tentativa", "1", "--nonce", "nonceT11", "--modo-maestra", "auto");
   assert.equal(aberta.status, 0, aberta.stderr + aberta.linhas.join("\n"));
   a.filhaTrabalha();
@@ -356,4 +356,51 @@ test("conferir com registro pendente pergunta e não apaga a trazida", (t) => {
   const r2 = conferir();
   assert.equal(r2.saida?.acao, "conferida", r2.linhas.join("\n") + r2.stderr);
   assert.equal(a.g("for-each-ref", "--format=%(refname)", trazida), "");
+});
+
+// ── VEGA-19 T16: o regravar lê a base e não entra em laço ──────────────────────
+
+/** Trazida cujo registro falhou no trazer: o ponto de partida dos dois casos abaixo. */
+function trazidaSemRegistro(t) {
+  const a = ambienteGit(t);
+  assert.equal(a.cli("autorizar-ciclo", "F1", "--sim", "sim, pode tocar a F1", "--pergunta", "p-00000000000000a1").status, 0);
+  assert.equal(a.cli("abrir", "T1", "--tentativa", "1", "--nonce", "nonceT11", "--modo-maestra", "auto").status, 0);
+  a.filhaTrabalha();
+  const s = trazer({ repo: a.maestra, ciclo: CICLO_GIT, task: "T1", tentativa: 1, gravarRegistros: () => { throw new Error("disco cheio"); } });
+  assert.equal(s.motivo, "consentimento-nao-gravado", JSON.stringify(s));
+  return a;
+}
+
+test("regravar relê o sim do canonico de Conducao-Base, não do HEAD", (t) => {
+  const a = trazidaSemRegistro(t);
+  // O plano do HEAD muda o texto da decisão depois da trazida: o regravar segue gravando o da base.
+  const caminho = path.join(a.maestra, CAMINHO_GIT);
+  writeFileSync(caminho, canonicoGit().replace(D1, "texto novo da decisão, depois da trazida."));
+  a.g("add", "-A");
+  a.g("commit", "-q", "-m", "re-plano depois da trazida");
+  const r = a.cli("regravar-consentimentos", "T1", "--tentativa", "1");
+  assert.equal(r.status, 0, r.stderr + r.linhas.join("\n"));
+  assert.equal(r.saida.acao, "regravados");
+  const [lido] = c.lerConsentimentos(a.maestra, { ciclo: CICLO_GIT });
+  assert.equal(lido.sim, D1);
+  assert.equal(lido.tentativa, 1, "a tentativa vai à marca");
+});
+
+test("trazida com registro ilegível sobe ao operador, sem o remédio do regravar", (t) => {
+  const a = trazidaSemRegistro(t);
+  // Regrava o registro `trazida` com o trailer de consentidos ilegível.
+  const ref = `refs/conducao-local/${CICLO_GIT}/trazida/T1/1`;
+  const velho = a.g("rev-parse", ref);
+  const corpo = a.g("log", "-1", "--format=%B", velho).replace(/Conducao-Consentidos: \S+/, `Conducao-Consentidos: ${Buffer.from("nao e json").toString("base64url")}`);
+  const vazia = a.g("rev-parse", `${velho}^{tree}`);
+  const pai = a.g("rev-parse", `${velho}^`);
+  const novo = execFileSync("git", ["commit-tree", vazia, "-p", pai, "-m", corpo], { cwd: a.maestra, encoding: "utf8" }).trim();
+  a.g("update-ref", ref, novo, velho);
+  const r = a.cli("regravar-consentimentos", "T1", "--tentativa", "1");
+  assert.equal(r.saida?.motivo, "trazida-ilegivel", r.linhas.join("\n") + r.stderr);
+  assert.equal(r.saida.remedio, "operador");
+  assert.equal(r.saida.comando, undefined, "sem o comando que voltaria aqui");
+  const p = a.cli("proximo", "--entrada", "{}");
+  assert.equal(p.saida?.motivo, "trazida-ilegivel", p.linhas.join("\n") + p.stderr);
+  assert.notEqual(p.saida.remedio, "regravar-consentimentos");
 });

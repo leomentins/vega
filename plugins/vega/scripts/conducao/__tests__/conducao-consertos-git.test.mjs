@@ -153,7 +153,7 @@ function ambiente(t, { tasks = [task("T1"), task("T2")] } = {}) {
     f("push", "-q", "origin", `${sha}:${ref}`);
     return sha;
   };
-  const autorizar = () => ok("autorizar-ciclo", "F1", "--sim", "sim, pode tocar a F1");
+  const autorizar = () => ok("autorizar-ciclo", "F1", "--sim", "sim, pode tocar a F1", "--pergunta", "p-00000000000000a1");
   const abrir = (tk, n = 1, nonce = `nonce${tk}${n}`) => ok("abrir", tk, "--tentativa", String(n), "--nonce", nonce, "--modo-maestra", "auto");
   /** Um commit novo no `main` do origin, de um clone à parte (o merge que o plano manda trazer). */
   const mainAnda = (arquivos) => {

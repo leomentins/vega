@@ -26,7 +26,8 @@ const TEXTOS = ["skills/conducao/SKILL.md", "skills/conducao/references/contrato
 const COM_A_REGUA = [...TEXTOS, "skills/conducao/references/brief-operaria.md", "INSTALL.md"];
 /** As declarações que as suítes leem: o projeto de teste e o projeto de exemplo do plugin. */
 const DECLARACOES = [path.resolve(AQUI, "fixtures", "projeto-de-teste", ".altair", "adaptador.json"), path.resolve(RAIZ, "exemplo", ".vega", "declaracao.json")];
-const FAIXA = { min: 5500, max: 6000 };
+// Teto ao medido na VEGA-19 T43 (a skill e o contrato com o re-plano que segue sozinho): 6670 palavras.
+const FAIXA = { min: 5500, max: 6670 };
 // Gente que decide fora da condução e não é operador declarado.
 const OUTRAS_PESSOAS = ["Fulano", "Beltrano"];
 

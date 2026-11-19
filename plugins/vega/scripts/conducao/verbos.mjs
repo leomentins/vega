@@ -35,6 +35,90 @@ export function rulingDoReplano(subject, ciclo, reconhecer = parsePhaseCommit) {
   return p.description.startsWith(`${p.ruling} — re-plano de `) ? p.ruling : null;
 }
 
+// ── o re-plano que segue sozinho (T43, D-VEGA19-53) ─────────────────────────
+
+/** O trailer do commit do `/intra-plan` com o motivo do re-plano: `<tipo>:<chave>`. */
+export const TRAILER_REPLANO_MOTIVO = "Replano-Motivo";
+/** Os tipos de motivo que o re-plano sozinho aceita. */
+export const TIPOS_DE_MOTIVO = Object.freeze(["ci", "revisao", "operaria", "escopo"]);
+const MOTIVO_RE = new RegExp(`^(${TIPOS_DE_MOTIVO.join("|")}):([a-z0-9][a-z0-9._-]{0,63})$`);
+/** Tasks novas, além do fechamento, que o re-plano sozinho admite (limiar deduzido, sob observação). */
+export const TASKS_NOVAS_DO_REPLANO = 2;
+/** Estações cuja task nova mexe na proposta do ciclo ou fora do servidor. */
+const ESTACOES_QUE_PERGUNTAM = Object.freeze(["condutora", "workstation"]);
+/** Steps que mesclam, fecham ou reabrem a proposta do ciclo. */
+const MEXE_NA_PROPOSTA_RE =
+  /\bgh\s+pr\s+(?:merge|close|reopen)\b|\b(?:mescl|merg|fech|reabr)\w*\s+(?:a\s+|o\s+)?(?:proposta|PR|pull\s+request)\b/i;
+
+/** O motivo `{ tipo, chave }` de um trailer `Replano-Motivo`, ou null fora da forma. */
+export function motivoDoReplano(valor) {
+  const m = MOTIVO_RE.exec(String(valor ?? "").trim());
+  return m ? { tipo: m[1], chave: m[2] } : null;
+}
+
+/**
+ * O bloco de uma task no texto do canonico: do heading `#### <id> ` até o heading seguinte
+ * (`####`, `###` ou `##`). Sem o heading ⇒ "".
+ */
+export function blocoDaTask(texto, id) {
+  const linhas = String(texto ?? "").split("\n");
+  const i = linhas.findIndex((l) => l.startsWith(`#### ${id} `) || l === `#### ${id}`);
+  if (i < 0) return "";
+  const fim = linhas.findIndex((l, j) => j > i && /^#{2,4}\s/.test(l));
+  return linhas.slice(i, fim < 0 ? linhas.length : fim).join("\n");
+}
+
+/**
+ * O re-plano dentro da fase que segue sem perguntar ao operador (D-VEGA19-53). Pura: o que só a
+ * casca lê chega por parâmetro. `de`/`para` são os planos (congelado e do HEAD), `fase` a fase em
+ * curso ou reaberta (`{ id, tasks }`), `replanos` os commits que mexeram no canonico desde a
+ * autorização (`{ sha, subject, motivo }`, `motivo` = o valor do trailer `Replano-Motivo`),
+ * `anteriores` os re-planos anteriores do ciclo (`{ sha, motivo }`). Opções: `ciclo` e `reconhecer`
+ * (o ruling do subject), `diferencaDoPlano`, `mudancasQuePerguntam` e `mudancasDeAlcance` (de `conducao.mjs`),
+ * `aditiva(m)` (a mudança sensível aditiva na ordem, que não conta), `trazidas` (ids da fase com
+ * trazida sem conferência), `textoDaTask(id)` (o bloco da task no canonico do HEAD) e `restrita`
+ * (a linha `**Consentimentos:**` devolve o caso à pergunta).
+ *
+ * Devolve `{ sozinho, motivo, porque }`: `motivo` é o `<tipo>:<chave>` dos re-planos (vários,
+ * separados por vírgula); `porque` é null quando segue sozinho, senão o primeiro que falhou —
+ * `sem-motivo` (commit sem o trailer: o comportamento de hoje), `sem-ruling`, `task-sumiu`,
+ * `fase-nova`, `fora-da-fase`, `tasks-demais`, `sim-proprio`, `mudanca-de-classe`, `proposta`, `alcance`,
+ * `trazida-pendente`, `restricao` ou, por último, `replano-repetido` (a chave já apareceu num
+ * re-plano anterior do ciclo).
+ */
+export function replanoSozinho({ de, para, fase, replanos, anteriores = [] }, opcoes = {}) {
+  const { ciclo = null, reconhecer = parsePhaseCommit, diferencaDoPlano, mudancasQuePerguntam, mudancasDeAlcance = null, aditiva = () => false, trazidas = [], textoDaTask = () => "", restrita = false } = opcoes;
+  const nao = (porque, motivo = null) => ({ sozinho: false, motivo, porque });
+  if (!Array.isArray(replanos) || !replanos.length || !de || !para || !fase) return nao("sem-motivo");
+  const motivos = replanos.map((c) => motivoDoReplano(c.motivo));
+  if (motivos.some((m) => !m)) return nao("sem-motivo");
+  const motivo = [...new Set(motivos.map((m) => `${m.tipo}:${m.chave}`))].join(",");
+  if (!replanos.every((c) => rulingDoReplano(c.subject ?? "", ciclo, reconhecer))) return nao("sem-ruling", motivo);
+  const diferenca = diferencaDoPlano(de, para);
+  if (diferenca.some((d) => d.mudou === "sumiu")) return nao("task-sumiu", motivo);
+  const fasesDe = new Set(de.fases.map((f) => f.id));
+  if (para.fases.some((f) => !fasesDe.has(f.id))) return nao("fase-nova", motivo);
+  const daFase = (t) => !t || t.fase === fase.id;
+  if (!diferenca.every((d) => para.porId.get(d.task)?.fase === fase.id && daFase(de.porId.get(d.task)))) return nao("fora-da-fase", motivo);
+  const nascidas = diferenca.filter((d) => d.mudou === "nasceu").map((d) => para.porId.get(d.task));
+  if (nascidas.filter((t) => !t.fechamento).length > TASKS_NOVAS_DO_REPLANO) return nao("tasks-demais", motivo);
+  const tocadas = diferenca.map((d) => para.porId.get(d.task));
+  if (tocadas.some((t) => t.simProprio)) return nao("sim-proprio", motivo);
+  // O fechamento novo da fase é parte do re-plano que a regra admite: nasce com a classe dele.
+  const fechamentoNovo = (m) => m.de === null && m.para === "fechamento" && Boolean(para.porId.get(m.task)?.fechamento) && !de.porId.has(m.task);
+  if (mudancasQuePerguntam(de, para).some((m) => !aditiva(m) && !fechamentoNovo(m))) return nao("mudanca-de-classe", motivo);
+  if (nascidas.some((t) => ESTACOES_QUE_PERGUNTAM.includes(t.estacao))) return nao("proposta", motivo);
+  // Bloco que não se lê não prova que a task deixa a proposta em paz: pergunta.
+  if (tocadas.some((t) => { const b = textoDaTask(t.id); return !b || MEXE_NA_PROPOSTA_RE.test(b); })) return nao("proposta", motivo);
+  // Task que já existia e troca Outputs (libera o trazer), Verificação (quem conduz a executa) ou estação: pergunta.
+  if (typeof mudancasDeAlcance !== "function" || mudancasDeAlcance(de, para).some((id) => de.porId.has(id) && para.porId.has(id))) return nao("alcance", motivo);
+  if (trazidas.length) return nao("trazida-pendente", motivo);
+  if (restrita) return nao("restricao", motivo);
+  const vistas = new Set(anteriores.map((a) => motivoDoReplano(a.motivo)?.chave).filter(Boolean));
+  if (motivos.some((m) => vistas.has(m.chave))) return nao("replano-repetido", motivo);
+  return { sozinho: true, motivo, porque: null };
+}
+
 export function exigir(cond, codigo, msg) {
   if (!cond) throw new ErroPlano(codigo, msg);
 }
@@ -87,6 +171,27 @@ export function motivosParaPerguntar(args) {
 }
 
 /**
+ * Dado de teste que não é código: `*.json` ou `*.md` sob uma pasta
+ * `__tests__/fixtures/`, fora da declaração de adaptador de um dublê
+ * (`.altair/`, `.vega/`) (D-VEGA19-42). Só ele sai das superfícies de
+ * instrução, e nunca dentro de pasta que o host carrega inteira
+ * (as pastas `rules`, `agents`, `commands` e `workflows` de uma pasta
+ * oculta da raiz) nem com nome `SKILL.md`;
+ * `*.mjs`, `*.js`, `*.cjs` e o resto da pasta seguem — o dublê
+ * executável roda nos testes da condutora e do CI, com a credencial do banco
+ * do harness, e o plano que o muda o lista nos Outputs.
+ */
+export function ehDadoDeFixture(caminho) {
+  const c = String(caminho ?? "");
+  // A declaração de adaptador de um dublê (`.altair/`, `.vega/`) escolhe o código que roda: segue.
+  if (!/(^|\/)__tests__\/fixtures\/.+\.(json|md)$/.test(c) || /\/__tests__\/fixtures\/(.+\/)?\.(altair|vega)\//.test(`/${c}`)) return false;
+  // Pasta que o host carrega inteira (regras, agentes, comandos, workflows) lê a fixture
+  // como instrução, em qualquer profundidade; `SKILL.md` em qualquer lugar também: segue.
+  if (/^\.[^/]+\/(rules|agents|commands|workflows)\//.test(c) || /(^|\/)SKILL\.md$/.test(c)) return false;
+  return true;
+}
+
+/**
  * `motivosParaPerguntar` com o que deixou de perguntar por consentimento
  * (VEGA-37 T19): `{ motivos, consentidos }`, cada consentido
  * `{ caso, motivo, caminhos }` de `consentimento.mjs` — a casca de I/O grava
@@ -95,14 +200,17 @@ export function motivosParaPerguntar(args) {
  * arquivo declarado em Outputs (D-VEGA37-22; `SEGUEM_PERGUNTANDO` segue
  * perguntando, inclusive declarado; as instruções de sessão do adaptador,
  * `instrucoes`, também, e nunca por repetição: D-VEGA37-45), teste ou contrato do motor que acompanha
- * o código declarado (D-VEGA37-27), e motivo já respondido na fase
- * (`consentimentos` + `fase`, pergunta repetida).
+ * o código declarado (D-VEGA37-27), motivo já respondido na fase
+ * (`consentimentos` + `fase`, pergunta repetida) e, com `carimbo` da
+ * tentativa que cobre a ponta, o resto do alcance dos hooks e das superfícies
+ * de instrução (`coberto-pelo-carimbo`, D-VEGA19-58).
  */
-export function decidirNoTrazer({ caminhos, canonico, outputs, passos = [], alcance = alcanca, codigo = codigoDoNucleo(), instrucoes = [], consentimentos = [], ciclo = null, fase = null }) {
+export function decidirNoTrazer({ caminhos, canonico, outputs, passos = [], alcance = alcanca, codigo = codigoDoNucleo(), instrucoes = [], consentimentos = [], ciclo = null, fase = null, carimbo = null }) {
   const motivos = [];
   const consentidos = [];
+  // D-VEGA19-58: o carimbo da tentativa segue até a regra, que decide se ele cobre a ponta.
   const pelaRegra = (motivo, lista) => {
-    const { restantes, consentidos: c } = consentidoNoTrazer({ motivo, caminhos: lista, outputs, instrucoes });
+    const { restantes, consentidos: c } = consentidoNoTrazer({ motivo, caminhos: lista, outputs, instrucoes, carimbo });
     consentidos.push(...c);
     return restantes;
   };
@@ -117,9 +225,11 @@ export function decidirNoTrazer({ caminhos, canonico, outputs, passos = [], alca
   const foraDoAlcance = caminhos.filter((c) => !noAlcance.includes(c) && !casaAlgum(c, superficies) && casaAlgum(c, SEGUEM_PERGUNTANDO));
   const hooks = pelaRegra("alcance-dos-hooks", [...noAlcance, ...foraDoAlcance]);
   if (hooks.length) motivos.push({ motivo: "alcance-dos-hooks", caminhos: hooks });
+  // D-VEGA19-42: arquivo de dado de teste (`*.json`, `*.md` sob `__tests__/fixtures/`) não é
+  // instrução; o dublê executável segue perguntando, e as instruções de sessão do adaptador também.
   const instrucao = pelaRegra(
     "superficie-de-instrucao",
-    caminhos.filter((c) => casaAlgum(c, [...BOTOES.superficiesDeInstrucao, ...instrucoes])),
+    caminhos.filter((c) => (casaAlgum(c, BOTOES.superficiesDeInstrucao) && !ehDadoDeFixture(c)) || casaAlgum(c, instrucoes)),
   );
   if (instrucao.length) motivos.push({ motivo: "superficie-de-instrucao", caminhos: instrucao });
   if (caminhos.includes(canonico)) motivos.push({ motivo: "canonico-do-ciclo", caminhos: [canonico] });

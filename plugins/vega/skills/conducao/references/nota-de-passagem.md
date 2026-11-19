@@ -31,7 +31,9 @@ Objetivo e próximo passo nas pontas, porque é o que a herdeira lê primeiro e 
 2. `## Estado` — onde a fase está: feitas, a que falta, a que pergunta. Só o que o `retomar` não diz.
 3. `## Decisões da fase` — cada decisão tomada nesta sessão, com o porquê.
 4. `## Tentado e descartado` — o que se tentou, por que não serviu. É o que mais se perde entre sessões.
-5. `## Ponteiros` — caminho, sha, número de proposta, id de decisão. **Ponteiro no lugar do conteúdo**: a herdeira lê o arquivo, a nota não o copia.
+5. `## Ponteiros` — caminho, sha, número de proposta, id de decisão. **Ponteiro no lugar do conteúdo**: a herdeira lê o arquivo, a nota não o copia. Duas linhas esperadas (o `passar` não as confere), porque a herdeira não as acha no git:
+   - `Canal do operador:` por onde o operador fala com a condução — `esta sessão` ou o relé (`send_message` para a sessão `<id>`, com a exigência de recibo que ele traz). A herdeira pergunta e reporta por esse canal, nunca na própria sessão se ele não a vê.
+   - `Próxima decisão: D<n>` — o número que a próxima decisão ao operador leva; a herdeira segue a contagem, nunca recomeça.
 6. `## Próximo passo` — o primeiro comando da herdeira depois da rotina de partida.
 
 Outra seção de nível 2, seção faltando ou fora da ordem ⇒ o verbo recusa (`nota-fora-do-molde`).

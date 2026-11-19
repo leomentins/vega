@@ -197,7 +197,7 @@ function perguntaDoResultado(p, tentativa) {
 
 test("um não seguido de um sim: o não abre a rodada nova, o sim fecha pela conferência", (t) => {
   const a = ambiente(t, [CELULAR, task("T2")]);
-  a.ok("autorizar-ciclo", "F1", "--sim", "sim, pode tocar a F1");
+  a.ok("autorizar-ciclo", "F1", "--sim", "sim, pode tocar a F1", "--pergunta", "p-00000000000000a1");
 
   // Rodada 1: a filha faz a parte da máquina; o resultado é do operador.
   a.abrirPeloProximo("T1", 1);
@@ -244,7 +244,7 @@ test("um não seguido de um sim: o não abre a rodada nova, o sim fecha pela con
 
 test("o 3º não pergunta ao operador e não abre a 4ª rodada", (t) => {
   const a = ambiente(t, [CELULAR]);
-  a.ok("autorizar-ciclo", "F1", "--sim", "sim");
+  a.ok("autorizar-ciclo", "F1", "--sim", "sim", "--pergunta", "p-00000000000000a1");
   for (const n of [1, 2]) {
     a.abrirPeloProximo("T1", n);
     a.maquina("T1", n, { "src/t1.mjs": `export const t1 = ${n};\n` });
@@ -262,7 +262,7 @@ test("o 3º não pergunta ao operador e não abre a 4ª rodada", (t) => {
 
 test("o caso do /gate-de-ux passa pelo mesmo caminho: o não do approval abre rodada por --rodada nao, o sim fecha", (t) => {
   const a = ambiente(t, [GATE]);
-  a.ok("autorizar-ciclo", "F1", "--sim", "sim");
+  a.ok("autorizar-ciclo", "F1", "--sim", "sim", "--pergunta", "p-00000000000000a1");
   a.abrirPeloProximo("T1", 1);
   a.maquina("T1", 1, { [APPROVAL]: approval("NEEDS_REWORK", 1) });
   const parado = a.proximo();
@@ -288,7 +288,7 @@ test("o caso do /gate-de-ux passa pelo mesmo caminho: o não do approval abre ro
 test("caso por arquivo: só o sim declarado fecha — approval ausente ou fora dos dois lados recusa", (t) => {
   for (const arquivos of [{ "src/t1.mjs": "export const t1 = 1;\n" }, { [APPROVAL]: approval("TIMEOUT_NO_RESPONSE", 1) }]) {
     const a = ambiente(t, [GATE]);
-    a.ok("autorizar-ciclo", "F1", "--sim", "sim");
+    a.ok("autorizar-ciclo", "F1", "--sim", "sim", "--pergunta", "p-00000000000000a1");
     a.abrirPeloProximo("T1", 1);
     a.maquina("T1", 1, arquivos);
     a.recusa("approval-sem-resposta", "registrar-conferencia", "T1", "--verificacao", "verde", "--publicacao", "nao-se-aplica");
@@ -297,9 +297,10 @@ test("caso por arquivo: só o sim declarado fecha — approval ausente ou fora d
 });
 
 test("(gate-de-ux) sem caso declarado no adaptador do repositório recusa, nunca vira task comum", (t) => {
-  const semConferencia = { projeto: "teste", operadores: [{ handle: "o", nome: "O" }], estado: { pasta: "teste/conducao" }, log: { pasta: "." }, pergunta: { destino: "log" } };
+  // O código do projeto de teste dá o registro de perguntas do autorizar; sem código, a pergunta recusa (T33).
+  const semConferencia = { versao: 2, codigo: "canonico.mjs", projeto: "teste", operadores: [{ handle: "o", nome: "O" }], estado: { pasta: "teste/conducao" }, log: { pasta: "." }, pergunta: { destino: "log" } };
   const a = ambiente(t, [GATE], { ".altair/adaptador.json": JSON.stringify(semConferencia) });
-  a.ok("autorizar-ciclo", "F1", "--sim", "sim");
+  a.ok("autorizar-ciclo", "F1", "--sim", "sim", "--pergunta", "p-00000000000000a1");
   a.abrirPeloProximo("T1", 1);
   a.maquina("T1", 1, { [APPROVAL]: approval("NEEDS_REWORK", 1) });
   a.recusa("conferencia-nao-declarada", "registrar-conferencia", "T1", "--verificacao", "verde", "--publicacao", "nao-se-aplica");
@@ -308,7 +309,7 @@ test("(gate-de-ux) sem caso declarado no adaptador do repositório recusa, nunca
 
 test("task comum: sem pergunta do resultado, --rodada e --operador recusam", (t) => {
   const a = ambiente(t, [task("T1")]);
-  a.ok("autorizar-ciclo", "F1", "--sim", "sim");
+  a.ok("autorizar-ciclo", "F1", "--sim", "sim", "--pergunta", "p-00000000000000a1");
   a.abrirPeloProximo("T1", 1);
   a.maquina("T1", 1, { "src/t1.mjs": "export const t1 = 1;\n" });
   const p = a.proximo();
@@ -321,7 +322,7 @@ test("task comum: sem pergunta do resultado, --rodada e --operador recusam", (t)
 
 test("--rodada carimbo é só do caso por arquivo", (t) => {
   const a = ambiente(t, [CELULAR]);
-  a.ok("autorizar-ciclo", "F1", "--sim", "sim");
+  a.ok("autorizar-ciclo", "F1", "--sim", "sim", "--pergunta", "p-00000000000000a1");
   a.abrirPeloProximo("T1", 1);
   a.maquina("T1", 1, { "src/t1.mjs": "export const t1 = 1;\n" });
   a.recusa("uso", "registrar-conferencia", "T1", "--rodada", "carimbo", "--operador", "não");

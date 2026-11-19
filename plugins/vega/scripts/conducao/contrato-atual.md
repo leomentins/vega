@@ -36,7 +36,7 @@ Alcance de cada conjunto:
 | `inscrever-na-proposta` | a condutora chama `subscribe_pr_activity` na proposta: no fechamento (`comPassosDoRamo`, T9) e, na ordem da troca, a herdeira dona antes de confirmar (`depois: "confirmar-passagem"`) |
 | `confirmar-passagem` | a herdeira dona e inscrita roda `confirmar-passagem --nonce`: marca `passagem confirmada`, com a árvore suja da anterior registrada (`arvoreSuja`) |
 | `retomar-da-passagem` | sem confirmação no prazo e época parada, na primeira falha: a anterior roda `retomar-da-passagem --nonce` (reanexa o ramo, grava a desistência) e arquiva a herdeira (`arquivar`), sem reabri-la |
-| `arquivar-se` | a anterior destituída vê a confirmação na ponta do ramo e se arquiva (`archive_session` da própria `sessao`) |
+| `arquivar-anterior` | a herdeira dona, logo depois da confirmação, com a anterior (`entrada.anterior`) não arquivada ou sem estado: `archive_session` da `sessao` dela (D19a); o `nonceArquivar` executado entra em `anterior.arquivamentos`, e duas vezes sem `ARCHIVED` sai `perguntar falha-de-arquivamento`. A anterior destituída não espera: solta a inscrição e para |
 | `desmontar-anterior` | a herdeira dona, depois da confirmação, com a anterior `ARCHIVED` e a árvore dela limpa, roda `desmontar-anterior --nonce --arquivadas <lista>`: o nome na lista da limpeza e `git worktree remove` sem `--force` |
 
 A lista de ações do cabeçalho de `conducao.mjs` não cita `fazer-condutora`; o código a emite (task de estação `condutora`). `fazer-maestra` é o nome antigo da mesma ação (D-VEGA26-21) e o código não o emite mais. Esta tabela segue o código.
@@ -45,17 +45,19 @@ A lista de ações do cabeçalho de `conducao.mjs` não cita `fazer-condutora`; 
 
 | ação | motivo | quando |
 | --- | --- | --- |
-| `perguntar` | `autorizar-ciclo` | fase seguinte sem autorização (ou nenhuma autorização ainda, com `sugestao`) e sem sim do ciclo que a cubra — inclusive task que mudou de classe ou de sensibilidade desde o sim; pede o sim do ciclo, porque o `autorizar-fase` foi aposentado (T13) |
+| `perguntar` | `autorizar-ciclo` | fase seguinte sem autorização (ou nenhuma autorização ainda, com `sugestao`) e sem sim do ciclo que a cubra — inclusive task que mudou de classe ou de sensibilidade desde o sim; pede o sim do ciclo, porque o `autorizar-fase` foi aposentado (T13); o sim entra com `--pergunta <p-…>`, a pergunta registrada de origem humana (VEGA-19 T16) |
 | `perguntar` | `entrada-invalida` | a entrada de quem conduz (`--entrada`) não se lê ou tem forma errada (`problemasDaEntrada`: campo desconhecido, lista que não é lista, tipo errado); vem antes de toda decisão, com `problemas` (T17) |
-| `perguntar` | `consentimento-nao-gravado` | tentativa trazida com caso que seguiu sem pergunta ainda sem registro no git (o `trazer` não o gravou, ou o registro `trazida` não se lê); vem antes de toda decisão, com `remedio: regravar-consentimentos` — a task não segue enquanto faltar (D-VEGA37-36, VEGA-37 T34) |
+| `perguntar` | `consentimento-nao-gravado` | tentativa trazida com caso que seguiu sem pergunta ainda sem registro no git (o `trazer` não o gravou); vem antes de toda decisão, com `remedio: regravar-consentimentos` — a task não segue enquanto faltar (D-VEGA37-36, VEGA-37 T34) |
+| `perguntar` | `trazida-ilegivel` | registro `trazida` cujos casos não se leem (trailer `Conducao-Consentidos` ilegível, ou sem `Conducao-Base` no regravar); vem antes de toda decisão, com `remedio: operador` e sem o comando do regravar, que releria o mesmo trailer (VEGA-19 T16) |
 | `perguntar` | `plano-mudou` | o canonico no HEAD difere do plano congelado na autorização, sem herança possível |
+| `perguntar` | `replano-repetido` | o re-plano com `Replano-Motivo` caberia na regra do re-plano sozinho, mas a chave dele já apareceu num re-plano anterior do ciclo: seguir, consertar o molde, ou os dois |
 | `perguntar` | `fase-autorizada-fora-do-plano` | nenhuma fase autorizada existe no plano congelado |
 | `perguntar` | `fase-reaberta-sem-fechamento` | fase reaberta cujas tasks novas não terminam em fechamento, ou reautorizada com o fechamento velho já conferido |
 | `perguntar` | `falha-de-arquivamento` | o mesmo `arquivar` executado 2 vezes sem a filha chegar a `ARCHIVED` |
 | `perguntar` | `ci-vermelho` | CI vermelho no HEAD antes do `encerrar-sessao` ou do `fechar-ciclo` |
 | `perguntar` | `trazida-sem-conferencia` | tentativa trazida sem conferência gravada (interrupção no meio do trazer); na task de conferência do operador por arquivo, traz `conferenciaDoOperador` (e `liveUxGate: true`, o nome antigo, mantido no caso por arquivo) |
 | `perguntar` | `conferencia-do-operador` | tentativa trazida de task de conferência do operador por pergunta (T14, 7-a): o resultado é do operador — opções `sim` (conferência com `--operador`) e `nao` (`--rodada nao --operador`, rodada nova) |
-| `perguntar` | `task-sensivel` | task com publicação ou caminho clínico, sem sim da fase que a cubra nem aprovação pelo nonce |
+| `perguntar` | `task-sensivel` | fora do sim dado à fase, task que toca caminho clínico (`caminhosQuePerguntam`) ou publica alterando o existente (`porque`: `caminho-clinico` · `publicacao-que-altera`), sem aprovação dela em `aprovacoes` (por task, toda tentativa); publicação só de acréscimo sai coberta pelo sim do ciclo (D18a) |
 | `perguntar` | `sem-saida` | nenhuma regra decide: tasks pendentes com dependências não feitas |
 | `perguntar` | `marcador-invalido` | tentativa em voo sem nonce legível no marcador |
 | `perguntar` | `pergunta-da-filha` | a filha avisou `T<k>-FALHA pergunta <nonce>`; resposta com re-plano encerra a tentativa por `registrar-falha --coberta pergunta --motivo`, fora de todo teto |
@@ -75,6 +77,8 @@ A lista de ações do cabeçalho de `conducao.mjs` não cita `fazer-condutora`; 
 | `parar` | `publicacao-recusada` | a fase tem task com `Conducao: T<k> publicacao recusada` |
 | `parar` | `workstation` | só resta task de estação `workstation` |
 | `parar` | `passagem-epoca-subiu` | anterior destituída sem confirmação da herdeira no prazo: a dona é a herdeira; a anterior não retoma e avisa o operador |
+| `parar` | `passagem-entregue` | anterior destituída, inscrição solta, com a confirmação já na ponta do ramo: para; a herdeira a arquiva (`arquivar-anterior`, D19a) |
+| `parar` | `passagem-entregue-sem-confirmacao` | anterior destituída, inscrição solta, sem confirmação ainda nem prazo vencido: para sem esperar (D19a) e leva ao operador a herdeira e o prazo (`prazoMin`, `minutos`) — se ela cair antes de confirmar, quem decide é ele |
 | `perguntar` | `passagem-sem-posse` | passagem aberta sem a época para decidir o papel (posse ilegível, sem posse, época torta) ou nota sem `Conducao-Lock` para a herdeira |
 | `perguntar` | `passagem-sem-fase-seguinte` | passagem de fronteira da última fase do plano: a fronteira dela é o fechamento do ciclo |
 | `perguntar` | `passagem-sem-confirmacao` | segunda falha de confirmação com a época parada na mesma fase |
@@ -156,7 +160,8 @@ A marca `encerrada` só conta com o trailer `Conducao-Encerrada` igual à fase d
 | `Conducao-Plano` | lerMarcas, ultimaAutorizacao | blob do canonico congelado na autorização |
 | `Conducao-Herdada` | lerMarcas | autorização herdada: aponta a marca com o sim do operador |
 | `Conducao-Ciclo` | lerMarcas | `sim` ⇒ a autorização é o sim do ciclo (`autorizar-ciclo`) |
-| `Conducao-Origem` | lerMarcas | origem da herança (`ciclo` ou `replano`), legível igual na marca gravada no modelo antigo de três papéis |
+| `Conducao-Pergunta` | consentimento.mjs (`perguntaCitadaDaMarca`) | na marca autorizada: a pergunta registrada do sim; na de consentimento: o `pergunta_id` dela, com `Conducao-Pergunta-Citada` no caso herdado (VEGA-19 T16) |
+| `Conducao-Origem` | lerMarcas | origem da herança (`ciclo`, `replano` ou `sozinho`, o re-plano que seguiu sem perguntar), legível igual na marca gravada no modelo antigo de três papéis |
 | `coberta-por-reinicio` | lerMarcas | `sim` ⇒ a falha caiu no reinício da ponte e não conta no teto |
 | `Conducao-Falha-Ambiente` | lerMarcas | `sim` ⇒ falha de ambiente: não conta no teto de falhas, conta no próprio |
 | `Conducao-Falha-Pergunta` | lerMarcas | `sim` ⇒ tentativa encerrada por pergunta da filha respondida com re-plano: não conta em teto nenhum |

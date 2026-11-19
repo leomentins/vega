@@ -7,14 +7,16 @@ import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 
-import { ErroDestino, escaparRegex, gravarNoGit, lerDestino, raizDoProjeto, raizPrincipal, varrerPhi } from "./destino.mjs";
+import { ErroDestino, escaparRegex, eventosDeLinha, gravarEventosNoGit, lerDestino, raizDoProjeto, raizPrincipal, varrerPhi } from "./destino.mjs";
 
 // Uso: node extrair-conversas.mjs --raiz <pasta projects do Claude Code> --saida <pasta de saida> [--projeto <regex>] [--repo <arvore>]
 // Saida: <saida>/resumo.json e, para cada conversa, o destino que o `.vega/` do projeto dela diz
 // (HN-29 T27, `destino.mjs`): `banco` (ou declaracao ausente, com aviso) vai para
 // <saida>/decisoes.jsonl (contrato de `estado.mjs decisao gravar`); `git` vai para o arquivo de
-// decisoes do projeto, com o PHI-gate de CPF/CNS na escrita. Declaracao ilegivel ou destino
-// desconhecido: exit 2, nada escrito. O projeto da conversa e a raiz git do `cwd` dela; pasta que
+// decisoes do projeto, com o PHI-gate de CPF/CNS na escrita — desde o VEGA-19 T13, em eventos
+// (`abertura` e, se houve, `resposta`), um arquivo por sessao na pasta do `decisoes.arquivo`
+// (`gravarEventosNoGit`): o item pendente de uma rodada recebe a resposta na seguinte.
+// Declaracao ilegivel ou destino desconhecido: exit 2, nada escrito. O projeto da conversa e a raiz git do `cwd` dela; pasta que
 // sumiu cai no `--repo` (padrao: esta arvore). Conversa de QUALQUER arvore do projeto do `--repo`
 // (a principal ou uma worktree, viva ou nao) grava na arvore do `--repo`: um arquivo so, que quem
 // roda leva ao ramo principal pela arvore dele. So conversa de outro projeto (`--projeto` largo)
@@ -177,7 +179,9 @@ const reCicloTexto = prefixosCiclo.size
 // Fecho de 16/11/2026 ("Diz D3 e a letra, ou texto livre, para eu seguir.") ou o antigo
 // ("Diz 3 e eu toco."), que segue lido: a coleta rele conversas passadas.
 const RE_FECHO = /Diz\s.{0,120}?e eu toco|Diz\s+D?\d+.{0,120}?para eu seguir/i;
-const RE_CABECALHO = /^\s*(?:#+\s*)?\*\*\s*(?:Decis(?:ão|ões)\b|\d+\s+decis)|Decisão de operador\s*—\s*divergência|^\s*\*\*\s*Decisão/i;
+// Cabeçalho de divergência: o velho (`Decisão de operador — divergência`, conversa antiga) e os três do mandato
+// (`Decisão de engenharia`, `Decisão societária`, `Decisão clínico-regulatória`, e os plurais; VEGA-19 T38).
+const RE_CABECALHO = /^\s*(?:#+\s*)?\*\*\s*(?:Decis(?:ão|ões)\b|\d+\s+decis)|Decis(?:ão|ões) (?:de operador|de engenharia|societárias?|clínico-regulatórias?)\s*—\s*divergência|^\s*\*\*\s*Decisão/i;
 const RE_ITEM = /^\s*(?:\*\*)?\s*((?:D-[A-Z0-9]+-\d+)|(?:[A-Z]{1,2}\d+(?:\.\d+)*)|(?:\d+(?:\.\d+)*))[.)](?:\*\*)?\s+(.+?)\s*$/;
 // Item do `/brainstorm` de consumidor ate 15/11/2026: `**D12 — titulo em comportamento**`, a linha
 // inteira em negrito, travessao no lugar do ponto. So com D e inteiro: negrito qualquer com
@@ -523,7 +527,7 @@ for (const arq of sessoes) {
       chavesEmitidas.add(linha.chave);
       if (destino.destino === "git") {
         if (!paraGit.has(destino.arquivo)) paraGit.set(destino.arquivo, []);
-        paraGit.get(destino.arquivo).push(linha);
+        paraGit.get(destino.arquivo).push(...eventosDeLinha(linha));
       } else saida.push(linha);
       resumo.itens_emitidos++;
       resumo.por_confianca[conf]++;
@@ -611,7 +615,7 @@ resumo.destino_git = [];
 let falhou = false;
 for (const [arquivo, linhas] of paraGit) {
   try {
-    const r = gravarNoGit({ arquivo, linhas });
+    const r = gravarEventosNoGit({ arquivo, eventos: linhas });
     resumo.descartadas_phi += r.descartadas_phi;
     resumo.destino_git.push({ arquivo, ...r });
   } catch (e) {
