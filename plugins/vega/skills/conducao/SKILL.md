@@ -139,7 +139,7 @@ Pergunta aberta não tem prazo e nunca é queda. A checagem de fora (o instalado
 
 ### 3.1 Gate ao operador
 
-O bloco de gate sai da pergunta registrada: a condutora abre a parada pelo `comando.mjs abrir` (`scripts/pergunta/`), `ponteiro` da ação dentro de `pergunta`, e mostra o bloco devolvido; recusa se corrige e reabre, nunca à mão; persistente, ao operador. Numeração da página do projeto (contador por ciclo: repasse mantém o número); o nonce vai no item. Em 3 níveis: §Três níveis.
+O bloco de gate sai da pergunta registrada: a condutora abre a parada pelo `scripts/pergunta/comando.mjs abrir`, `ponteiro` da ação em `pergunta`, `chave` dela na entrada; mostra o bloco; recusa se corrige e reabre, nunca à mão; persistente, ao operador. Numeração da página do projeto (contador por ciclo: repasse mantém o número); o nonce vai no item. Em 3 níveis: §Três níveis.
 
 ## 4. Push do ramo e CI da proposta
 

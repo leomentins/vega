@@ -151,6 +151,21 @@ export function decisaoDe(saida) {
   };
 }
 
+/** Token que cabe numa posição da chave escondida (a forma de `posicao` do renderizador). */
+const POSICAO_DA_CHAVE = /^[A-Za-z0-9_.-]{1,80}$/;
+
+/**
+ * A `chave` com que a condutora abre a parada como pergunta registrada (hotfix chave-da-pergunta,
+ * 23/11/2026): ciclo, fase e task da saída e a origem `condutora` (`filha` na `pergunta-da-filha`). Posição fora da forma fica de
+ * fora (sai `-`), nunca derruba a parada. A maestra que repassa troca a origem e põe `codigos`.
+ */
+export function chaveDa(saida) {
+  // A pergunta que a filha levantou leva a origem dela (regra 5: o papel de quem levantou).
+  const chave = { origem: saida?.motivo === "pergunta-da-filha" ? "filha" : "condutora" };
+  for (const k of ["ciclo", "fase", "task"]) if (typeof saida?.[k] === "string" && POSICAO_DA_CHAVE.test(saida[k])) chave[k] = saida[k];
+  return chave;
+}
+
 /** Prefixo do `ponteiro` da parada registrada: `conducao:<motivo>:<id da decisão>`. */
 export const PONTEIRO_DA_PARADA = "conducao:";
 /** As paradas cujo "sim" entra pelo `autorizar-ciclo F<n> --pergunta` (SKILL §3), que confere o ponteiro. */

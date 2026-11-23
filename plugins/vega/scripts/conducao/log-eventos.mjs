@@ -201,7 +201,7 @@ function objetosDa(saida) {
 
 /** Atributos da saída que passam a allowlist; `descartados` são as chaves que caíram. */
 export function filtrarAtributos(saida) {
-  const ignorar = new Set(["acao", "ciclo", "fase", "task", "sessao", "tarefas"]);
+  const ignorar = new Set(["acao", "ciclo", "fase", "task", "sessao", "tarefas", "chave"]);
   const atributos = {};
   const descartados = [];
   for (let [k, v] of Object.entries(saida)) {

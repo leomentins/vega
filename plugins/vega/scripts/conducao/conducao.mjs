@@ -3259,13 +3259,17 @@ function verboDeGit(verbo, resto, { repo, ciclo }) {
 
 /**
  * A parada sai com o `ponteiro` da pergunta registrada (`pergunta.ponteiroDa`,
- * SKILL §3.1), o mesmo id que o evento do log grava; ponteiro que o verbo já
+ * SKILL §3.1) e a `chave` escondida (`pergunta.chaveDa`: ciclo, fase, task,
+ * origem `condutora`), o mesmo id que o evento do log grava; ponteiro que o verbo já
  * pôs fica. Pura: chamada em todo lugar onde uma parada vira JSON, antes do
  * log, para o ponteiro não depender do adaptador se ler. Parada que não passou
  * pelo construtor sai sem ponteiro, com aviso no stderr.
  */
 function comPonteiro(saida) {
-  if (saida?.acao !== "perguntar" || saida.ponteiro !== undefined) return saida;
+  if (saida?.acao !== "perguntar") return saida;
+  // A chave escondida da parada (hotfix chave-da-pergunta, 23/11/2026): a condutora a passa ao `abrir`.
+  if (saida.chave === undefined) saida.chave = pergunta.chaveDa(saida);
+  if (saida.ponteiro !== undefined) return saida;
   if (pergunta.foiConstruida(saida)) saida.ponteiro = pergunta.ponteiroDa(saida);
   else process.stderr.write(`conducao: pergunta ${JSON.stringify(saida.motivo ?? null)} fora do construtor: sai sem ponteiro e sem evento tipado\n`);
   return saida;

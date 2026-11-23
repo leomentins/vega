@@ -22,6 +22,10 @@
  * - `abrir` — entrada `{ sessao?, ciclo?, chave?, pergunta, supersedes? }`; grava o evento `abertura`
  *   (a sessão é o id do transcript local: sem ela, `CLAUDE_CODE_SESSION_ID`; id de nuvem recusa,
  *   `sessaoDoAbrir`; a reabertura que só corrige um id de nuvem gravado devolve o id antigo)
+ *   (a chave escondida se completa do contexto, `completarChave`: chave dada > log da condução >
+ *   ramo > `-` — o log dá ciclo, fase e task pela sessão da árvore `bridge-cse_<X>`, a origem vem do
+ *   ramo; `--ciclo/--fase/--task/--origem` entram na chave — hotfixes chave-da-pergunta e
+ *   vega-chave-do-log-da-conducao, 23/11/2026)
  *   (idempotente: o mesmo estado dá o mesmo `pergunta_id` e a mesma chave) e devolve o bloco. Registro
  *   fora do ar não trava: o bloco sai marcado `sem registro` e o evento fica na fila (D-VEGA19-24).
  *   Reabertura calada some (T45, D-VEGA19-56): a mesma sessão, número e assunto com outro conteúdo
@@ -79,6 +83,8 @@ import { SESSAO_DO_CONSENTIMENTO } from "../conducao/consentimento.mjs";
 import { carregar as carregarDestinatarios } from "./destinatarios.mjs";
 import { origemEfetiva as origemDaProva, SESSAO_DE_NUVEM } from "./prova.mjs";
 import { renderizar } from "./renderizar.mjs";
+import { chaveDoRamo, ramoAtual } from "./chave.mjs";
+import { chaveDoLog, sessaoDaArvore } from "./chave-do-log.mjs";
 import { sombrear } from "./sombra.mjs";
 import { caminhoDeCodigo, caminhoDoEmbutido, codigoDoAdaptador, ehNomeEmbutido, lerAdaptador } from "../conducao/adaptador.mjs";
 
@@ -498,6 +504,67 @@ async function conferirReaberturaNoRegistro(registro, { p, bruta, sessao, ciclo,
   return escolhida;
 }
 
+/** As posições da chave escondida que o chamador dá (regra 5 do contrato de formato). */
+const CAMPOS_DA_CHAVE = new Set(["ciclo", "fase", "task", "origem", "codigos"]);
+export { chaveDoRamo, ramoAtual };
+
+/**
+ * A chave escondida completa (hotfix chave-da-pergunta, 23/11/2026; log da condução no hotfix
+ * vega-chave-do-log-da-conducao, mesmo dia). Precedência de cada posição: **chave dada > log da
+ * condução > ramo > `-`**. O `ciclo` da entrada conta como dado. Do log (`log` = `{ ciclo, fase?, task? }`,
+ * o ciclo do log lido) vêm o ciclo (quando o ramo não o diz: HEAD solto), a fase e a task; fase e task
+ * só entram se o ciclo do log é o ciclo final da chave. A origem segue do ramo. Sem nada a dizer,
+ * `null` (a chave sai `-/-/-` · `avulsa`, como antes). Exportada para teste.
+ */
+export function completarChave(chave, { ciclo = null, ramo = null, log = null } = {}) {
+  if (chave !== null && chave !== undefined && (typeof chave !== "object" || Array.isArray(chave))) throw new ErroComando("abrir: chave esperada objeto { ciclo?, fase?, task?, origem?, codigos? }");
+  const dada = chave ?? {};
+  for (const k of Object.keys(dada)) if (!CAMPOS_DA_CHAVE.has(k)) throw new ErroComando(`abrir: chave.${k.replace(/[^A-Za-z0-9_]/g, "").slice(0, 40)} desconhecida`);
+  const vazia = (v) => v === undefined || v === null || v === "" || v === "-";
+  // O deduzido que não cabe numa posição (slug longo, caractere fora) cai calado e a posição sai `-`:
+  // quem não pediu a chave não passa a ter o `abrir` recusado por ela. A chave dada segue recusando.
+  const cabe = (v) => typeof v === "string" && /^[A-Za-z0-9_.-]{1,80}$/.test(v);
+  const doRamo = chaveDoRamo(ramo);
+  const out = { ...dada };
+  const doLog = log && typeof log === "object" ? log : {};
+  const cicloDeduzido = [ciclo, doLog.ciclo, doRamo.ciclo].find(cabe);
+  if (vazia(out.ciclo) && cicloDeduzido) out.ciclo = cicloDeduzido;
+  // O log fala de um ciclo (o dele, ou o lido pelo ciclo conhecido): fase e task só valem nesse ciclo.
+  if (cabe(doLog.ciclo) && out.ciclo === doLog.ciclo) {
+    if (vazia(out.fase) && cabe(doLog.fase)) out.fase = doLog.fase;
+    if (vazia(out.task) && cabe(doLog.task)) out.task = doLog.task;
+  }
+  if (vazia(out.origem) && doRamo.origem) out.origem = doRamo.origem;
+  for (const k of Object.keys(out)) if (out[k] === undefined || out[k] === null) delete out[k];
+  return Object.keys(out).length ? out : null;
+}
+
+/**
+ * O que o log da condução diz da chave, para o `abrir`: `conducao` = `{ pasta, sessao }` (a pasta do
+ * log e a sessão da nuvem da árvore, `sessaoDaArvore`). Sem `conducao`, `null` (o `abrir` chamado
+ * direto segue como antes). O ciclo a ler: o da chave dada, o da entrada, o do ramo; nenhum, procura
+ * a sessão nos logs. Nunca lança: log ausente ou ilegível cai no que o ramo diz.
+ */
+function logDaConducao(entrada, ramo, conducao) {
+  if (!conducao || typeof conducao !== "object") return null;
+  const dado = entrada.chave && typeof entrada.chave === "object" ? entrada.chave.ciclo : null;
+  const ciclo = [dado, entrada.ciclo, chaveDoRamo(ramo).ciclo].find((v) => typeof v === "string" && v !== "" && v !== "-") ?? null;
+  const lido = chaveDoLog({ pasta: conducao.pasta ?? null, ciclo, sessao: conducao.sessao ?? null });
+  // Lido pelo ciclo conhecido, o log fala dele: o ciclo vai junto para a fase e a task valerem nele.
+  return lido.ciclo || !ciclo || !(lido.fase || lido.task) ? lido : { ciclo, ...lido };
+}
+
+/** A pasta do log e a sessão da árvore em `cwd`, para o `abrir` da linha de comando; erro vira `null`. */
+export function conducaoDoCwd(raiz, cwd) {
+  let pasta = null;
+  try {
+    pasta = lerAdaptador(raiz).pastaDoLog ?? null;
+  } catch {
+    pasta = null;
+  }
+  return { pasta, sessao: sessaoDaArvore(cwd) };
+}
+
 /**
  * A sessão da abertura (hotfix pergunta-nao-pede-resposta-duas-vezes, 20/11/2026): é o id do
  * transcript local, onde o operador lê o bloco e responde — a prova da resposta se lê por ele. Sem
@@ -524,11 +591,12 @@ export function sessaoDoAbrir(daEntrada, env = process.env) {
  * Abre a pergunta: valida pela forma, grava a abertura e só então devolve o bloco.
  * Devolve `{ pergunta_id, texto, nativo, sem_registro, motivo, gravados, ja_existiam, fila }`.
  */
-export async function abrir(entrada, { registro, destinatarios = carregarDestinatarios(), carimbo, sombra = null, env = process.env } = {}) {
+export async function abrir(entrada, { registro, destinatarios = carregarDestinatarios(), carimbo, sombra = null, env = process.env, ramo = null, conducao = null } = {}) {
   if (!entrada || typeof entrada !== "object" || Array.isArray(entrada)) throw new ErroComando("abrir: esperado objeto { sessao?, ciclo?, chave?, pergunta }");
   for (const k of Object.keys(entrada)) if (!CAMPOS_DO_ABRIR.has(k)) throw new ErroComando(`abrir: campo desconhecido ${k.replace(/[^A-Za-z0-9_]/g, "").slice(0, 40)}`);
-  const { ciclo = null, chave = null, achado = false, supersedes = null } = entrada;
+  const { ciclo = null, achado = false, supersedes = null } = entrada;
   const sessao = sessaoDoAbrir(entrada.sessao, env);
+  const chave = completarChave(entrada.chave ?? null, { ciclo, ramo, log: logDaConducao(entrada, ramo, conducao) });
   if (typeof achado !== "boolean") throw new ErroComando("abrir: achado e booleano");
   if (supersedes !== null && !(typeof supersedes === "string" && PERGUNTA_ID.test(supersedes))) throw new ErroComando("abrir: supersedes esperado p-<16 hex>");
   if (ciclo !== null && !(typeof ciclo === "string" && CICLO.test(ciclo))) throw new ErroComando("abrir: ciclo fora da forma ([A-Za-z][A-Za-z0-9._-])");
@@ -552,6 +620,13 @@ export async function abrir(entrada, { registro, destinatarios = carregarDestina
   const existente = reaberta.existente?.pergunta_id === p.id ? reaberta.existente : null;
   const aberta_em = existente?.carimbo ?? carimbo ?? null;
   const ev = eventoDeAbertura(p, { sessao, ciclo, ...(aberta_em ? { carimbo: aberta_em } : {}), achado, supersedes: supersedes === p.id ? (existente?.supersedes ?? null) : supersedes });
+  // O bloco se renderiza ANTES de gravar: chave fora da forma recusa sem deixar abertura sem bloco.
+  let render;
+  try {
+    render = renderizar(p, { ...opcoes, ...(chave ? { chave } : {}), ...(achado ? { achado } : {}) });
+  } catch (e) {
+    throw new ErroComando(`chave fora da forma: ${e.message}`);
+  }
   const r = await registro.gravar("abrir", [ev]);
   // A sombra do Sistema 1 (T21, AC-VEGA19-6): depois de gravar a abertura, espera a previsão com o
   // teto duro de 5 s na espera do modelo (D-VEGA19-65); a releitura e a gravação da linha têm o
@@ -559,7 +634,6 @@ export async function abrir(entrada, { registro, destinatarios = carregarDestina
   // `.claude/scripts/estado/lib/pergunta.mjs`, com a fila local depois dele; `PRAZO_DO_VERBO_MS` é
   // só o envelope do processo. Uma leitura só (a do comando vai à sombra). Nada dela entra no bloco.
   if (sombra) await chamarSombra(sombra, { p, registro });
-  const render = renderizar(p, { ...opcoes, ...(chave ? { chave } : {}), ...(achado ? { achado } : {}) });
   const marca = r.sem_registro ? `<!-- pergunta ${p.id} · sem registro -->` : `<!-- pergunta ${p.id} -->`;
   const texto = r.sem_registro ? `${render.texto}\n\n_sem registro: a pergunta ficou na fila local da estacao_\n${marca}` : `${render.texto}\n${marca}`;
   return { pergunta_id: p.id, aberta_em: ev.carimbo, texto, nativo: render.nativo, sem_registro: r.sem_registro, motivo: r.motivo ?? null, gravados: r.gravados, ja_existiam: r.ja_existiam, fila: r.fila ?? null };
@@ -979,7 +1053,7 @@ export function formatarLeitura(r, { formatarAbertas } = {}) {
 // ── CLI ─────────────────────────────────────────────────────────────────────
 
 const USO =
-  "uso: comando.mjs abrir --arquivo <json|-> [--supersedes <p-id>] [--json]\n" +
+  "uso: comando.mjs abrir --arquivo <json|-> [--supersedes <p-id>] [--ciclo <id>] [--fase F<n>] [--task T<k>] [--origem <papel>] [--json]\n" +
   "     comando.mjs responder --pergunta <p-id> --literal <texto> [--origem agente] [--recibo \"<sessao> <evento>\"] [--por <direto|hub:<sessao>|pessoa:<id>>]\n" +
   "                 [--destino <destino> [--porque <da lista curta> --severidade <s> --gatilho <texto> [--porque-livre <linha>]]] [--json]\n" +
   "     comando.mjs dispensar --pergunta <p-id> [--motivo <texto>] [--json]\n" +
@@ -988,7 +1062,7 @@ const USO =
   "     (--repo <raiz> em todos; padrao: a raiz do repositorio)";
 
 const FLAGS = {
-  abrir: ["arquivo", "supersedes", "repo"],
+  abrir: ["arquivo", "supersedes", "ciclo", "fase", "task", "origem", "repo"],
   responder: ["pergunta", "literal", "origem", "recibo", "por", "destino", "porque", "porque-livre", "severidade", "gatilho", "repo"],
   dispensar: ["pergunta", "motivo", "repo"],
   destino: ["pergunta", "ponteiro", "repo"],
@@ -1027,6 +1101,19 @@ export function parsear(argv) {
   return { opcoes: o };
 }
 
+/**
+ * `--ciclo/--fase/--task/--origem` do `abrir` entram na `chave` da entrada; o mesmo campo com outro
+ * valor na entrada recusa (nunca se escolhe calado). Exportada para teste.
+ */
+export function chaveDosFlags(entrada, o) {
+  const dos = Object.fromEntries(["ciclo", "fase", "task", "origem"].filter((k) => o[k] !== undefined).map((k) => [k, o[k]]));
+  if (Object.keys(dos).length === 0) return entrada;
+  if (!entrada || typeof entrada !== "object" || Array.isArray(entrada)) throw new ErroComando("abrir: esperado objeto { sessao, ciclo?, chave?, pergunta }");
+  const dada = entrada.chave && typeof entrada.chave === "object" ? entrada.chave : {};
+  for (const [k, v] of Object.entries(dos)) if (dada[k] != null && dada[k] !== v) throw new ErroComando(`--${k} diverge da chave.${k} da entrada`);
+  return { ...entrada, chave: { ...dada, ...dos } };
+}
+
 const RAIZ_PADRAO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "..");
 
 export async function principal(argv, { registro = null, stdout = process.stdout, stderr = process.stderr } = {}) {
@@ -1050,7 +1137,9 @@ export async function principal(argv, { registro = null, stdout = process.stdout
         if (entrada.supersedes != null && entrada.supersedes !== o.supersedes) throw new ErroComando("--supersedes diverge do supersedes da entrada");
         entrada = { ...entrada, supersedes: o.supersedes };
       }
-      r = await abrir(entrada, { registro: reg, sombra: sombrear });
+      entrada = chaveDosFlags(entrada, o);
+      const ondeAbre = o.repo ? path.resolve(o.repo) : process.cwd();
+      r = await abrir(entrada, { registro: reg, sombra: sombrear, ramo: ramoAtual(ondeAbre), conducao: conducaoDoCwd(o.repo ? path.resolve(o.repo) : RAIZ_PADRAO, ondeAbre) });
       stdout.write(o.json ? `${JSON.stringify(r, null, 2)}\n` : `${r.texto}\n`);
     } else if (o.verbo === "responder") {
       const temDivida = ["porque", "porque-livre", "severidade", "gatilho"].some((k) => o[k] !== undefined);
