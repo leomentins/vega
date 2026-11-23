@@ -46,6 +46,8 @@ function exemplo(t) {
   for (const [k, v] of [["core.hooksPath", "/dev/null"], ["user.name", "teste"], ["user.email", "teste@example.invalid"], ["commit.gpgsign", "false"]]) g("config", k, v);
   g("add", "-A");
   g("commit", "-q", "-m", "projeto de exemplo");
+  // Ciclo de 2 níveis declarado: sem a marca, o núcleo roda em 3 (D10c do L4).
+  g("commit", "-q", "--allow-empty", "-m", "Conducao: ciclo niveis 2", "-m", "Conducao-Niveis: 2");
   const antes = process.env.CLAUDE_CONFIG_DIR;
   process.env.CLAUDE_CONFIG_DIR = config;
   t.after(() => (antes === undefined ? delete process.env.CLAUDE_CONFIG_DIR : (process.env.CLAUDE_CONFIG_DIR = antes)));

@@ -214,7 +214,8 @@ test("fechar-ciclo cria a condutora de fechamento", (t) => {
     textoDoFechamento: (a) => textoDoFechamento({ ...a, fechamento: "/close-cycle" }),
     fechamentoDoCiclo: () => "/close-cycle",
   });
-  assert.match(comComando.criar.texto, /^\/close-cycle TESTE-1-conducao\n/);
+  assert.match(comComando.criar.texto, /^Rode o \/close-cycle do TESTE-1-conducao\.\n/);
+  assert.doesNotMatch(comComando.criar.texto, /^\s*\//);
 
   // CI vermelho ou pendente não cria.
   const vermelho = fecharCiclo(r.dir, { ci: { sha: "h".repeat(40), veredito: "vermelho", run: 8 } });

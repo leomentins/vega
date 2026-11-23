@@ -90,6 +90,8 @@ function novoRepo(t, texto = PADRAO()) {
   for (const [k, v] of [["core.hooksPath", "/dev/null"], ["user.name", "teste"], ["user.email", "teste@example.invalid"], ["commit.gpgsign", "false"]])
     g("config", k, v);
   g("remote", "add", "origin", origin);
+  // Sem marca o ciclo roda em 3 níveis: estes testes exercitam o caminho de 2, declarado antes do plano.
+  g("commit", "-q", "--allow-empty", "-m", "Conducao: ciclo niveis 2", "-m", "Conducao-Niveis: 2");
   mkdirSync(path.join(dir, path.dirname(CAMINHO)), { recursive: true });
   writeFileSync(path.join(dir, CAMINHO), texto);
   writeFileSync(path.join(dir, "README.md"), "fixture\n");

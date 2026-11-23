@@ -84,6 +84,8 @@ function ambiente(t, { preparar = null } = {}) {
   g("commit", "-q", "-m", "projeto de exemplo");
   g("push", "-q", "origin", "main");
   g("checkout", "-q", "-b", RAMO);
+  // Ciclo de 2 níveis declarado: sem a marca, o núcleo roda em 3 (D10c do L4).
+  g("commit", "-q", "--allow-empty", "-m", "Conducao: ciclo niveis 2", "-m", "Conducao-Niveis: 2");
   g("push", "-q", "origin", RAMO);
 
   const filha = path.join(raiz, "filha");

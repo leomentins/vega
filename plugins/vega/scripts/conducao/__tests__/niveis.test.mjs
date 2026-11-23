@@ -19,7 +19,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { BOTOES } from "../botoes.mjs";
-import { lerNiveis, maestra, nonce, proximo, textoDaHerdeira } from "../conducao.mjs";
+import { escolhaDaHerdeira, lerNiveis, maestra, nonce, proximo, textoDaHerdeira } from "../conducao.mjs";
 import { gravarAtendido, gravarPedido, lerAtendido, lerPedido, registrarNiveis, trocarLeitorDaPosse } from "../git-conducao.mjs";
 import { lerMarcas, niveisDasMarcas } from "../marcas.mjs";
 import {
@@ -28,7 +28,8 @@ import {
   decidirMaestra,
   maestrasEmTresNiveis,
   parDeInteiros,
-  recomendarNiveis,
+  opcoesDaHerdeira,
+  PONTEIRO_DA_HERDEIRA,
 } from "../niveis.mjs";
 import { perguntar } from "../pergunta.mjs";
 import { regraPassagem } from "../regras.mjs";
@@ -54,17 +55,6 @@ test("a cadeia: 2 níveis gasta um elo por passagem, 3 níveis só por passagem 
   assert.equal(parDeInteiros("1/x"), null);
 });
 
-test("a recomendação: 3 quando o ciclo estimado não cabe em 2 níveis", () => {
-  // 4 fases ⇒ 4 + 1 + 4 = 9 sessões de condutora; 2 níveis comportam 8 a partir de 0.
-  const longo = recomendarNiveis({ fases: 4, linhagem: { depth: 0, limit: 8 } });
-  assert.equal(longo.recomendada, "3");
-  assert.equal(longo.estimadas, 9);
-  assert.equal(longo.passagensDeMaestra, 6);
-  // 2 fases ⇒ 5 sessões: cabe.
-  assert.equal(recomendarNiveis({ fases: 2, linhagem: { depth: 0, limit: 8 } }).recomendada, "2");
-  // A mesma de 2 fases, aberta já em profundidade 4: 4 condutoras cabem, 5 não.
-  assert.equal(recomendarNiveis({ fases: 2, linhagem: { depth: 4, limit: 8 } }).recomendada, "3");
-});
 
 // ── nível 1: o criar-condutora em 3 níveis e em 2 ───────────────────────────
 
@@ -157,8 +147,21 @@ test("maestra: cria a condutora pedida e responde à pedinte", () => {
   assert.deepEqual([r.linhagem.condutoraEm, r.linhagem.operariaEm, r.linhagem.passagensDeMaestraRestantes], [1, 2, 6]);
 });
 
-test("maestra: passada do corte com cadeia livre, passa o comando à herdeira com o pedido pendente", () => {
-  const r = maestraCom({ linhagem: { depth: 2, limit: 8 }, contexto: { usados: 400_000, max: 1_000_000 }, ordinal: 3, registro: [{ sessao: "session_c1", fase: "F1" }] });
+test("maestra: passada do corte com cadeia livre, pergunta a herdeira ao operador; com o sim, passa o comando (D13a)", () => {
+  const corte = { linhagem: { depth: 2, limit: 8 }, contexto: { usados: 400_000, max: 1_000_000 }, ordinal: 3, registro: [{ sessao: "session_c1", fase: "F1" }] };
+  const p = maestraCom(corte);
+  assert.equal(p.acao, "perguntar");
+  assert.equal(p.motivo, "herdeira-da-maestra");
+  assert.deepEqual(p.opcoes.map((o) => o.id), ["a", "b", "c"]);
+  assert.match(p.opcoes[0].texto, /maestra 4 /);
+  assert.equal(maestraCom({ ...corte, herdeira: { pergunta: "p-0000000000000001", escolha: null, aviso: "registro fora" } }).motivo, "herdeira-da-maestra");
+  const nao = maestraCom({ ...corte, herdeira: { pergunta: "p-0000000000000001", escolha: "nao" } });
+  assert.equal(nao.acao, "criar-condutora");
+  assert.match(nao.aviso, /disse não/);
+  const sempre = maestraCom({ ...corte, herdeira: { pergunta: "p-00000000000000aa", escolha: "sempre" } });
+  assert.match(sempre.texto, /--herdeira p-00000000000000aa/);
+  const r = maestraCom({ ...corte, herdeira: { pergunta: "p-0000000000000001", escolha: "sim" } });
+  assert.doesNotMatch(r.texto, /--herdeira/);
   assert.equal(r.acao, "passar-maestra");
   assert.equal(r.nome, `${CICLO} · maestra · 4`);
   assert.match(r.texto, new RegExp(`--ordinal 4 --nonce ${"3".repeat(16)} --anterior session_maestra`));
@@ -244,9 +247,9 @@ function novoRepo(t) {
   return { repo, g: (...a) => g(repo, ...a) };
 }
 
-test("a marca niveis: sem ela e sem autorização, sem-escolha; gravada, vale a última", (t) => {
+test("a marca niveis: sem ela e sem autorização, 3 (padrão, D10c do L4); gravada, vale a última", (t) => {
   const { repo } = novoRepo(t);
-  assert.deepEqual(niveisDasMarcas(lerMarcas(repo)), { niveis: null, origem: "sem-escolha", sha: null });
+  assert.deepEqual(niveisDasMarcas(lerMarcas(repo)), { niveis: 3, origem: "padrao", sha: null });
   const r = registrarNiveis({ repo, ciclo: CICLO, niveis: 3, sim: "três níveis, ciclo longo" });
   assert.equal(r.niveis, 3);
   assert.deepEqual([niveisDasMarcas(lerMarcas(repo)).niveis, niveisDasMarcas(lerMarcas(repo)).origem], [3, "marca"]);
@@ -260,16 +263,11 @@ test("ciclo já autorizado sem a marca roda em 2 níveis (legado), sem perguntar
   assert.deepEqual(niveisDasMarcas([{ tipo: "autorizada", sha: "x", fase: "F1" }]), { niveis: 2, origem: "legado", sha: null });
 });
 
-test("lerNiveis: sem escolha pergunta com as duas opções e a recomendação; escolhido, devolve", (t) => {
+test("lerNiveis: nunca pergunta; sem marca, 3 (padrão); a marca antiga ainda vale", (t) => {
   const { repo } = novoRepo(t);
-  const p = lerNiveis({ repo, ciclo: CICLO, linhagem: "0/8" });
-  assert.equal(p.acao, "perguntar");
-  assert.equal(p.motivo, "niveis");
-  assert.deepEqual(p.opcoes.map((o) => o.id), ["3", "2"]);
-  // 2 fases ⇒ 5 sessões estimadas, cabe em 2 níveis.
-  assert.equal(p.recomendada, "2");
-  registrarNiveis({ repo, ciclo: CICLO, niveis: 3, sim: "três" });
-  assert.deepEqual([lerNiveis({ repo, ciclo: CICLO }).acao, lerNiveis({ repo, ciclo: CICLO }).niveis], ["niveis", 3]);
+  assert.deepEqual(lerNiveis({ repo, ciclo: CICLO, linhagem: "0/8" }), { acao: "niveis", ciclo: CICLO, niveis: 3, origem: "padrao", sha: null });
+  registrarNiveis({ repo, ciclo: CICLO, niveis: 2, sim: "dois" });
+  assert.deepEqual([lerNiveis({ repo, ciclo: CICLO }).niveis, lerNiveis({ repo, ciclo: CICLO }).origem], [2, "marca"]);
 });
 
 test("o pedido de herdeira vai e volta pelo origin, preso ao HEAD, idempotente no mesmo nonce", (t) => {
@@ -311,7 +309,7 @@ test("2 níveis: o teto da linhagem vale também no criar do fechar-ciclo", () =
 
 test("maestra: contexto ilegível pergunta, e a borda depth+3 = limit ainda passa", () => {
   assert.equal(maestraCom({ linhagem: { depth: 0, limit: 8 }, contexto: null }).motivo, "contexto-ausente");
-  assert.equal(maestraCom({ linhagem: { depth: 5, limit: 8 }, contexto: { usados: 400_000, max: 1_000_000 } }).acao, "passar-maestra");
+  assert.equal(maestraCom({ linhagem: { depth: 5, limit: 8 }, contexto: { usados: 400_000, max: 1_000_000 }, herdeira: { escolha: "sim" } }).acao, "passar-maestra");
   assert.equal(maestraCom({ linhagem: { depth: 6, limit: 8 }, contexto: { usados: 400_000, max: 1_000_000 } }).ultimaMaestra, true);
 });
 
@@ -322,19 +320,10 @@ test("maestra: pedido sem pedinte pergunta; pedido já atendido só responde de 
   assert.deepEqual(r.responder, { para: "session_condutora", mensagem: `HERDEIRA session_criada ${"3".repeat(16)} session_maestra` });
 });
 
-test("a recomendação sem plano ou sem linhagem sai nula, com o motivo", () => {
-  assert.deepEqual([recomendarNiveis({ fases: null, linhagem: { depth: 0, limit: 8 } }).recomendada, recomendarNiveis({ fases: null, linhagem: { depth: 0, limit: 8 } }).semRecomendacao], [null, "plano-ilegivel"]);
-  assert.equal(recomendarNiveis({ fases: 3 }).semRecomendacao, "linhagem-ausente");
-});
-
-test("proximo: com a linhagem e sem a marca, antes de autorizar, pergunta os níveis; sem a linhagem, segue como antes", (t) => {
+test("proximo: sem a marca, com ou sem a linhagem, não pergunta os níveis: segue para a autorização", (t) => {
   const { repo } = novoRepo(t);
-  const p = proximo({ repo, ciclo: CICLO, entrada: { linhagem: { depth: 0, limit: 8 } } });
-  assert.equal(p.motivo, "niveis");
-  assert.equal(p.recomendada, "2");
-  assert.equal(proximo({ repo, ciclo: CICLO, entrada: {} }).motivo, "autorizar-ciclo");
-  registrarNiveis({ repo, ciclo: CICLO, niveis: 3, sim: "três" });
   assert.equal(proximo({ repo, ciclo: CICLO, entrada: { linhagem: { depth: 0, limit: 8 } } }).motivo, "autorizar-ciclo");
+  assert.equal(proximo({ repo, ciclo: CICLO, entrada: {} }).motivo, "autorizar-ciclo");
 });
 
 test("o verbo maestra: só em 3 níveis; a primeira condutora pela fase do ramo; o pedido atendido não cria outra", (t) => {
@@ -343,6 +332,8 @@ test("o verbo maestra: só em 3 níveis; a primeira condutora pela fase do ramo;
   assert.throws(() => maestra({ repo, ciclo: CICLO, sessao: "s", linhagem: "0/8", contexto: "1/10" }), (e) => e.codigo === "ramo-do-ciclo-ausente");
   g("branch", "-m", `ciclo-${CICLO}`);
   const args = { repo, ciclo: CICLO, sessao: "session_maestra", linhagem: "0/8", contexto: "1/1000000" };
+  // Sem marca vale 3; a marca antiga de 2 ainda tira a maestra.
+  registrarNiveis({ repo, ciclo: CICLO, niveis: 2, sim: "dois" });
   assert.equal(maestra(args).motivo, "niveis-nao-tres");
   registrarNiveis({ repo, ciclo: CICLO, niveis: 3, sim: "três" });
   const primeira = maestra(args);
@@ -378,4 +369,33 @@ test("origin inalcançável não se lê como pedido ausente", (t) => {
   g("remote", "set-url", "origin", "/caminho/que/nao/existe.git");
   assert.equal(lerPedido({ repo, ciclo: CICLO, nonce: "9".repeat(16) }).motivo, "pedido-inalcancavel");
   assert.throws(() => lerAtendido({ repo, ciclo: CICLO, nonce: "9".repeat(16) }), (e) => e.codigo === "pedido-inalcancavel");
+});
+
+test("escolhaDaHerdeira: só o sim lido no registro passa; fora do ar, sem prova ou de outra passagem, pergunta de novo (D17b)", () => {
+  const P = "p-00000000000000b1";
+  const opcoes = (ordinal) => opcoesDaHerdeira(ordinal).map((o) => ({ letra: o.id, texto: o.texto }));
+  const ab = (o = opcoes(3), extra = {}) => ({ pergunta_id: P, ciclo: CICLO, ponteiro: PONTEIRO_DA_HERDEIRA, itens: [{ numero: 1, opcoes: o }], ...extra });
+  const ler = (r) => () => r;
+  const com = (r, ordinal = 3) => escolhaDaHerdeira({ repo: RAIZ, ciclo: CICLO, pergunta_id: P, ordinal, ler: ler(r) });
+  const humana = { origem: "digitado", abertura: ab() };
+  assert.equal(com({ ...humana, escolhas: [{ numero: 1, letra: "a" }] }).escolha, "sim");
+  assert.equal(com({ ...humana, escolhas: [{ numero: 1, letra: "a" }] }, 4).escolha, null);
+  assert.equal(com({ ...humana, escolhas: [{ numero: 1, letra: "b" }] }, 9).escolha, "sempre");
+  assert.equal(com({ ...humana, escolhas: [{ numero: 1, letra: "c" }] }).escolha, "nao");
+  // Outra pergunta do ciclo respondida "b" (o "não, espera" de um autorizar) nunca vira "não pergunte mais".
+  const autorizar = ab([{ letra: "a", texto: "sim, pode tocar" }, { letra: "b", texto: "não, espera" }], { ponteiro: "autorizar-ciclo:F1" });
+  assert.equal(com({ origem: "digitado", abertura: autorizar, escolhas: [{ numero: 1, letra: "b" }] }).escolha, null);
+  // Sem ponteiro, sem ciclo, sem abertura, com dois itens, ou o texto do b trocado: pergunta de novo.
+  assert.equal(com({ ...humana, abertura: ab(opcoes(3), { ponteiro: null }), escolhas: [{ numero: 1, letra: "b" }] }).escolha, null);
+  assert.equal(com({ ...humana, abertura: ab(opcoes(3), { ciclo: null }), escolhas: [{ numero: 1, letra: "b" }] }).escolha, null);
+  assert.equal(com({ ...humana, abertura: null, escolhas: [{ numero: 1, letra: "b" }] }).escolha, null);
+  assert.equal(com({ ...humana, abertura: { ...ab(), itens: [{ numero: 1, opcoes: opcoes(3) }, { numero: 2, opcoes: opcoes(3) }] }, escolhas: [{ numero: 1, letra: "b" }] }).escolha, null);
+  assert.equal(com({ ...humana, abertura: ab(opcoes(3).map((o) => (o.letra === "b" ? { ...o, texto: "não" } : o))), escolhas: [{ numero: 1, letra: "b" }] }).escolha, null);
+  assert.equal(com({ ...humana, escolhas: [{ numero: 1, letra: "a" }, { numero: 1, letra: "c" }] }).escolha, null);
+  assert.equal(com({ sem_registro: true }).escolha, null);
+  assert.match(com({ sem_registro: true }).aviso, /fora do ar/);
+  assert.equal(com({ ...humana, origem: "agente", escolhas: [{ letra: "b" }] }).escolha, null);
+  assert.equal(com({ ...humana, abertura: { ...ab(), ciclo: "OUTRO-1" }, escolhas: [{ letra: "b" }] }).escolha, null);
+  assert.equal(escolhaDaHerdeira({ repo: RAIZ, ciclo: CICLO, pergunta_id: P, ordinal: 3, ler: () => { throw new Error("caiu"); } }).escolha, null);
+  assert.equal(escolhaDaHerdeira({ repo: RAIZ, ciclo: CICLO, pergunta_id: "x", ordinal: 3, ler: ler(humana) }).escolha, null);
 });

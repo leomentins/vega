@@ -110,6 +110,8 @@ function ambiente(t, { tasks = [task("T1"), task("T2")], largura = 3 } = {}) {
   escreverEm(maestra, { "README.md": "fixture\n", "src/comum.mjs": "export const v = 1;\n", [CAMINHO]: canonico(tasks, largura) });
   g("add", "-A");
   g("commit", "-q", "-m", "plano");
+  // Ciclo de 2 níveis declarado: sem a marca, o núcleo roda em 3 (D10c do L4).
+  g("commit", "-q", "--allow-empty", "-m", "Conducao: ciclo niveis 2", "-m", "Conducao-Niveis: 2");
   g("push", "-q", "origin", "ciclo-teste");
 
   const filha = path.join(raiz, "filha");

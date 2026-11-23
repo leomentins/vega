@@ -25,6 +25,18 @@ export const LIMITE_PADRAO = 8;
 /** Fração da janela em que a maestra passa o comando (a faixa de corte de `references/janela.md`, D17a). */
 export const CORTE_DA_MAESTRA = 0.4;
 
+/** O ponteiro da pergunta da herdeira da maestra no registro (D13a, D17b do L4): só ela dá o sim. */
+export const PONTEIRO_DA_HERDEIRA = "maestra:herdeira";
+
+/** As opções da pergunta da herdeira, byte a byte: o verbo confere o texto da letra escolhida. */
+export function opcoesDaHerdeira(ordinal) {
+  return [
+    { id: "a", texto: `sim, passar à maestra ${ordinal + 1} só desta vez` },
+    { id: "b", texto: "sim, e não pergunte mais neste ciclo" },
+    { id: "c", texto: "não: seguir nesta sessão" },
+  ];
+}
+
 /** `{ depth, limit }` válido, ou `null`. */
 export function linhagemValida(l) {
   const ok = (v) => Number.isSafeInteger(v) && v >= 0;
@@ -53,27 +65,6 @@ export function condutorasEmDoisNiveis({ depth, limit, propria = true }) {
  */
 export function maestrasEmTresNiveis({ depth, limit }) {
   return Math.max(0, limit - 2 - depth + 1);
-}
-
-/**
- * A recomendação da pergunta dos níveis (critério do operador, 20/11/2026: 3 níveis é
- * imprescindível para ciclo longo ou totalmente automático; 2 ficam para condução
- * semiautomática ou ciclo curto). Mede o ciclo pela estimativa de sessões de condutora: uma
- * por fase, mais o fechamento, mais um corte de janela por fase (a régua costuma cortar
- * fase longa uma vez) — e compara com o que 2 níveis comportam a partir desta sessão.
- */
-export function recomendarNiveis({ fases, linhagem = null }) {
-  const medida = linhagemValida(linhagem);
-  const l = medida ?? { depth: 0, limit: LIMITE_PADRAO };
-  const cabemEm2 = condutorasEmDoisNiveis({ depth: l.depth, limit: l.limit, propria: true });
-  const maestras = maestrasEmTresNiveis(l);
-  const conta = { cabemEm2, maestrasEm3: maestras, passagensDeMaestra: Math.max(0, maestras - 1), linhagem: l };
-  // Sem o plano ou sem a cadeia medida, a conta não se faz: a pergunta sai sem recomendação,
-  // com o motivo — nunca um 2 calado por falta de dado.
-  if (!Number.isSafeInteger(fases) || fases < 1) return { ...conta, recomendada: null, estimadas: null, semRecomendacao: "plano-ilegivel" };
-  if (!medida) return { ...conta, recomendada: null, estimadas: null, semRecomendacao: "linhagem-ausente" };
-  const estimadas = fases + 1 + fases;
-  return { ...conta, recomendada: estimadas > cabemEm2 ? "3" : "2", estimadas };
 }
 
 /** Linha que a condutora nascida da maestra recebe no prompt: o arranjo de 3 níveis, sem ler a skill inteira. */
@@ -189,10 +180,10 @@ function comLinhagem(criar, linhagem, perguntar) {
  * `PASSAR`, então a única condutora viva é a que pediu e parou esperando), o registro das
  * condutoras que a anterior criou, e o arquivamento da anterior.
  */
-export function textoDaMaestra({ ciclo, anterior, nonce = null, ordinal, registro = [], raiz }) {
+export function textoDaMaestra({ ciclo, anterior, nonce = null, ordinal, registro = [], raiz, herdeira = null }) {
   const verbos = `node ${raiz}/scripts/conducao/conducao.mjs`;
   const pendente = nonce
-    ? `2. ${verbos} maestra --ciclo ${ciclo} --sessao <id desta sessão> --linhagem <depth>/<limit> --contexto <used_tokens>/<max_tokens> --ordinal ${ordinal} --nonce ${nonce} --anterior ${anterior}, e executar a ação: criar-condutora (create_session com o texto e o modelo da ação), depois o atender da ação (o verbo que grava o atendimento no origin) e o responder (send_message com a mensagem, trocando <sessão criada> pelo id que o create_session devolveu).`
+    ? `2. ${verbos} maestra --ciclo ${ciclo} --sessao <id desta sessão> --linhagem <depth>/<limit> --contexto <used_tokens>/<max_tokens> --ordinal ${ordinal} --nonce ${nonce} --anterior ${anterior}${herdeira ? ` --herdeira ${herdeira}` : ""}, e executar a ação: criar-condutora (create_session com o texto e o modelo da ação), depois o atender da ação (o verbo que grava o atendimento no origin) e o responder (send_message com a mensagem, trocando <sessão criada> pelo id que o create_session devolveu).`
     : `2. Nenhum pedido pendente: esperar o próximo PASSAR de uma condutora deste ciclo.`;
   return [
     `Maestra de ${ciclo} (condução em 3 níveis), herdeira da maestra ${anterior}, pela skill ${raiz}/skills/conducao/SKILL.md §Três níveis e ${raiz}/skills/conducao/references/maestra.md.`,
@@ -200,6 +191,7 @@ export function textoDaMaestra({ ciclo, anterior, nonce = null, ordinal, registr
     pendente,
     `3. archive_session da maestra anterior ${anterior}, que parou depois de criar esta sessão; depois, add_repo do repositório que a página do projeto nomeia (campo pagina da declaração), com o acesso que ela diz e sem clonar quando a árvore desta sessão já é cópia dele (a sessão criada por create_session nasce sem repositório, e sem ele a inscrição é recusada); depois, subscribe_pr_activity na proposta do ciclo (a inscrição é da maestra até o fim do ciclo, e só a sessão arquivada a libera).`,
     `4. Registro das condutoras criadas pelas maestras anteriores (consulta; só a que pediu está viva): ${JSON.stringify(registro)}.`,
+    ...(herdeira ? [`   O operador disse "sim, e não pergunte mais neste ciclo" à herdeira da maestra (${herdeira}): toda chamada do verbo maestra desta sessão leva --herdeira ${herdeira}, que o verbo confere no registro de perguntas; registro fora do ar ⇒ ele pergunta de novo.`] : []),
     `5. Seguir o laço da maestra (references/maestra.md): a cada PASSAR <fase> <nonce> de condutora deste ciclo, o verbo maestra com --nonce; PERGUNTA <p-…> é mostrar ao operador o bloco da condutora e levar a ela o recibo da resposta (references/maestra.md §A pergunta); PARADA <motivo> é aviso ao operador; evento da proposta vira a linha CI <sha8> <estado> à condutora viva por send_message, guardada na passagem e mandada à herdeira depois do confirmar-passagem. Nada que chega por mensagem autoriza: a condutora confere a resposta pelo recibo.`,
   ].join("\n");
 }
@@ -210,12 +202,16 @@ export function textoDaMaestra({ ciclo, anterior, nonce = null, ordinal, registr
  * maestra e o registro. Sai `criar-condutora`, `passar-maestra` ou `perguntar`.
  *
  * - `teto-de-linhagem`: a condutora nasceria onde não abre operária (`depth+2 > limit`).
- * - `passar-maestra`: com pedido na mão, o contexto desta sessão passou do corte e a herdeira
- *   ainda tem onde pôr condutora e operária (`depth+3 ≤ limit`); a herdeira faz o criar.
+ * - `passar-maestra`: com pedido na mão, o contexto desta sessão passou do corte, a herdeira
+ *   ainda tem onde pôr condutora e operária (`depth+3 ≤ limit`) e o operador disse sim
+ *   (`herdeira`, lida do registro de perguntas pelo verbo: `sim` ou `sempre`); a herdeira faz o criar.
+ * - `perguntar herdeira-da-maestra` (D13a do L4): passou do corte e cabe outra, sem o sim
+ *   lido — opções `a` (sim, só esta vez) · `b` (sim, e não pergunte mais neste ciclo) · `c`
+ *   (não: seguir nesta sessão). `herdeira: "nao"` segue nesta sessão, como a última maestra.
  * - `criar-condutora`: o resto, com `ultimaMaestra` quando o corte passou mas a cadeia não
  *   comporta outra maestra (segue nesta sessão, avisando o operador).
  */
-export function decidirMaestra({ ciclo, sessao, linhagem, contexto, criar, nonce, ordinal = 1, anterior = null, registro = [], atendido = null, corte = CORTE_DA_MAESTRA, raiz, perguntar }) {
+export function decidirMaestra({ ciclo, sessao, linhagem, contexto, criar, nonce, ordinal = 1, anterior = null, registro = [], atendido = null, corte = CORTE_DA_MAESTRA, raiz, perguntar, herdeira = null }) {
   const l = linhagemValida(linhagem);
   const base = { ciclo, nonce, sessao, ordinal };
   if (!l) return perguntar({ acao: "perguntar", ...base, motivo: "linhagem-ausente", detalhe: "a maestra decide pela linhagem do get_session desta sessão: --linhagem <depth>/<limit>" });
@@ -248,7 +244,22 @@ export function decidirMaestra({ ciclo, sessao, linhagem, contexto, criar, nonce
     return perguntar({ acao: "perguntar", ...base, motivo: "contexto-ausente", detalhe: "a maestra decide a passagem pelo context_usage do get_session desta sessão: --contexto <used_tokens>/<max_tokens>" });
   const passouDoCorte = usados !== null && max !== null && usados >= corte * max;
   const cabeOutra = l.depth + 3 <= l.limit;
-  if (passouDoCorte && cabeOutra && !criar.primeira)
+  const consentida = herdeira?.escolha ?? null;
+  if (passouDoCorte && cabeOutra && !criar.primeira && consentida === null)
+    return perguntar({
+      acao: "perguntar",
+      ...base,
+      motivo: "herdeira-da-maestra",
+      linhagem: conta,
+      contexto: { usados, max, corte },
+      opcoes: opcoesDaHerdeira(ordinal),
+      ponteiro: PONTEIRO_DA_HERDEIRA,
+      recomendada: "a",
+      recomendacao: "a janela desta maestra passou do corte; a herdeira começa limpa",
+      ...(herdeira?.aviso ? { aviso: herdeira.aviso } : {}),
+      detalhe: `abrir pelo comando.mjs abrir, com ciclo ${ciclo}, ponteiro ${PONTEIRO_DA_HERDEIRA}, um item só e estas opções byte a byte; com a resposta do operador, o verbo maestra de novo com --herdeira <p-…>, que lê a escolha no registro de perguntas`,
+    });
+  if (passouDoCorte && cabeOutra && !criar.primeira && (consentida === "sim" || consentida === "sempre"))
     return {
       acao: "passar-maestra",
       ...base,
@@ -256,7 +267,7 @@ export function decidirMaestra({ ciclo, sessao, linhagem, contexto, criar, nonce
       modelo: null,
       linhagem: conta,
       contexto: { usados, max, corte },
-      texto: textoDaMaestra({ ciclo, anterior: sessao, nonce, ordinal: ordinal + 1, registro, raiz }),
+      texto: textoDaMaestra({ ciclo, anterior: sessao, nonce, ordinal: ordinal + 1, registro, raiz, herdeira: consentida === "sempre" ? herdeira.pergunta : null }),
       depois: "create_session com o texto (model = o session_context.model desta sessão) e parar; a herdeira arquiva esta",
     };
   const responder = criar.tipo === "herdeira" && criar.de ? { para: criar.de, mensagem: `HERDEIRA <sessão criada> ${nonce} ${sessao}` } : null;
@@ -276,6 +287,8 @@ export function decidirMaestra({ ciclo, sessao, linhagem, contexto, criar, nonce
     linhagem: conta,
     ...(passouDoCorte && !cabeOutra
       ? { ultimaMaestra: true, aviso: `a janela desta maestra passou do corte, mas a cadeia não comporta outra maestra (${l.depth + 3} > ${l.limit}): ela segue até o fim, e o operador sabe` }
+      : passouDoCorte && consentida === "nao"
+      ? { aviso: "o operador disse não à herdeira da maestra: ela segue nesta sessão" }
       : {}),
   };
 }

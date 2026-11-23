@@ -105,6 +105,8 @@ function ambiente(t) {
   writeFileSync(path.join(arvore, CAMINHO), canonico());
   g("add", "-A");
   g("commit", "-q", "-m", "plano");
+  // Ciclo de 2 níveis declarado: sem a marca, o núcleo roda em 3 (D10c do L4).
+  g("commit", "-q", "--allow-empty", "-m", "Conducao: ciclo niveis 2", "-m", "Conducao-Niveis: 2");
   g("push", "-q", "origin", "ciclo-teste");
   const nota = path.join(raiz, "nota.md");
   writeFileSync(nota, corpoNoMolde());

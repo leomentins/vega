@@ -86,6 +86,8 @@ function novoRepo(t) {
   writeFileSync(path.join(dir, "README.md"), "fixture\n");
   g("add", "-A");
   g("commit", "-q", "-m", "plano");
+  // Ciclo de 2 níveis declarado: sem a marca, o núcleo roda em 3 (D10c do L4).
+  g("commit", "-q", "--allow-empty", "-m", "Conducao: ciclo niveis 2", "-m", "Conducao-Niveis: 2");
   const vazio = (...linhas) => g("commit", "-q", "--allow-empty", ...linhas.flatMap((l) => ["-m", l]));
   const conferida = (id) => vazio(`Conducao: ${id} conferida`, `Conducao-Task: ${id}\nConducao-Nonce: n-${id}`);
   const replanejar = (de, para, subject) => {

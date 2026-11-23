@@ -151,14 +151,15 @@ export function ultimaAutorizacao(marcas) {
 }
 
 /**
- * Em quantos níveis o ciclo é conduzido (a última marca `niveis`), com a
- * origem: `marca` (o operador escolheu), `legado` (ciclo já autorizado sem a
- * marca: conduzido em 2, como antes da escolha existir) ou `sem-escolha`
- * (nada autorizado e nenhuma marca: a condução pergunta antes de começar).
+ * Em quantos níveis o ciclo roda, pelas marcas. A última `Conducao: ciclo niveis <n>` vale (marca
+ * antiga, lida como sempre); sem ela, ciclo já autorizado roda em 2 (`legado`: conduzido em 2 antes
+ * da escolha existir, e não muda de arranjo no meio); sem nada, 3 (`padrao`). Desde a D10c do L4
+ * (p-2fe3674c014f0735, 23/11/2026) a condução é sempre em 3 níveis: nenhum verbo pergunta nem exige
+ * a marca.
  */
 export function niveisDasMarcas(marcas) {
   const m = marcas.findLast((x) => x.tipo === "niveis");
   if (m) return { niveis: m.niveis, origem: "marca", sha: m.sha };
   if (marcas.some((x) => x.tipo === "autorizada")) return { niveis: 2, origem: "legado", sha: null };
-  return { niveis: null, origem: "sem-escolha", sha: null };
+  return { niveis: 3, origem: "padrao", sha: null };
 }

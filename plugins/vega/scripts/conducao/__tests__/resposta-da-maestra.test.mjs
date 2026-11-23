@@ -100,7 +100,10 @@ test("autorizar-ciclo com --maestra recusa o sim que veio de outra sessão, sem 
   // Contraprova: a mesma pergunta, recibo na maestra, passa da conferência da resposta (e cai depois,
   // no plano que este repositório não tem).
   assert.throws(() => autorizarCiclo({ repo: dir, ciclo: "X-1", fase: "F1", sim: SIM, pergunta: ID, pecas: pecas(`${MAESTRA} ev-1`), maestra: MAESTRA }), (e) => e instanceof ErroPlano && e.codigo !== "resposta-de-outra-sessao");
-  // Sem a marca de 3 níveis, sem --maestra: a regra de antes (passa da conferência e cai no plano).
+  // Sem marca nenhuma o ciclo roda em 3 níveis: omitir --maestra recusa.
+  assert.throws(() => autorizarCiclo({ repo: dir, ciclo: "X-1", fase: "F1", sim: SIM, pergunta: ID, pecas: pecas("session_outra ev-1") }), recusa("maestra-ausente"));
+  // Com a marca antiga de 2 níveis, sem --maestra: a regra de 2 (passa da conferência e cai no plano).
+  g("commit", "-q", "--allow-empty", "-m", "Conducao: ciclo niveis 2", "-m", "Conducao-Niveis: 2");
   assert.throws(() => autorizarCiclo({ repo: dir, ciclo: "X-1", fase: "F1", sim: SIM, pergunta: ID, pecas: pecas("session_outra ev-1") }), (e) => e instanceof ErroPlano && e.codigo !== "maestra-ausente");
   // Com a marca de 3 níveis no ramo, omitir --maestra recusa: pular a conferência não cai na regra de 2.
   g("commit", "-q", "--allow-empty", "-m", "Conducao: ciclo niveis 3", "-m", "3", "-m", "Conducao-Niveis: 3");

@@ -19,6 +19,8 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { maestra } from "../conducao.mjs";
+import { registrarNiveis, trocarLeitorDaPosse } from "../git-conducao.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.resolve(AQUI, "..", "conducao.mjs");
@@ -242,4 +244,83 @@ test("encerrar-sessao com o origin inalcançável sai 1 sem marcador", (t) => {
   assert.match(r.stderr, /copia-remota-inalcancavel: não consegui conferir a cópia remota refs\/conducao\/TESTE-1-conducao\/copia/);
   assert.equal(a.g("rev-parse", "HEAD"), head);
   assert.equal(a.g("log", "-1", "--format=%s"), "Conducao: T2 conferida");
+});
+
+// ── a primeira condutora de 3 níveis abre o ramo na árvore dela (D9c do L4) ──
+
+/** O ramo na árvore da maestra (que o adotou, com banda) e uma árvore vazia para a condutora. */
+function comMaestra(t, { banda = "42", lane = null } = {}) {
+  const amb = ambiente(t);
+  registrarNiveis({ repo: amb.arvore, ciclo: CICLO, niveis: 3, sim: "três" });
+  const gitDir = amb.g("rev-parse", "--absolute-git-dir");
+  writeFileSync(path.join(gitDir, "sistoli-arvore.json"), JSON.stringify({ versao: 1, ciclo: CICLO, ramo: RAMO, banda, lane }));
+  const condutora = path.join(amb.raiz, "arvore-da-condutora");
+  amb.gp("worktree", "add", "-q", "--detach", condutora, "main");
+  const anterior = trocarLeitorDaPosse(() => null);
+  t.after(() => trocarLeitorDaPosse(anterior));
+  const args = { repo: amb.arvore, ciclo: CICLO, sessao: "session_maestra", linhagem: "0/8", contexto: "1/1000000" };
+  return { ...amb, condutora, args, ramoEm: (dir) => spawnSync("git", ["-C", dir, "symbolic-ref", "-q", "--short", "HEAD"], { encoding: "utf8" }).stdout.trim() };
+}
+
+test("3 níveis: a primeira condutora adota o ramo na árvore dela, e a maestra o solta antes do create_session", (t) => {
+  const { arvore, condutora, args, ramoEm } = comMaestra(t);
+  const r = maestra(args);
+  assert.equal(r.acao, "criar-condutora");
+  // O texto não manda a condutora para a árvore da maestra: a árvore é a da sessão dela.
+  assert.ok(!r.texto.includes(arvore), r.texto);
+  assert.doesNotMatch(r.texto, /worktree conduzida/);
+  assert.match(r.texto, new RegExp(`arvore\\.mjs adotar --ciclo ${CICLO} --migracao — `));
+  assert.match(r.texto, new RegExp(`troca\\.mjs tomar-posse --ciclo ${CICLO}`));
+  assert.match(r.texto, new RegExp(`lane transferir --ciclo ${CICLO}`));
+  assert.match(r.texto, new RegExp(`retomar --repo <árvore> --ciclo ${CICLO}`));
+  assert.match(r.texto, new RegExp(`proximo --repo <árvore> --ciclo ${CICLO}`));
+  // Adotar e posse vêm antes do pré-voo e do retomar.
+  assert.ok(r.texto.indexOf("adotar") < r.texto.indexOf("Pré-voo"));
+  assert.ok(r.texto.indexOf("tomar-posse") < r.texto.indexOf("retomar --repo"));
+  // A maestra soltou o ramo: a árvore dela ficou destacada, e a da condutora o abre.
+  assert.deepEqual(r.ramoSolto, { ramo: RAMO, de: arvore });
+  assert.equal(ramoEm(arvore), "");
+  execFileSync("git", ["-C", condutora, "switch", "-q", RAMO]);
+  assert.equal(ramoEm(condutora), RAMO);
+  // Repetido (o create_session falhou): o mesmo texto e o mesmo nonce, sem soltar de novo.
+  execFileSync("git", ["-C", condutora, "switch", "-q", "--detach"]);
+  const de_novo = maestra(args);
+  assert.equal(de_novo.texto, r.texto);
+  assert.equal(de_novo.nonce, r.nonce);
+  assert.deepEqual(de_novo.ramoSolto, { ramo: RAMO, de: null });
+});
+
+test("3 níveis: sem banda nem lane na árvore da maestra, o adotar vai sem flags e sem transferir", (t) => {
+  const { args } = comMaestra(t, { banda: null });
+  const r = maestra(args);
+  assert.match(r.texto, new RegExp(`adotar --ciclo ${CICLO} — `));
+  assert.doesNotMatch(r.texto, /lane transferir/);
+});
+
+test("3 níveis: árvore da maestra suja, ramo em outra árvore ou posse na maestra: pergunta, sem soltar", (t) => {
+  const { arvore, condutora, args, ramoEm } = comMaestra(t);
+  writeFileSync(path.join(arvore, "sujo.txt"), "x\n");
+  const suja = maestra(args);
+  assert.equal(suja.acao, "perguntar");
+  assert.equal(suja.motivo, "ramo-preso");
+  assert.equal(ramoEm(arvore), RAMO);
+  rmSync(path.join(arvore, "sujo.txt"));
+  trocarLeitorDaPosse(() => ({ estado: "dona", epoca: 1 }));
+  const comPosse = maestra(args);
+  assert.equal(comPosse.motivo, "posse-na-maestra");
+  assert.equal(ramoEm(arvore), RAMO);
+  // A posse que não se lê não é "sem posse": o ramo fica (a cerca do motor recusa o mesmo caso).
+  trocarLeitorDaPosse(() => ({ estado: "nao-li", motivo: "o leitor da posse saiu 1" }));
+  assert.equal(maestra(args).motivo, "posse-ilegivel");
+  assert.equal(ramoEm(arvore), RAMO);
+  trocarLeitorDaPosse(() => { throw new Error("caiu"); });
+  assert.equal(maestra(args).motivo, "posse-ilegivel");
+  assert.equal(ramoEm(arvore), RAMO);
+  trocarLeitorDaPosse(() => null);
+  // O ramo anexado em outra árvore: a maestra não solta árvore alheia.
+  execFileSync("git", ["-C", arvore, "switch", "-q", "--detach"]);
+  execFileSync("git", ["-C", condutora, "switch", "-q", RAMO]);
+  const alheia = maestra(args);
+  assert.equal(alheia.motivo, "ramo-preso");
+  assert.equal(ramoEm(condutora), RAMO);
 });

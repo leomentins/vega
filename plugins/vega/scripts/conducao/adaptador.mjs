@@ -645,7 +645,7 @@ function funcao(v, onde) {
 }
 
 const OBRIGATORIOS_DO_CODIGO = Object.freeze(["plano", "publicacao", "caminhosProtegidos", "telasProtegidasDosSteps", "foraDasTelasDosSteps", "carimbo", "ci"]);
-const OPCIONAIS_DO_CODIGO = Object.freeze(["marcasDeRodadas", "alcanceDosHooks", "fechamentoDoCiclo", "capacidade", "esperandoAVez", "caminhosQuePerguntam", "respostasDasParadas", "definemAParada"]);
+const OPCIONAIS_DO_CODIGO = Object.freeze(["marcasDeRodadas", "alcanceDosHooks", "fechamentoDoCiclo", "capacidade", "esperandoAVez", "caminhosQuePerguntam", "respostasDasParadas", "definemAParada", "etapasDoPlanejamento"]);
 // Nome antigo → nome novo (HN-29 T41): lido até a migração dos adaptadores na F5.
 const NOMES_ANTIGOS_DO_CODIGO = Object.freeze([
   ["caminhosClinicos", "caminhosProtegidos"],
@@ -695,7 +695,10 @@ function comNomesNovos(c, onde) {
  * e sem ela nenhum motivo calibra); `definemAParada` (VEGA-20 T46: os globs
  * do projeto que definem a parada de publicação, somados aos do motor em
  * `consentimento.mjs`; default `null`, nunca `[]` — quem lê sem a lista veta
- * `define-a-parada`).
+ * `define-a-parada`); `etapasDoPlanejamento` (hotfix conducao-pedido-da-etapa,
+ * 23/11/2026: as etapas do planejamento que nascem cada uma na sua sessão,
+ * em ordem, `[{ id, comando, tier, saida, rodadas? }]` — o verbo `etapa`
+ * monta o pedido de nascimento delas; default `[]`, e o verbo recusa).
  * Ausente vale o default; presente com tipo errado recusa.
  * Nome antigo de campo (`NOMES_ANTIGOS_DO_CODIGO`) carrega com aviso (`comNomesNovos`).
  */
@@ -734,6 +737,7 @@ export function validarCodigo(bruto, onde = "código do adaptador") {
   const esperandoAVez = c.esperandoAVez === undefined ? null : funcao(c.esperandoAVez, `${onde}.esperandoAVez`);
   const respostasDasParadas = c.respostasDasParadas === undefined ? null : funcao(c.respostasDasParadas, `${onde}.respostasDasParadas`);
   const definemAParada = c.definemAParada === undefined ? null : lista(c.definemAParada, `${onde}.definemAParada`);
+  const etapasDoPlanejamento = c.etapasDoPlanejamento === undefined ? Object.freeze([]) : etapas(c.etapasDoPlanejamento, `${onde}.etapasDoPlanejamento`);
   const caminhosProtegidos = lista(c.caminhosProtegidos, `${onde}.caminhosProtegidos`);
   const caminhosQuePerguntam = c.caminhosQuePerguntam === undefined ? caminhosProtegidos : lista(c.caminhosQuePerguntam, `${onde}.caminhosQuePerguntam`);
   return Object.freeze({
@@ -752,7 +756,43 @@ export function validarCodigo(bruto, onde = "código do adaptador") {
     esperandoAVez,
     respostasDasParadas,
     definemAParada,
+    etapasDoPlanejamento,
   });
+}
+
+const ID_DA_ETAPA = /^[a-z][a-z0-9-]{0,39}$/;
+const COMANDO_DA_ETAPA = /^\/[a-z][a-z0-9:-]{0,59}$/;
+const SAIDA_DA_ETAPA = /^[A-Za-z][A-Za-z0-9_-]{0,39}$/;
+
+/**
+ * As etapas do planejamento (`etapasDoPlanejamento`): lista de `{ id, comando,
+ * tier, saida, rodadas? }`, em ordem. `comando` é a skill que só roda digitada
+ * (`/draft-review`); `tier` um dos `TIERS`; `saida` o token que libera a
+ * etapa seguinte; `rodadas` (inteiro ≥ 1) o teto da etapa que roda em
+ * rodadas; `empurra` (booleano, no máximo uma) a etapa que empurra o ramo e
+ * abre a proposta — as outras commitam e não empurram. Id repetido, campo a mais ou de forma errada recusa.
+ */
+function etapas(v, onde) {
+  if (!Array.isArray(v)) throw new ErroAdaptador(`${onde}: esperada lista`);
+  const vistos = new Set();
+  const lidas = Object.freeze(
+    v.map((e, i) => {
+      const aqui = `${onde}[${i}]`;
+      const o = objeto(e, aqui);
+      soCampos(o, ["id", "comando", "tier", "saida"], aqui, ["rodadas", "empurra"]);
+      if (o.empurra !== undefined && typeof o.empurra !== "boolean") throw new ErroAdaptador(`${aqui}.empurra: esperado booleano`);
+      if (!ID_DA_ETAPA.test(o.id ?? "")) throw new ErroAdaptador(`${aqui}.id: esperado token kebab-case`);
+      if (vistos.has(o.id)) throw new ErroAdaptador(`${aqui}.id: ${o.id} repetido`);
+      vistos.add(o.id);
+      if (!COMANDO_DA_ETAPA.test(o.comando ?? "")) throw new ErroAdaptador(`${aqui}.comando: esperado /<skill>`);
+      if (!TIERS.includes(o.tier)) throw new ErroAdaptador(`${aqui}.tier: esperado um de ${TIERS.join(", ")}`);
+      if (!SAIDA_DA_ETAPA.test(o.saida ?? "")) throw new ErroAdaptador(`${aqui}.saida: esperado token sem espaço`);
+      if (o.rodadas !== undefined && (!Number.isInteger(o.rodadas) || o.rodadas < 1)) throw new ErroAdaptador(`${aqui}.rodadas: esperado inteiro >= 1`);
+      return Object.freeze({ id: o.id, comando: o.comando, tier: o.tier, saida: o.saida, ...(o.rodadas === undefined ? {} : { rodadas: o.rodadas }), empurra: o.empurra === true });
+    }),
+  );
+  if (lidas.filter((e) => e.empurra).length > 1) throw new ErroAdaptador(`${onde}: só uma etapa empurra o ramo`);
+  return lidas;
 }
 
 const requerer = createRequire(import.meta.url);

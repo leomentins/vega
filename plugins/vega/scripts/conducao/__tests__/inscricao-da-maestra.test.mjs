@@ -123,7 +123,8 @@ test("pré-voo da herdeira em 3 níveis não cobra inscrita; em 2 cobra", () => 
   assert.equal(tres.estado, "ok");
   assert.match(tres.encontrado, /3 níveis/);
   assert.equal(inscricao([marca(2)]).estado, "falha");
-  assert.equal(inscricao([]).estado, "falha");
+  // Sem marca, 3 níveis (padrão, D10c do L4): a inscrição é da maestra, a herdeira não a cobra.
+  assert.equal(inscricao([]).estado, "ok");
 });
 
 test("o arranjo chega às regras pelo contexto do proximo", () => {
@@ -156,13 +157,16 @@ test("a linha da maestra tem a forma CI <sha8> <estado> e só acorda", () => {
 
 // ── o arquivamento da etapa do planejamento ──────────────────────────────────
 
-test("planejar.md §3 manda arquivar a etapa no turno em que a entrega é lida, salvo o checkout não empurrado", () => {
+test("planejar.md §3 manda quem conduz arquivar a etapa no turno em que lê a entrega, e a etapa não guarda o ramo", () => {
   const texto = readFileSync(path.join(AQUI, "..", "..", "..", "skills", "conducao", "references", "planejar.md"), "utf8");
   const secao = texto.split(/^## /m).find((s) => /^3\b/.test(s));
   assert.ok(secao, "planejar.md sem §3");
   assert.match(secao, /archive_session/);
-  assert.match(secao, /no turno em que a entrega dela é lida/);
-  assert.match(secao, /checkout do ramo do ciclo ainda não empurrado/);
+  // Desde o hotfix conducao-pedido-da-etapa (ruling de 23/11/2026): o ramo vive na árvore de quem
+  // conduz, a etapa só commita, e por isso nenhuma etapa fica viva para guardar o checkout.
+  assert.match(secao, /Quem conduz arquiva a sessão da etapa/);
+  assert.match(secao, /no turno em que lê a entrega dela/);
+  assert.match(secao, /a etapa não guarda o ramo/);
 });
 
 // ── o repositório antes da inscrição (T48) ───────────────────────────────────

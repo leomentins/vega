@@ -13,11 +13,13 @@
  *      o `--reinicio` só vale confirmado pela ponte (`reinicioConfirmado`): sem confirmação é
  *      ignorado, com uma linha de aviso no stderr
  *   maestra --ciclo <id> --sessao <id desta> --linhagem <depth>/<limit> --contexto <usados>/<max>
- *           [--nonce <x>] [--anterior <id>] [--ordinal <k>] [--registro <json|arquivo>]
- *      só em 3 níveis (niveis.mjs, hotfix vega-conducao-niveis): sem `--nonce`, a primeira condutora;
- *      com ele, o pedido de herdeira que a condutora gravou no origin ⇒ `criar-condutora` (com o
- *      `responder` à pedinte), `passar-maestra` (contexto no corte e cadeia com lugar) ou `perguntar`
- *      (`teto-de-linhagem`, `linhagem-ausente`, `niveis-nao-tres`, `pedido-*`); de qualquer árvore
+ *           [--nonce <x>] [--anterior <id>] [--ordinal <k>] [--registro <json|arquivo>] [--herdeira <p-…>]
+ *      só em 3 níveis (niveis.mjs, hotfix vega-conducao-niveis): sem `--nonce`, a primeira condutora
+ *      (a de planejamento no ramo `ciclo-<id>-plano`); com ele, o pedido de herdeira que a condutora
+ *      gravou no origin ⇒ `criar-condutora` (com o `responder` à pedinte), `passar-maestra` (contexto
+ *      no corte, cadeia com lugar e o sim do operador lido no registro pela `--herdeira`: D13a/D17b do
+ *      L4) ou `perguntar` (`herdeira-da-maestra`, `teto-de-linhagem`, `linhagem-ausente`,
+ *      `niveis-nao-tres`, `pedido-*`); de qualquer árvore
  *   maestra-atendeu --ciclo <id> --nonce <x> --sessao-criada <id>
  *      a maestra grava no origin (`refs/conducao-brief/<ciclo>/atendido/<nonce>`) a condutora que criou
  *      para o pedido; o `maestra` com o mesmo nonce passa a sair `responder-de-novo`, nunca outra condutora
@@ -56,7 +58,7 @@
  * quando a resposta é `perguntar`:
  *   niveis [--linhagem <depth>/<limit>]
  *      em quantos níveis o ciclo roda: a marca `Conducao: ciclo niveis <n>`, `legado` (2) com
- *      autorização sem marca, ou `perguntar niveis` (opções 3 · 2, recomendação pelo plano e pela cadeia)
+ *      autorização sem marca, ou `padrao` (3); nunca pergunta (D10c do L4: sempre 3 níveis)
  *   niveis <2|3> --sim <texto> [--pergunta <p-…>]
  *      grava a marca com a resposta do operador; a última vence
  *   resposta-da-maestra --pergunta <p-…> --maestra <id>
@@ -84,6 +86,20 @@
  *      sai `perguntar modo-da-maestra` sem gravar nada (P19 do ATRM-51)
  *      grava também o brief da filha em `refs/conducao-brief/<ciclo>/T<k>/<n>` e devolve `partida`,
  *      o prompt curto do `create_session` (ruling F3.2a)
+ *   criar-ramo --ciclo <id> --tipo plano|execucao
+ *      a maestra cria o ramo do ciclo sem checkout (D11b do L4): commit vazio sobre origin/main
+ *      (`commit-tree`), referência local e push só dela; sai `ramo-criado` com o ramo, o sha e o
+ *      `depois` (proposta em rascunho e inscrição, da maestra). Outro ramo do ciclo vivo recusa
+ *   etapa <id> --ciclo <id> [--rodada <n>] [--arvore <árvore do ciclo>]
+ *      o pedido de nascimento de uma etapa do planejamento (`/draft-review` · `/write-plan` ·
+ *      `/plan-review` na Sistoli: `etapasDoPlanejamento` do código do adaptador), que nasce na sua
+ *      sessão: sai `criar-etapa` com `pedido` (curto, em palavras, nunca abrindo com `/`, que o
+ *      `create_session` recusa), `modelo` (o do tier da etapa na declaração), `nome` e `contrato`
+ *      (primeira linha `<ETAPA> <saída> <sha8>` a @parent; gate humano `PERGUNTA <p-…>` com o bloco do
+ *      `comando.mjs abrir`). `--rodada` só na etapa com teto de rodadas (default 1; acima do teto, exit 1).
+ *      A árvore do ciclo (sem `--arvore`, a que tem o ramo `ciclo-<id>` aberto) vai no pedido: a etapa
+ *      trabalha nela, commita e não empurra, salvo a declarada `empurra`, que empurra e abre a proposta
+ *      Nada grava (hotfix conducao-pedido-da-etapa, 23/11/2026)
  *   trazer T<k> --tentativa <n> [--sha <sha8>] [--sessao <id>] [--aprovado <sha>]
  *      aceita merge de origin/main na faixa (só por fast-forward; o que veio do main não pergunta) e
  *      caminho clínico de tela no segmento que os Steps nomeiam (C24 do VEGA-28, P21/P24 do ATRM-51)
@@ -234,10 +250,12 @@ import * as adaptador from "./adaptador.mjs";
 import * as calibracao from "./calibracao.mjs";
 import { BOTOES } from "./botoes.mjs";
 import * as gitConducao from "./git-conducao.mjs";
-import { definemAParadaDe, escreverCasosHerdados, lerConsentimentos, pecasDoConsentimento, prepararCasosHerdados } from "./consentimento.mjs";
+import { definemAParadaDe, escreverCasosHerdados, lerConsentimentos, ORIGENS_HUMANAS, pecasDoConsentimento, prepararCasosHerdados } from "./consentimento.mjs";
 import * as logEventos from "./log-eventos.mjs";
 import * as pergunta from "./pergunta.mjs";
 import { preVoo } from "./pre-voo.mjs";
+import { pedidoDaEtapa } from "./etapa.mjs";
+import { criarRamo } from "./criar-ramo.mjs";
 import { saidasGeradas } from "../vega/declaracao.mjs";
 import { ErroGitPrazo, tentarGit } from "./git-exec.mjs";
 import { RE, lerMarcas, niveisDasMarcas } from "./marcas.mjs";
@@ -859,43 +877,14 @@ export function ramoDoCiclo(repo, ciclo) {
 }
 
 /**
- * `niveis --ciclo <id> [--linhagem d/l]` sem número: em quantos níveis o ciclo
- * roda. Já escolhido (ou legado) ⇒ `{ acao: "niveis", niveis, origem }`. Sem
- * escolha ⇒ `perguntar niveis`, com as opções 2 · 3 e a recomendação medida
- * pelo plano e pela linhagem (`recomendarNiveis`); a resposta do operador
- * entra por `niveis <2|3> --sim "<texto dele>"`.
+ * `niveis --ciclo <id>` sem número: em quantos níveis o ciclo roda, pelas marcas
+ * (`niveisDasMarcas`): a marca antiga, o legado (2) ou o padrão (3). Nunca
+ * pergunta: a condução é sempre em 3 níveis (D10c do L4, p-2fe3674c014f0735).
+ * `--linhagem` segue aceito e não muda nada.
  */
-export function lerNiveis({ repo, ciclo, linhagem = null }) {
-  const head = git(repo, ["rev-parse", "HEAD"]).trim();
+export function lerNiveis({ repo, ciclo }) {
   const lido = niveisDasMarcas(lerMarcas(repo));
-  if (lido.niveis !== null) return { acao: "niveis", ciclo, niveis: lido.niveis, origem: lido.origem, sha: lido.sha };
-  const par = niveis.parDeInteiros(linhagem);
-  const fases = fasesDoPlano(repo, ciclo)?.length ?? null;
-  const r = niveis.recomendarNiveis({ fases, linhagem: par ? { depth: par[0], limit: par[1] } : null });
-  const texto3 = `3 níveis — maestra → condutora → operária: a maestra cria toda condutora, e a cadeia só cresce quando a maestra passa o comando (${r.maestrasEm3} maestras, ${r.passagensDeMaestra} passagens de maestra, a partir desta sessão)`;
-  const texto2 = `2 níveis — condutora → operária: cada condutora cria a herdeira, e cada passagem soma um elo (${r.cabemEm2} condutoras a partir desta sessão)`;
-  return pergunta.perguntar({
-    acao: "perguntar",
-    nonce: nonce(ciclo, "niveis", 0, head),
-    ciclo,
-    head,
-    motivo: "niveis",
-    opcoes: [
-      { id: "3", texto: texto3 },
-      { id: "2", texto: texto2 },
-    ],
-    ...(r.recomendada
-      ? {
-          recomendada: r.recomendada,
-          recomendacao:
-            r.recomendada === "3"
-              ? `3: o plano estima ${r.estimadas} sessões de condutora (${fases} fases, fechamento e um corte de janela por fase), acima das ${r.cabemEm2} que 2 níveis comportam`
-              : `2: o plano estima ${r.estimadas} sessões de condutora, dentro das ${r.cabemEm2} que 2 níveis comportam; 3 vale se a condução for rodar sozinha do começo ao fim`,
-        }
-      : { semRecomendacao: r.semRecomendacao }),
-    estimativa: r,
-    detalhe: "3 níveis é para ciclo longo ou condução totalmente automática; 2, para condução semiautomática ou ciclo curto",
-  });
+  return { acao: "niveis", ciclo, niveis: lido.niveis, origem: lido.origem, sha: lido.sha };
 }
 
 /**
@@ -927,9 +916,12 @@ export function pedirHerdeira({ repo, ciclo, nonce: n, entrada }) {
  * [--nonce <x>] [--anterior <id>] [--ordinal <k>] [--registro <json>]`: a
  * decisão da maestra (`niveis.decidirMaestra`). Com `--nonce`, o pedido que a
  * condutora gravou no origin; sem ele, a primeira condutora do ciclo, pela fase
- * que as marcas do ramo dão a conduzir. Só em ciclo de 3 níveis.
+ * que as marcas do ramo dão a conduzir. Só em ciclo de 3 níveis. A primeira
+ * nasce com o texto de adotar o ramo na árvore dela (`passosDeAdotar`), e o
+ * verbo solta o ramo da árvore da maestra antes de devolver a ação
+ * (`soltarParaAPrimeira`; D9c do L4).
  */
-export function maestra({ repo, ciclo, sessao, linhagem, contexto, nonce: n = null, anterior = null, ordinal = 1, registro = null }) {
+export function maestra({ repo, ciclo, sessao, linhagem, contexto, nonce: n = null, anterior = null, ordinal = 1, registro = null, herdeira = null, lerPergunta = null }) {
   if (!sessao || !String(sessao).trim()) throw new ErroPlano("uso", "maestra exige --sessao <id desta sessão>");
   if (!Number.isSafeInteger(ordinal) || ordinal < 1) throw new ErroPlano("uso", `maestra: --ordinal deve ser inteiro ≥ 1, veio ${JSON.stringify(ordinal)}`);
   const lin = niveis.parDeInteiros(linhagem);
@@ -947,6 +939,9 @@ export function maestra({ repo, ciclo, sessao, linhagem, contexto, nonce: n = nu
   let marcas;
   let head;
   let atendido = null;
+  let propria = null;
+  let anexada = null;
+  let ramoDaPrimeira = null;
   if (n) {
     const lido = gitConducao.lerPedido({ repo, ciclo, nonce: n });
     if (lido.acao === "perguntar") return lido;
@@ -970,20 +965,25 @@ export function maestra({ repo, ciclo, sessao, linhagem, contexto, nonce: n = nu
     const ref = `refs/heads/${ramo}`;
     head = git(repo, ["rev-parse", ref]).trim();
     marcas = lerMarcas(repo, ref);
+    // O ramo de planejamento (`ciclo-<id>-plano`, D11b do L4) ainda não tem plano a ler:
+    // a primeira condutora dele é a de planejamento, que roda as etapas (planejar.md §3).
+    const doPlano = ramo === ramoDePlanejamento(ciclo);
     let plano = null;
-    try {
-      plano = lerPlanoNoCommit(repo, ref, ciclo).plano;
-    } catch (e) {
-      if (!(e instanceof ErroPlano)) throw e;
+    if (!doPlano) {
+      try {
+        plano = lerPlanoNoCommit(repo, ref, ciclo).plano;
+      } catch (e) {
+        if (!(e instanceof ErroPlano)) throw e;
+      }
     }
-    const alvo = faseAConduzir(marcas, plano ? plano.fases.map((f) => f.id) : null);
+    const alvo = doPlano ? { fase: "planejamento", situacao: "planejamento" } : faseAConduzir(marcas, plano ? plano.fases.map((f) => f.id) : null);
     if (!alvo.fase) throw new ErroPlano("fase-ausente", `nenhuma fase a conduzir em ${ramo}: o plano não se lê nem há marca`);
-    let arvore = null;
-    try {
-      arvore = arvoreDoCiclo(ciclo, repo);
-    } catch {
-      arvore = null;
-    }
+    // O ramo é da condutora (D9c do L4): ela o adota na árvore dela, com as reservas
+    // que a árvore que o abriu gravou — a anexada agora ou, já solto, esta (a maestra).
+    propria = git(repo, ["rev-parse", "--show-toplevel"]).trim();
+    anexada = arvoresDoRepo(repo).find((a) => a.ramo === ramo) ?? null;
+    const reservas = reservasDaArvore(anexada?.caminho ?? propria, ciclo);
+    const slug = ramo.startsWith(`ciclo-${ciclo}-`) ? ramo.slice(`ciclo-${ciclo}-`.length) : null;
     const fase = alvo.situacao === "fechamento" ? "fechamento" : alvo.fase;
     const modelo = plano?.fases.find((f) => f.id === fase)?.modelo ?? null;
     criar = {
@@ -992,8 +992,17 @@ export function maestra({ repo, ciclo, sessao, linhagem, contexto, nonce: n = nu
       fase,
       nome: nomeDaCondutora(ciclo, fase),
       modelo,
-      texto: textoDaProximaSessao({ ciclo, fase, repo: arvore, sessao: null, primeira: true, autorizada: alvo.situacao === "fase-aberta" }),
+      texto: textoDaProximaSessao({
+        ciclo,
+        fase,
+        repo,
+        sessao: null,
+        primeira: true,
+        autorizada: alvo.situacao === "fase-aberta",
+        adotar: { slug, migracao: Boolean(reservas?.banda), lane: Boolean(reservas?.lane), conferirReservas: reservas === null },
+      }),
     };
+    ramoDaPrimeira = ramo;
     n = nonce(ciclo, "maestra:primeira", 0, head);
   }
   const lidos = niveisDasMarcas(marcas);
@@ -1021,6 +1030,7 @@ export function maestra({ repo, ciclo, sessao, linhagem, contexto, nonce: n = nu
     atendido,
     raiz: RAIZ_DOS_VERBOS,
     perguntar: (o) => pergunta.perguntar({ head, ...o }),
+    herdeira: herdeira ? escolhaDaHerdeira({ repo, ciclo, pergunta_id: herdeira, ordinal, ler: lerPergunta }) : null,
   });
   // A reserva antes do create_session: só a maestra que a grava cria a condutora deste pedido.
   if (decidida.acao === "criar-condutora" && !criar.primeira) {
@@ -1029,7 +1039,80 @@ export function maestra({ repo, ciclo, sessao, linhagem, contexto, nonce: n = nu
       return pergunta.perguntar({ acao: "perguntar", nonce: n, ciclo, head, motivo: "pedido-em-atendimento", nome: criar.nome ?? null, detalhe: `outra maestra reservou o pedido ${n} agora: não criar; ler o atendimento de novo`, ...(r.detalhe ? { origem: r.detalhe } : {}) });
     return { ...decidida, reserva: r.ref };
   }
+  if (decidida.acao === "criar-condutora" && criar.primeira) return soltarParaAPrimeira({ repo, ciclo, head, nonce: n, decidida, ramo: ramoDaPrimeira, propria, anexada });
   return decidida;
+}
+
+/**
+ * A resposta do operador à herdeira da maestra (D13a do L4), lida no registro de perguntas pela
+ * peça que já existe (`perguntas.perguntaDoAutorizar`; D17b, p-317f0e4be5157d84). Devolve
+ * `{ pergunta, escolha }` com `sim` (a, só para a passagem desta maestra: o texto da opção nomeia a
+ * maestra seguinte), `sempre` (b) ou `nao` (c); qualquer coisa que não se confere — registro fora
+ * do ar, origem sem prova humana, pergunta de outro ciclo, escolha que não casa — sai
+ * `{ escolha: null, aviso }`, e a maestra pergunta de novo: nunca passa sem o sim lido.
+ */
+export function escolhaDaHerdeira({ repo, ciclo, pergunta_id, ordinal, ler = null }) {
+  const nada = (aviso) => ({ pergunta: pergunta_id, escolha: null, aviso });
+  if (!/^p-[0-9a-f]{16}$/.test(pergunta_id ?? "")) return nada(`--herdeira fora da forma (${JSON.stringify(pergunta_id ?? null)}): perguntar de novo`);
+  let r;
+  try {
+    const registro = ler ? null : pecasDoConsentimento(repo).perguntas;
+    const leitor = ler ?? registro?.perguntaDoAutorizar?.bind(registro);
+    if (typeof leitor !== "function") return nada("o projeto não declara o registro de perguntas: perguntar de novo");
+    r = leitor(pergunta_id);
+  } catch (e) {
+    return nada(`o registro de perguntas não respondeu (${String(e?.message ?? e).split("\n")[0]}): perguntar de novo`);
+  }
+  if (!r || r.sem_registro === true) return nada("o registro de perguntas está fora do ar: perguntar de novo");
+  if (!ORIGENS_HUMANAS.includes(r.origem)) return nada(`a resposta de ${pergunta_id} não tem prova de origem humana (${r.origem ?? "sem resposta"}): perguntar de novo`);
+  // A pergunta tem de ser a da herdeira deste ciclo, como a do autorizar (exigirPerguntaDoAutorizar):
+  // abertura lida, mesmo id, mesmo ciclo, o ponteiro dela e um item só. Outra pergunta do ciclo
+  // respondida "b" não vira "não pergunte mais".
+  const ab = r.abertura ?? null;
+  if (!ab) return nada(`${pergunta_id} sem abertura no registro: perguntar de novo`);
+  if (ab.pergunta_id !== undefined && ab.pergunta_id !== pergunta_id) return nada(`a abertura lida é de ${ab.pergunta_id}, não de ${pergunta_id}: perguntar de novo`);
+  if (ab.ciclo !== ciclo) return nada(`${pergunta_id} é do ciclo ${JSON.stringify(ab.ciclo ?? null)}, não de ${ciclo}: perguntar de novo`);
+  if (ab.ponteiro !== niveis.PONTEIRO_DA_HERDEIRA) return nada(`${pergunta_id} aponta ${JSON.stringify(ab.ponteiro ?? null)}, não ${niveis.PONTEIRO_DA_HERDEIRA}: não é a pergunta da herdeira, perguntar de novo`);
+  const itens = Array.isArray(ab.itens) ? ab.itens : [];
+  if (itens.length !== 1) return nada(`${pergunta_id} tem ${itens.length} itens; a da herdeira tem um só: perguntar de novo`);
+  const numero = itens[0]?.numero ?? null;
+  const letras = [...new Set((r.escolhas ?? []).filter((e) => numero === null || e?.numero === undefined || e.numero === numero).map((e) => e?.letra))];
+  if (letras.length !== 1) return nada(`${pergunta_id} sem uma escolha só (${JSON.stringify(letras)}): perguntar de novo`);
+  const letra = letras[0];
+  const opcao = (itens[0].opcoes ?? []).find((o) => o?.letra === letra);
+  const esperadas = Object.fromEntries(niveis.opcoesDaHerdeira(ordinal).map((o) => [o.id, o.texto]));
+  if (letra === "a" && opcao?.texto !== esperadas.a) return nada(`o "só desta vez" de ${pergunta_id} foi para outra passagem: perguntar de novo`);
+  if (!(letra in esperadas) || opcao?.texto !== esperadas[letra]) return nada(`a opção ${letra} de ${pergunta_id} não é a da herdeira, byte a byte: perguntar de novo`);
+  return { pergunta: pergunta_id, escolha: { a: "sim", b: "sempre", c: "nao" }[letra] };
+}
+
+/**
+ * A maestra solta o ramo do ciclo antes do `create_session` da primeira
+ * condutora (D9c do L4), para ela o abrir na árvore dela. Só a árvore desta
+ * maestra se solta, limpa e sem a posse do ciclo; ramo em outra árvore, árvore
+ * suja ou posse aqui ⇒ pergunta, sem mexer em nada. Já solto ⇒ segue (o verbo
+ * se repete se o `create_session` falhar).
+ */
+function soltarParaAPrimeira({ repo, ciclo, head, nonce: n, decidida, ramo, propria, anexada }) {
+  const preso = (motivo, detalhe) => pergunta.perguntar({ acao: "perguntar", nonce: n, ciclo, head, motivo, ramo, detalhe });
+  if (!anexada) return { ...decidida, ramoSolto: { ramo, de: null } };
+  if (!mesmoCaminho(anexada.caminho, propria))
+    return preso("ramo-preso", `o ramo ${ramo} está anexado em ${anexada.caminho}, não na árvore desta maestra: a primeira condutora não o abriria; soltar lá (git switch --detach, árvore limpa) ou o operador decide`);
+  const sujeira = sujeiraDaArvore(propria);
+  if (sujeira) return preso("ramo-preso", `a árvore desta maestra (${propria}) tem o ramo ${ramo} e não está limpa (${sujeira}): commitar antes de soltar`);
+  let posse;
+  try {
+    posse = gitConducao.lerPosseDaCerca(propria, ciclo);
+  } catch (e) {
+    return preso("posse-ilegivel", `a posse de ${ciclo} nesta árvore não se lê (${String(e?.message ?? e).split("\n")[0]}): sem saber se a maestra a segura, o ramo não se solta`);
+  }
+  // null: o projeto não declara leitor da posse (a cerca pula). Fora disso só sem-posse, outra ou dona se leem.
+  if (posse !== null && !["sem-posse", "outra", "dona"].includes(posse?.estado))
+    return preso("posse-ilegivel", `a posse de ${ciclo} nesta árvore não se lê (${posse?.motivo ?? "sem leitura"}): sem saber se a maestra a segura, o ramo não se solta`);
+  if (posse?.estado === "dona")
+    return preso("posse-na-maestra", `a árvore desta maestra segura a posse de ${ciclo}: soltá-la (estado.mjs lane liberar --eixo estacao --ciclo ${ciclo}) antes, para a primeira condutora tomá-la na árvore dela`);
+  git(propria, ["switch", "--quiet", "--detach"]);
+  return { ...decidida, ramoSolto: { ramo, de: propria } };
 }
 
 /**
@@ -1181,12 +1264,26 @@ export function desmontarAnterior({ repo, ciclo, nonce: n, entrada, arquivadas }
  * "condutora anterior"); o padrão "maestra anterior" fica para quem chama
  * sem dizer.
  */
-export function textoDaProximaSessao({ ciclo, fase, repo, sessao, peloCiclo = false, anterior = "maestra anterior", primeira = false, autorizada = false }) {
-  const arvore = repo ?? "<worktree do ciclo conduzido>";
+export function textoDaProximaSessao({ ciclo, fase, repo, sessao, peloCiclo = false, anterior = "maestra anterior", primeira = false, autorizada = false, adotar = null }) {
+  // A primeira condutora de 3 níveis (adotar): a árvore é a da própria sessão,
+  // nunca a da maestra, que solta o ramo antes do create_session.
+  const arvore = adotar ? "<árvore>" : repo ?? "<worktree do ciclo conduzido>";
   const operador = adaptador.nomeDoOperador(repo);
   const verbos = `node ${RAIZ_DOS_VERBOS}/scripts/conducao/conducao.mjs`;
   return [
-    `Conduzir ${ciclo} — ${fase}, pela skill ${RAIZ_DOS_VERBOS}/skills/conducao/SKILL.md (worktree conduzida: ${arvore}).`,
+    adotar
+      ? `Conduzir ${ciclo} — ${fase}, pela skill ${RAIZ_DOS_VERBOS}/skills/conducao/SKILL.md. <árvore> é o diretório de trabalho desta sessão: o ramo do ciclo abre nela, nunca na árvore da maestra.`
+      : `Conduzir ${ciclo} — ${fase}, pela skill ${RAIZ_DOS_VERBOS}/skills/conducao/SKILL.md (worktree conduzida: ${arvore}).`,
+    ...(adotar ? passosDeAdotar(ciclo, adotar) : []),
+    ...(fase === "planejamento" ? textoDoPlanejamento(ciclo, verbos) : []),
+  ]
+    .concat(fase === "planejamento" ? [] : linhasDoLaco({ ciclo, fase, arvore, sessao, peloCiclo, anterior, primeira, autorizada, verbos, operador }))
+    .join("\n");
+}
+
+/** As linhas do laço do `proximo` no texto da próxima condutora de fase (pré-voo, retomar, proximo). */
+function linhasDoLaco({ ciclo, fase, arvore, sessao, peloCiclo, anterior, primeira, autorizada, verbos, operador }) {
+  return [
     primeira
       ? `Pré-voo da skill §1; no passo 2, sem ${anterior} a arquivar.`
       : `Pré-voo da skill §1; no passo 2, archive_session da ${anterior} ${sessao ?? "<id da sessão que encerrou>"} antes do retomar.`,
@@ -1196,7 +1293,62 @@ export function textoDaProximaSessao({ ciclo, fase, repo, sessao, peloCiclo = fa
       : peloCiclo
       ? `${verbos} proximo --repo ${arvore} --ciclo ${ciclo} → herdar-autorizacao ${fase} pelo sim do ciclo: gravar com herdar-autorizacao, sem pedir a ${operador}.`
       : `${verbos} proximo --repo ${arvore} --ciclo ${ciclo} → perguntar autorizar-ciclo ${fase}: pedir o sim do ciclo a ${operador}.`,
-  ].join("\n");
+  ];
+}
+
+/** O nome do ramo de planejamento do ciclo (D11b do L4): slug fixo `plano`. */
+export function ramoDePlanejamento(ciclo) {
+  return `ciclo-${ciclo}-plano`;
+}
+
+/**
+ * O que a condutora de planejamento faz depois de adotar o ramo (D5b e D16a do L4): o laço das
+ * etapas de `references/planejar.md` §3 na árvore dela, sem `proximo` (não há plano ainda), e o
+ * aviso à maestra para mesclar quando o `/plan-review` sai executável com CI verde (D12b).
+ */
+function textoDoPlanejamento(ciclo, verbos) {
+  return [
+    `Pré-voo da skill §1 só nos passos de repositório e inscrição (add_repo; a inscrição na proposta é da maestra); não há plano conduzível ainda, então nem retomar nem proximo.`,
+    `Seguir o laço de references/planejar.md §3: cada etapa nasce do pedido de ${verbos} etapa <id> --ciclo ${ciclo} (que acha esta árvore pelo ramo), uma sessão por etapa e por rodada do /plan-review; quem empurra é a sessão do /plan-review, desta árvore.`,
+    `Com o /plan-review em exit executable e o CI da proposta verde no sha empurrado: MESCLAR <número da proposta> <sha> à maestra e parar; a maestra mescla, apaga o ramo e arquiva esta sessão.`,
+  ];
+}
+
+/**
+ * Os passos com que a primeira condutora de 3 níveis abre o ramo na própria
+ * árvore (D9c do L4): `adotar` com o slug do ramo e as reservas que a árvore
+ * da maestra gravou (banda e lane são do ciclo no registro, por estação: o
+ * `adotar` as relê, não reserva outras), depois a posse ali e as reservas
+ * atrás dela. O lock da árvore é de cada árvore: nada passa da maestra.
+ */
+export function passosDeAdotar(ciclo, { slug = null, migracao = false, lane = false, conferirReservas = false } = {}) {
+  const flags = [slug ? ` --slug ${slug}` : "", migracao ? " --migracao" : "", lane ? " --lane" : ""].join("");
+  return [
+    `Antes do pré-voo, na <árvore> (cwd), nesta ordem, pelos verbos de árvore e de posse que a página do projeto nomeia com o caminho (campo pagina da declaração); saída ≠ 0 em qualquer passo ⇒ PARADA <motivo> à maestra e parar:`,
+    ...(conferirReservas
+      ? [`Antes do a: estado.mjs lane ler --eixo migration e --eixo substrato; o ciclo ${ciclo} com banda ⇒ --migracao no adotar, com lane ⇒ --lane (o adotar relê a reserva do ciclo, não cria outra).`]
+      : []),
+    `a. arvore.mjs adotar --ciclo ${ciclo}${flags} — abre o ramo do ciclo aqui${migracao || lane ? "; a banda e a lane do ciclo voltam as mesmas" : ""}. Ramo preso em outra árvore: PARADA ramo-preso.`,
+    `b. troca.mjs tomar-posse --ciclo ${ciclo} — a posse do ciclo nesta árvore (exit 4 = posse ocupada por outra árvore: PARADA posse-ocupada, nunca --forcar).`,
+    ...(migracao || lane ? [`c. estado.mjs lane transferir --ciclo ${ciclo} — as reservas seguem a posse até esta árvore.`] : []),
+  ];
+}
+
+/**
+ * O que a árvore que teve o ramo do ciclo gravou ao adotá-lo (`<git-dir>/sistoli-arvore.json`
+ * do `arvore.mjs adotar`): banda e lane, para a primeira condutora pedir as mesmas.
+ * Ausente, ilegível ou de outro ciclo ⇒ `null`.
+ */
+export function reservasDaArvore(caminho, ciclo) {
+  const gd = tentarGit(caminho, ["rev-parse", "--absolute-git-dir"]);
+  if (gd.status !== 0 || !gd.saida) return null;
+  try {
+    const m = JSON.parse(readFileSync(path.join(gd.saida, "sistoli-arvore.json"), "utf8"));
+    if (m?.ciclo !== ciclo) return null;
+    return { banda: m.banda ?? null, lane: m.lane ?? null };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -1236,7 +1388,8 @@ export function textoDoFechamento({ ciclo, repo, sessao, conduzidas, exigirEncer
       `- limpeza: ${limpar}`,
     ].join("\n");
   return [
-    `${fechamento} ${ciclo}`,
+    // O `create_session` recusa pedido que abre com `/`: o comando vai numa frase (hotfix conducao-pedido-da-etapa).
+    `Rode o ${fechamento} do ${ciclo}.`,
     `Ciclo conduzido (worktree: ${arvore}); ${arquivar} antes do Ato A.`,
     `Ler o ${fechamento} do projeto e rodar os verbos da condução por esta árvore (${RAIZ_DOS_VERBOS}):`,
     `- Ato A §8.9: ${auditar}`,
@@ -1624,13 +1777,6 @@ export function proximo({ repo, ciclo, entrada = {}, entradaErro = null, reinici
   }
   const encerradas = new Set(marcas.filter((m) => m.tipo === "encerrada").map((m) => m.fase));
   const ultima = autorizacoes.at(-1);
-  // Antes de qualquer autorização, o ciclo sem a marca `niveis` pergunta em quantos níveis roda:
-  // autorizar antes de escolher congelaria o ciclo em 2 (legado) sem o operador ter dito. Vale
-  // para quem mede a cadeia (`linhagem` na entrada, SKILL §2): sem ela, a entrada é do contrato
-  // anterior à escolha, e segue como antes.
-  const linhagemDaEntrada = niveis.linhagemValida(entrada.linhagem);
-  if (!ultima && linhagemDaEntrada && niveisDasMarcas(marcas).niveis === null)
-    return lerNiveis({ repo, ciclo, linhagem: `${linhagemDaEntrada.depth}/${linhagemDaEntrada.limit}` });
   if (!ultima) {
     const fase = faseSugerida(repo, ciclo, noHead.plano);
     return pergunta.perguntar({
@@ -3285,6 +3431,22 @@ export function main(argv) {
       return saida.acao === "perguntar" ? 1 : 0;
     }
     if (!ciclo) return sair(2, "--ciclo é obrigatório");
+    if (verbo === "criar-ramo") {
+      process.stdout.write(`${JSON.stringify(criarRamo({ repo, ciclo, tipo: flag(resto, "--tipo") }))}\n`);
+      return 0;
+    }
+    if (verbo === "etapa") {
+      const rodadaBruta = flag(resto, "--rodada");
+      const rodada = rodadaBruta === undefined ? undefined : (inteiro(rodadaBruta) ?? NaN);
+      const arvore = path.resolve(flag(resto, "--arvore") ?? arvoreDoCiclo(ciclo, repo));
+      const lido = tentarGit(arvore, ["rev-parse", "--abbrev-ref", "HEAD"]);
+      // Árvore que o git não lê é outro defeito que "fora do ramo": diz o erro real.
+      if (lido.status !== 0) throw new ErroPlano("arvore-ilegivel", `o git não lê o ramo de ${arvore}: ${(lido.erro || "sem saída").split("\n")[0]}`);
+      const ramo = lido.saida === "HEAD" ? null : lido.saida;
+      const saida = pedidoDaEtapa({ repo, ciclo, etapa: resto[0]?.startsWith("--") ? undefined : resto[0], rodada, arvore, ramo });
+      process.stdout.write(`${JSON.stringify(saida)}\n`);
+      return 0;
+    }
     if (verbo === "conferir" && !resto.some((a) => /^T\d{1,3}$/.test(a))) return sair(2, "conferir exige T<k>");
     if (repoFlag === undefined && (VERBOS_DA_ARVORE.has(verbo) || VERBOS_GIT.has(verbo))) repo = arvoreDoCiclo(ciclo);
     const decl = adaptador.lerAdaptador(repo);
@@ -3336,6 +3498,7 @@ export function main(argv) {
         anterior: flag(resto, "--anterior") ?? null,
         ordinal: flag(resto, "--ordinal") === undefined ? 1 : (inteiro(flag(resto, "--ordinal")) ?? NaN),
         registro: flag(resto, "--registro") ?? null,
+        herdeira: flag(resto, "--herdeira") ?? null,
       });
       logar(saida, "intencao", undefined, decl);
       process.stdout.write(`${JSON.stringify(saida)}\n`);
@@ -3350,7 +3513,7 @@ export function main(argv) {
         return 1;
       }
     } else
-      return sair(2, `verbo desconhecido: ${verbo ?? "(nenhum)"} — proximo | conferir | retomar | auditar | pre-voo | registrar-evento | ${[...VERBOS_GIT].join(" | ")} | voltar-a-perguntar`);
+      return sair(2, `verbo desconhecido: ${verbo ?? "(nenhum)"} — proximo | conferir | retomar | auditar | pre-voo | etapa | criar-ramo | registrar-evento | ${[...VERBOS_GIT].join(" | ")} | voltar-a-perguntar`);
     process.stdout.write(`${JSON.stringify(saida)}\n`);
     return 0;
   } catch (e) {

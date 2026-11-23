@@ -112,6 +112,8 @@ function ambiente(t, decl) {
   writeFileSync(path.join(dir, ".altair", "adaptador.json"), `${JSON.stringify(decl, null, 2)}\n`);
   g("add", "-A");
   g("commit", "-q", "-m", "plano");
+  // Ciclo de 2 níveis declarado: sem a marca, o núcleo roda em 3 (D10c do L4).
+  g("commit", "-q", "--allow-empty", "-m", "Conducao: ciclo niveis 2", "-m", "Conducao-Niveis: 2");
   g("push", "-q", "origin", "ciclo-teste");
   const vazio = (...linhas) => g("commit", "-q", "--allow-empty", ...linhas.flatMap((l) => ["-m", l]));
   const autorizar = (fase) => vazio(`Conducao: ${fase} autorizada`, "sim do Rita, no turno dele", `Conducao-Plano: ${g("rev-parse", `HEAD:${CAMINHO}`)}`);

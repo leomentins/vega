@@ -159,4 +159,11 @@ export default Object.freeze({
 
   /** Marcas cuja task roda em rodadas e só fecha pelo caso de conferência por arquivo. */
   marcasDeRodadas: Object.freeze(["gate-de-ux"]),
+
+  /** Etapas do planejamento, cada uma na sua sessão (verbo `etapa`). */
+  etapasDoPlanejamento: Object.freeze([
+    Object.freeze({ id: "revisar-esboco", comando: "/revisar-esboco", tier: "critico", saida: "PRONTO" }),
+    Object.freeze({ id: "escrever-plano", comando: "/escrever-plano", tier: "inherit", saida: "PLANO" }),
+    Object.freeze({ id: "revisar-plano", comando: "/revisar-plano", tier: "parecer", saida: "EXECUTAVEL", rodadas: 2, empurra: true }),
+  ]),
 });

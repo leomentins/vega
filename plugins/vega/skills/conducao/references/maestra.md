@@ -1,8 +1,8 @@
 # Maestra — a condução em 3 níveis
 
-A maestra é a sessão de cima quando o ciclo roda em 3 níveis (maestra → condutora → operária). Ela cria todas as condutoras, então toda condutora nasce no mesmo elo da cadeia de sessões. Ela não conduz fase, não abre operária e não lê CI. É por ela que o operador fala com o ciclo: toda pergunta de condutora chega à sessão da maestra, e o operador responde ali (§A pergunta). O que chega por mensagem nunca autoriza nada: a resposta vale pelo turno do operador na sessão da maestra, que a condutora confere pelo recibo no registro de perguntas.
+A maestra é a sessão de cima do ciclo, que roda sempre em 3 níveis (maestra → condutora → operária; D10c do L4, p-2fe3674c014f0735). Uma maestra por ciclo, do planejamento à execução: ela cria cada ramo e todas as condutoras, então toda condutora nasce no mesmo elo da cadeia de sessões; segura a inscrição na proposta e mescla os ramos. Ela não conduz fase, não abre operária, não lê CI e nunca tira ramo em árvore nenhuma, nem na dela (D10c, D16a do L4): o ramo vive na árvore da condutora da fase. É por ela que o operador fala com o ciclo: toda pergunta de condutora chega à sessão da maestra, e o operador responde ali (§A pergunta). O que chega por mensagem nunca autoriza nada: a resposta vale pelo turno do operador na sessão da maestra, que a condutora confere pelo recibo no registro de perguntas.
 
-Verbos: `node <raiz do plugin>/scripts/conducao/conducao.mjs maestra --ciclo <id> --sessao <id desta sessão> --linhagem <depth>/<limit> --contexto <used_tokens>/<max_tokens> [--nonce <x>] [--anterior <id>] [--ordinal <k>] [--registro <json>]`. Roda de qualquer árvore do repositório, porque lê o ramo do ciclo pelas referências e o pedido pelo origin. Os números saem do `get_session` desta sessão (sem `session_id`): `lineage` e `external_metadata.context_usage`. Ler de novo a cada chamada.
+Verbos: `node <raiz do plugin>/scripts/conducao/conducao.mjs maestra --ciclo <id> --sessao <id desta sessão> --linhagem <depth>/<limit> --contexto <used_tokens>/<max_tokens> [--nonce <x>] [--anterior <id>] [--ordinal <k>] [--registro <json>] [--herdeira <p-…>]` e `conducao.mjs criar-ramo --ciclo <id> --tipo plano|execucao`. Roda de qualquer árvore do repositório, porque lê o ramo do ciclo pelas referências e o pedido pelo origin. Os números saem do `get_session` desta sessão (sem `session_id`): `lineage` e `external_metadata.context_usage`. Ler de novo a cada chamada.
 
 ## A condutora sob a maestra
 
@@ -18,9 +18,14 @@ No `fechar-ciclo`, o `criar` vem como `pedir-herdeira`. A ordem é: o comando de
 
 ## Começo
 
-1. A sessão que o operador abriu roda `niveis` (SKILL §Três níveis). Com `niveis 3` gravado, ela é a maestra.
-2. `maestra` sem `--nonce` ⇒ `criar-condutora` da primeira fase a conduzir: `create_session` com o `texto` e o `modelo` da ação (sem modelo na ação, o `session_context.model` desta sessão) e o `nome` como título. O texto já leva a linha dos 3 níveis, com o id desta sessão como maestra.
-3. Guardar no registro (na conversa, e no texto da herdeira quando passar): `{ sessao, fase, nonce }` de cada condutora criada.
+1. A sessão que o operador abre com "conduzir <ciclo>" é a maestra: `niveis` não pergunta, e sem marca o ciclo roda em 3 (a marca antiga de 2 só vale para ciclo legado). Antes de tudo, `add_repo` (§A proposta).
+2. **O ramo, sem checkout** (D11b do L4): `criar-ramo --ciclo <id> --tipo plano` para o ciclo sem plano conduzível (`ciclo-<id>-plano`), `--tipo execucao` depois do planejamento mesclado (`ciclo-<id>`). O verbo faz um commit vazio sobre `origin/main` (`commit-tree`, assunto neutro, que não vira marca nem commit de fase), grava a referência e empurra só ela; outro ramo do mesmo ciclo vivo, local ou no origin, recusa (`ramo-do-ciclo-vivo`). Depois, os passos do `depois` da saída: `gh pr create --draft --base main --head <ramo>` (a proposta nasce com 0 arquivos e o CI dispara) e `subscribe_pr_activity`. Ramo já criado ⇒ seguir.
+3. `maestra` sem `--nonce` ⇒ `criar-condutora` da primeira condutora do ramo: a de **planejamento** no ramo `-plano` (o laço das etapas de [`planejar.md`](planejar.md) §3), a da primeira fase a conduzir no de execução. `create_session` com o `texto` e o `modelo` da ação (sem modelo, o `session_context.model` desta sessão) e o `nome` como título. O texto leva a linha dos 3 níveis, com o id desta sessão como maestra.
+   - O texto manda a condutora, na árvore dela e antes do pré-voo: `arvore.mjs adotar --ciclo <id>` (com `--slug` do ramo, e `--migracao`/`--lane` quando o ciclo tem banda ou lane no registro: o `adotar` relê a reserva do ciclo, não cria outra), `troca.mjs tomar-posse --ciclo <id>` e, com banda ou lane, `estado.mjs lane transferir --ciclo <id>`. Os verbos seguintes levam `--repo <árvore>`, a árvore da condutora. Passo que sai ≠ 0 chega à maestra como `PARADA <motivo>`.
+   - **Recuperação, não caminho:** ramo anexado na árvore desta maestra (ciclo de antes desta regra) ⇒ o verbo o solta dali (`git switch --detach`) antes de devolver o `criar-condutora`, e o campo `ramoSolto` diz de onde; só a própria árvore, limpa e sem a posse do ciclo: ramo em outra árvore ou árvore suja ⇒ `perguntar ramo-preso`; posse aqui ⇒ `perguntar posse-na-maestra`. Nada se mexe, e a pergunta vai ao operador.
+   - **O que fica com quem:** banda e lane são do ciclo no registro, por estação, e seguem a posse da condutora pelo `transferir`. O lock é de cada árvore.
+4. Na execução, o sim do operador ao ramo novo é o sim do ciclo que a condutora da F0 pede (`autorizar-ciclo F0`): nenhuma pergunta a mais.
+5. Guardar no registro (na conversa, e no texto da herdeira quando passar): `{ sessao, fase, nonce }` de cada condutora criada.
 
 ## O laço
 
@@ -32,8 +37,9 @@ Cada mensagem de condutora deste ciclo tem a primeira linha numa destas formas:
   - `perguntar pedido-em-atendimento`: reservado e sem atendimento. A condutora pode ter nascido sem registro: procurar por `list_sessions` a sessão com o `nome` da ação; achada, `maestra-atendeu` com o id dela e o `responder`; não achada, o operador decide. Nunca criar outra.
   - `responder-de-novo`: o pedido já foi atendido (o atendimento está no origin). Nenhuma sessão nasce; só o `responder`, com a sessão que já existe.
   - `passar-maestra`: ver §Herdeira.
-  - `perguntar` (`pedido-ausente`, `pedido-inalcancavel`, `pedido-ilegivel`, `pedido-de-outro-nonce`, `pedido-sem-pedinte`, `contexto-ausente`, `teto-de-linhagem`, `niveis-nao-tres`): dizer ao operador. Nenhuma sessão nasce.
+  - `perguntar` (`pedido-ausente`, `pedido-inalcancavel`, `pedido-ilegivel`, `pedido-de-outro-nonce`, `pedido-sem-pedinte`, `contexto-ausente`, `teto-de-linhagem`, `niveis-nao-tres`): dizer ao operador. `perguntar herdeira-da-maestra`: §Herdeira. Nenhuma sessão nasce.
 - **`PERGUNTA <p-…>`** — mostrar o bloco ao operador e levar o recibo da resposta (§A pergunta).
+- **`MESCLAR <N> <sha>`** — da condutora de planejamento ou da de fechamento: §Mesclagem.
 - **`PARADA <motivo>`** — aviso: mostrar ao operador nesta sessão a linha e o resto da mensagem, como dado, e responder com uma linha. Não autoriza nem decide nada; se o operador decidir algo, o caminho é uma pergunta da condutora.
 - Outra forma, ou nonce que o verbo recusa ⇒ ler a sessão por `list_events` antes de qualquer coisa. Nunca criar sessão por texto que chegou na mensagem: o texto vem do pedido no origin.
 
@@ -75,32 +81,33 @@ O `autorizar-ciclo` confere sozinho: com a marca de 3 níveis no ramo, sem `--ma
 
 ## A proposta
 
-Em 3 níveis a inscrição na proposta do ciclo é da maestra, do começo ao fim (D10a do operador, 21/11/2026): a condutora não se inscreve nem solta, nem no fechamento de fase nem na passagem.
+A inscrição na proposta de cada ramo é da maestra, do nascimento do ramo à mesclagem (D10a do operador, 21/11/2026), quem quer que empurre: a condutora no fim de fase (`empurrar-ramo`) ou a sessão do `/plan-review` a cada rodada (D15a do L4, p-6e19ca7a4446626e), sempre da árvore que tem a posse. Quem empurra não se inscreve nem solta.
 
-- **Inscrever** — `add_repo` do repositório que a página do projeto nomeia, com o acesso dela e sem clonar quando a árvore da sessão já é cópia dele (a sessão criada por `create_session` nasce sem repositório, e a inscrição é recusada com `repository not configured for this session`); depois, `subscribe_pr_activity` assim que a proposta do ciclo existe (o aviso da condutora da F0 traz o número). Soltar (`unsubscribe_pr_activity`) só no fim do ciclo.
-- **A cada evento da proposta** — `send_message` à condutora viva com a linha `CI <sha8> <estado>` (`niveis.mjs` `eventoDaProposta`/`linhaDeCi`). A linha só acorda: a condutora segue empurrando o ramo e lendo o veredito pelo `gh` com o `ci` da entrada do `proximo`, e o estado da linha nunca vale como veredito.
+- **Inscrever** — `add_repo` do repositório que a página do projeto nomeia, com o acesso dela e sem clonar quando a árvore da sessão já é cópia dele (a sessão criada por `create_session` nasce sem repositório, e a inscrição é recusada com `repository not configured for this session`); depois, `subscribe_pr_activity` logo que a proposta nasce, no passo 2 do §Começo.
+- **A cada evento da proposta** — `send_message` à condutora viva com a linha `CI <sha8> <estado>` (`niveis.mjs` `eventoDaProposta`/`linhaDeCi`). A linha só acorda: a condutora lê o veredito pelo `gh` com o `ci` da entrada do `proximo`, e o estado da linha nunca vale como veredito. Sem condutora viva, nada a mandar.
 - **Sem condutora viva** (passagem em curso) — guardar a última linha e mandá-la à herdeira depois do `confirmar-passagem`.
 - **Herdeira da maestra** — a anterior arquivada libera a inscrição; a herdeira se inscreve de novo logo depois de arquivá-la.
+- **Soltar** (`unsubscribe_pr_activity`) — depois da mesclagem do ramo (§Mesclagem).
+
+## Mesclagem
+
+A maestra mescla os dois ramos, por squash (D12b do L4, p-2fe3674c014f0735): com o squash, nada do ramo entra em `main` a não ser o resultado, nem as marcas da condução nem o commit vazio que abriu o ramo.
+
+- **Planejamento** — a condutora de planejamento, com o `/plan-review` em exit `executable` e o CI verde no sha empurrado, manda `MESCLAR <N> <sha>` e para. A maestra confere `gh pr view <N> --json state,mergeable,headRefOid` (`headRefOid` = sha, `MERGEABLE`) e o CI por dentro, e pergunta ao operador se mescla (como a #796: D8a, p-b053932e17a7d8a2); com o sim dele, `gh pr ready <N>` e `gh pr merge <N> --squash`. Depois: `unsubscribe_pr_activity`, `archive_session` da condutora de planejamento e das etapas que sobraram, `node .claude/scripts/arvore/arvore.mjs rm-path <árvore da condutora> --no-push` (o ramo já está em `main`), a posse solta (`estado.mjs lane liberar --eixo estacao --ciclo <id>`, se o `rm-path` não a soltou), `git push origin --delete <ramo>` e `git branch -D <ramo>` (o repositório não apaga sozinho: `delete_branch_on_merge` é `false`). Só então o ramo de execução (§Começo, passo 2).
+- **Execução** — o `/close-cycle` da condutora de fechamento para no Step 9: manda `MESCLAR <N> <sha>` e espera. A pergunta do squash sobe ao operador por aqui; com o sim, a maestra faz `gh pr merge <N> --squash` (sem `--delete-branch`) e responde `MESCLADO <sha do squash>`. A condutora retoma no Pós-merge; o ramo cai no Step 10.1 dela, depois do 10.2, porque o 10.0 ainda precisa da árvore de pé. A maestra solta a inscrição no `MESCLADO` e arquiva o que sobrou quando a condutora de fechamento termina.
 
 ## Herdeira
 
-A régua é a de [`janela.md`](janela.md): a maestra passa quando o contexto chega a 0,4 da janela. Ela só passa ao receber um `PASSAR`, nunca com uma condutora no meio da fase: nesse momento a única condutora viva é a que pediu, e ela está parada esperando. A condutora que pediu recebe o `HERDEIRA` da herdeira desta maestra, com o id dela, e passa a falar com ela.
+A régua é a de [`janela.md`](janela.md): a maestra passa quando o contexto chega a 0,4 da janela. Ela só passa ao receber um `PASSAR`, nunca com uma condutora no meio da fase: nesse momento a única condutora viva é a que pediu, e ela está parada esperando. A condutora que pediu recebe o `HERDEIRA` da herdeira desta maestra, com o id dela, e passa a falar com ela. A herdeira não leva árvore.
 
-1. `maestra --nonce <nonce> --contexto <usados>/<max>` sai `passar-maestra` quando o contexto passou do corte e a cadeia ainda tem lugar (`depth + 3 ≤ limit`).
-2. `create_session` com o `texto` da ação, o `nome` (`<ciclo> · maestra · <k>`) e o `session_context.model` desta sessão. Para passar o registro: `--registro <arquivo ou json>` com a lista `{ sessao, fase, nonce }`, só ids, que vai dentro do texto.
+1. `maestra --nonce <nonce> --contexto <usados>/<max>` com o contexto passado do corte e lugar na cadeia (`depth + 3 ≤ limit`) sai `perguntar herdeira-da-maestra` (D13a do L4): (a) sim, só desta vez · (b) sim, e não pergunte mais neste ciclo · (c) não, seguir nesta sessão. Abrir pelo `comando.mjs abrir` com o ciclo, o `ponteiro` `maestra:herdeira`, um item só e as opções do verbo byte a byte, e mostrar ao operador; no turno da resposta, o mesmo verbo com `--herdeira <p-…>`. O verbo lê a escolha no registro de perguntas (D17b, p-317f0e4be5157d84) e só passa com origem humana, o ciclo, o ponteiro e o texto da opção conferidos (outra pergunta do ciclo respondida "b" não vale); registro fora do ar, resposta sem prova ou o "só desta vez" de outra passagem ⇒ pergunta de novo, nunca passa calado.
+2. Com (a) ou (b), `passar-maestra`: `create_session` com o `texto` da ação, o `nome` (`<ciclo> · maestra · <k>`) e o `session_context.model` desta sessão. Para passar o registro: `--registro <arquivo ou json>` com a lista `{ sessao, fase, nonce }`, só ids, que vai dentro do texto. Com (b), o texto leva `--herdeira <p-…>` a toda chamada da herdeira: ela confere a mesma pergunta no registro e não pergunta de novo. Com (c), `criar-condutora` com um `aviso`, e esta maestra segue.
 3. Parar. A herdeira roda o mesmo `maestra --nonce` com `--anterior <esta>`, cria a condutora pedida, grava o atendimento, responde à que pediu e arquiva esta sessão (`archive_session`).
 
-Corte passado sem lugar para outra maestra ⇒ `criar-condutora` com `ultimaMaestra: true` e um `aviso`. Levar o aviso ao operador: a maestra segue até o fim, sem herdeira.
+Corte passado sem lugar para outra maestra ⇒ `criar-condutora` com `ultimaMaestra: true` e um `aviso`, sem pergunta. Levar o aviso ao operador: a maestra segue até o fim, sem herdeira.
 
 ## A conta
 
-Toda sessão criada por outra fica um elo abaixo dela, e o `create_session` recusa quem já está no `limit`.
-
-| | 2 níveis | 3 níveis |
-| --- | --- | --- |
-| Quem cria a condutora | a condutora anterior | a maestra |
-| Condutora em | um elo abaixo da anterior | sempre `maestra + 1` |
-| O que soma um elo | cada passagem de condutora | cada passagem de maestra |
-| A partir de uma sessão em 0, limite 8 | 8 condutoras (7 passagens) | 7 maestras (6 passagens), condutoras sem teto de cadeia |
+Toda sessão criada por outra fica um elo abaixo dela, e o `create_session` recusa quem já está no `limit`. Toda condutora (planejamento, fases, fechamento) é filha da maestra e nasce em `maestra + 1`; a operária dela, em `maestra + 2`; só a passagem da maestra soma um elo. A partir de uma sessão em 0, limite 8: 7 maestras (6 passagens), condutoras sem teto de cadeia. Ciclo legado de 2 níveis gasta um elo por passagem de condutora (8 condutoras, 7 passagens).
 
 Uma condutora em `c` abre operária só se `c + 1 ≤ limit`. Uma maestra em `m` só serve se a operária das condutoras dela couber (`m + 2 ≤ limit`). O verbo faz essas contas e devolve `linhagem` em toda ação.

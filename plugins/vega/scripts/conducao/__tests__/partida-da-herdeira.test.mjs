@@ -106,6 +106,8 @@ function ambiente(t) {
   writeFileSync(path.join(principal, PASTA, "canonico.md"), CANONICO);
   g(principal, "add", "-A");
   g(principal, "commit", "-q", "-m", "plano");
+  // Ciclo de 2 níveis declarado: sem a marca, o núcleo roda em 3 (D10c do L4).
+  g(principal, "commit", "-q", "--allow-empty", "-m", "Conducao: ciclo niveis 2", "-m", "Conducao-Niveis: 2");
   g(principal, "push", "-q", "origin", RAMO);
   g(principal, "switch", "-q", "--detach");
   const anterior = path.join(raiz, "bridge-cse_anterior");
