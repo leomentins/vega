@@ -97,8 +97,11 @@ describe("interpretarResposta — a letra, o numero e o texto livre (AC-VEGA19-2
     assert.equal(r.alternativa_livre, true);
     assert.deepEqual(r.escolhas, []);
   });
-  test("letra que nao e opcao recusa alto; sem literal recusa", () => {
-    assert.throws(() => interpretarResposta("D6z", itens), /z nao e opcao de D6/);
+  test("letra que nao e opcao sai a-confirmar com a leitura (D-VEGA20-6); sem literal recusa", () => {
+    const r = interpretarResposta("D6z", itens);
+    assert.equal(r.tipo, "a-confirmar");
+    assert.equal(r.leitura, "D6z: z não é opção de D6");
+    assert.deepEqual(r.escolhas, []);
     assert.throws(() => interpretarResposta("   ", itens), /literal/);
   });
   test("varios itens: cada numero com a sua letra", () => {
@@ -205,14 +208,24 @@ describe("destino banco (dublê) — abrir, responder, dispensar, ler (AC-VEGA19
     assert.equal(b.linhas.filter((l) => l.evento === "resposta").length, 0);
   });
 
-  test("resposta repetida com o mesmo texto e idempotente; com outro texto recusa", async () => {
+  test("resposta repetida com o mesmo texto e idempotente; com outro texto, a provada recusa e a sem prova cede", async () => {
     const b = banco();
     const { pergunta_id } = await abrir(perguntaDe(), { registro: b.registro, destinatarios });
     await responder({ pergunta_id, literal: "D6b" }, { registro: b.registro });
     const de_novo = await responder({ pergunta_id, literal: "D6b" }, { registro: b.registro });
     assert.equal(de_novo.ja_respondida, true);
-    await assert.rejects(responder({ pergunta_id, literal: "D6a" }, { registro: b.registro }), /ja respondida/);
+    // A gravada provada (T44): entre duas provadas, texto diferente segue recusando.
+    const provada = () => ({ origem: "digitado" });
+    await assert.rejects(responder({ pergunta_id, literal: "D6a" }, { registro: b.registro, origemFn: provada }), /ja respondida com outro texto; uma resposta por pergunta/);
+    // A gravada sem prova (`agente`) cede: nada se regrava, e a provada vale pela autoria do gancho.
+    const semProva = () => ({ origem: "agente", motivo: "sem-autoria" });
+    const cedeu = await responder({ pergunta_id, literal: "D6a" }, { registro: b.registro, origemFn: semProva });
+    assert.equal(cedeu.cede, "resposta-sem-prova-cede");
+    assert.equal(cedeu.gravados, 0);
+    // `repasse-hub` nao prova: a gravada que so tem repasse tambem cede.
+    assert.equal((await responder({ pergunta_id, literal: "D6a" }, { registro: b.registro, origemFn: () => ({ origem: "repasse-hub" }) })).cede, "resposta-sem-prova-cede");
     assert.equal(b.linhas.filter((l) => l.evento === "resposta").length, 1);
+    assert.equal(b.linhas.find((l) => l.evento === "resposta").resposta_literal, "D6b", "a resposta gravada nao se regrava");
   });
 
   test("dispensar grava a dispensa e a pergunta segue aberta; alternativa livre grava sem escolha", async () => {
@@ -522,17 +535,54 @@ describe("rota e recibo — o que a revisao da T40 cobrou", () => {
     assert.equal(b.linhas.find((l) => l.evento === "resposta").mandato, null);
   });
 
-  test("resposta repetida: o mesmo recibo passa; outro recibo, recibo depois ou outro --por recusa alto", async () => {
+  test("resposta repetida: o mesmo recibo passa; na provada, outro recibo, recibo depois ou outro --por recusa alto; na sem prova, cede", async () => {
+    const provada = () => ({ origem: "digitado-no-hub-conferido" });
     const b = banco();
     const { pergunta_id } = await abrir(perguntaDe(), { registro: b.registro, destinatarios });
     await responder({ pergunta_id, literal: "a", recibo: "s1 e1", por: "hub:s1" }, { registro: b.registro });
     const de_novo = await responder({ pergunta_id, literal: "a", recibo: "s1 e1", por: "hub:s1" }, { registro: b.registro });
     assert.equal(de_novo.ja_respondida, true);
-    await assert.rejects(responder({ pergunta_id, literal: "a", recibo: "s2 e2" }, { registro: b.registro }), /com outro recibo/);
-    await assert.rejects(responder({ pergunta_id, literal: "a", por: "direto" }, { registro: b.registro }), /por outro caminho/);
+    await assert.rejects(responder({ pergunta_id, literal: "a", recibo: "s2 e2" }, { registro: b.registro, origemFn: provada }), /com outro recibo/);
+    await assert.rejects(responder({ pergunta_id, literal: "a", por: "direto" }, { registro: b.registro, origemFn: provada }), /por outro caminho/);
     const b2 = banco();
     const p2 = (await abrir(perguntaDe({ numero: 7 }), { registro: b2.registro, destinatarios })).pergunta_id;
     await responder({ pergunta_id: p2, literal: "a" }, { registro: b2.registro });
-    await assert.rejects(responder({ pergunta_id: p2, literal: "a", recibo: "s1 e1" }, { registro: b2.registro }), /sem recibo: o --recibo nao se grava depois/);
+    await assert.rejects(responder({ pergunta_id: p2, literal: "a", recibo: "s1 e1" }, { registro: b2.registro, origemFn: provada }), /sem recibo: o --recibo nao se grava depois/);
+    // T44: a gravada sem prova cede ao repasse com recibo que chega depois; nada se regrava.
+    const cedeu = await responder({ pergunta_id: p2, literal: "a", recibo: "s1 e1", por: "hub:s1" }, { registro: b2.registro, origemFn: () => ({ origem: "agente" }) });
+    assert.equal(cedeu.cede, "resposta-sem-prova-cede");
+    assert.equal(b2.linhas.find((l) => l.evento === "resposta").recibo ?? null, null);
+  });
+
+  test("a resposta provada ja gravada com as mesmas letras passa; com outras, recusa (T44)", async () => {
+    const b = banco();
+    const { pergunta_id } = await abrir(perguntaDe(), { registro: b.registro, destinatarios });
+    await responder({ pergunta_id, literal: "D6b" }, { registro: b.registro });
+    const lida = await b.registro.ler({ pergunta_id });
+    const resposta = lida.eventos.find((e) => e.evento === "resposta");
+    b.linhas.push({ ...resposta, evento: "autoria", origem_resposta: "digitado", prova: "transcript:/t.jsonl#u-1", resposta_literal: "D6a", escolha: "a" });
+    const semProva = () => ({ origem: "agente" });
+    assert.equal((await responder({ pergunta_id, literal: "D6a" }, { registro: b.registro, origemFn: semProva })).cede, "resposta-provada-ja-gravada");
+    b.linhas.pop();
+    b.linhas.push({ ...resposta, evento: "autoria", origem_resposta: "digitado", prova: "transcript:/t.jsonl#u-2", resposta_literal: "D6b", escolha: "b" });
+    await assert.rejects(responder({ pergunta_id, literal: "D6a" }, { registro: b.registro, origemFn: semProva }), /uma resposta por pergunta/);
+  });
+
+  test("abrir de novo a pergunta aberta com o mesmo conteudo devolve o mesmo id e o mesmo aberta_em, tambem com --supersedes (T44)", async () => {
+    const b = banco();
+    const primeira = await abrir(perguntaDe(), { registro: b.registro, destinatarios, carimbo: "2026-11-21T22:23:01.078Z" });
+    const de_novo = await abrir(perguntaDe(), { registro: b.registro, destinatarios, carimbo: "2026-11-21T23:37:58.425Z" });
+    assert.equal(de_novo.pergunta_id, primeira.pergunta_id);
+    assert.equal(de_novo.aberta_em, "2026-11-21T22:23:01.078Z", "o aberta_em nao anda");
+    const superando = await abrir({ ...perguntaDe(), supersedes: primeira.pergunta_id }, { registro: b.registro, destinatarios, carimbo: "2026-11-21T23:40:00.000Z" });
+    assert.equal(superando.pergunta_id, primeira.pergunta_id, "superar a aberta com o mesmo conteudo devolve ela mesma");
+    assert.equal(superando.aberta_em, "2026-11-21T22:23:01.078Z");
+    assert.equal(b.linhas.filter((l) => l.evento === "abertura").every((l) => (l.supersedes ?? null) !== primeira.pergunta_id), true, "a pergunta nao supera a si mesma");
+    // Conteudo diferente segue abrindo outra, com --supersedes.
+    const diferente = perguntaDe();
+    diferente.pergunta.itens[0].titulo = "decisao 6, com outro titulo";
+    const nova = await abrir({ ...diferente, supersedes: primeira.pergunta_id }, { registro: b.registro, destinatarios, carimbo: "2026-11-21T23:45:00.000Z" });
+    assert.notEqual(nova.pergunta_id, primeira.pergunta_id);
+    assert.equal(nova.aberta_em, "2026-11-21T23:45:00.000Z");
   });
 });

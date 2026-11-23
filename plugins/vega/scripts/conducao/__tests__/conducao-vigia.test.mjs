@@ -199,8 +199,24 @@ test("regra de falha por tabela de casos", (t) => {
     {
       nome: "tentativa sem filha na entrada: perguntar",
       montar: (r) => r.emVoo("T1", 1, "n1"),
-      entrada: { filhas: [] },
-      espera: (a) => assert.equal(a.motivo, "tentativa-sem-filha"),
+      entrada: { agora: ISO(ABERTA + 121 * 60), filhas: [] },
+      espera: (a) => {
+        assert.equal(a.acao, "perguntar");
+        assert.equal(a.motivo, "tentativa-sem-filha");
+      },
+    },
+    {
+      nome: "tentativa sem filha dentro do prazo: reentregar com o mesmo nonce, sem parar",
+      montar: (r) => r.emVoo("T1", 1, "n1"),
+      entrada: { agora: ISO(ABERTA + 5 * 60), filhas: [] },
+      espera: (a) => {
+        assert.equal(a.acao, "reentregar");
+        assert.equal(a.motivo, "operaria-nao-nasceu");
+        assert.equal(a.tentativa, 1);
+        assert.equal(a.nonceTentativa, "n1");
+        assert.equal(a.comando, "abrir T1 --tentativa 1 --nonce n1");
+        assert.equal(a.registrarFalha, undefined);
+      },
     },
     {
       nome: "prazo vencido sem aviso: perguntar",

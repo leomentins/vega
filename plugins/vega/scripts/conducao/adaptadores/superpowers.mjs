@@ -718,6 +718,8 @@ export default Object.freeze({
   caminhosProtegidos: Object.freeze([MARCA_SENSIVEL]),
   telasProtegidasDosSteps: Object.freeze([]),
   foraDasTelasDosSteps: Object.freeze([]),
+  /** O formato público não tem gate de publicação próprio: define a parada só o que o motor guarda. */
+  definemAParada: Object.freeze([]),
   /** O formato público não traz carimbo de revisão nem CI da proposta. */
   carimbo: null,
   ci: null,

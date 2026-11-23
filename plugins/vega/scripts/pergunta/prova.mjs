@@ -271,6 +271,63 @@ export function escolhasDaResposta(resposta) {
 const PROVA_LIDA = /^(transcript|get_event|entre-sessoes):([^\s#]{1,400})#([A-Za-z0-9_-]{1,128})$/;
 
 /**
+ * O id de sessao da nuvem — `session_…` da sessao remota, `cse_…` da ponte do app. Nunca e o nome
+ * de um transcript local: a prova nao se acha por ele (hotfix pergunta-nao-pede-resposta-duas-vezes,
+ * 20/11/2026). O `comando.mjs abrir` recusa a mesma forma. Paridade com a lib da Sistoli.
+ */
+export const SESSAO_DE_NUVEM = /^(?:session|cse)_/;
+
+/**
+ * A sessao cujo transcript reconfere a prova: `{ sessao, daAutoria }` ou `null`. E a da abertura.
+ * Aberta com id de nuvem, e a da `autoria` (o gancho grava a sessao do transcript em que pareou a
+ * resposta), e a prova pede mais (`daAutoria`): o bloco da pergunta, com a marca dela, saiu nesse
+ * transcript antes da mensagem. So a resposta digitada depois de ver o bloco conta (D-VEGA19-27).
+ */
+function sessaoDaProva(autoria, abertura) {
+  if (!SESSAO_DE_NUVEM.test(abertura.sessao)) return { sessao: abertura.sessao, daAutoria: false };
+  const s = autoria?.sessao;
+  return typeof s === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(s) && !SESSAO_DE_NUVEM.test(s) ? { sessao: s, daAutoria: true } : null;
+}
+
+/** Texto bruto de uma entrada, com o de `tool_result` (a saida do `comando.mjs abrir`). */
+function textoBrutoDe(e) {
+  const c = e?.message?.content;
+  if (typeof c === "string") return c;
+  if (!Array.isArray(c)) return "";
+  const partes = [];
+  for (const b of c) {
+    if (b?.type === "text") partes.push(b.text ?? "");
+    else if (b?.type === "tool_result") {
+      if (typeof b.content === "string") partes.push(b.content);
+      else if (Array.isArray(b.content)) for (const x of b.content) if (x?.type === "text") partes.push(x.text ?? "");
+    }
+  }
+  return partes.join("\n");
+}
+
+/** A marca do bloco de `pergunta_id` saiu numa entrada da `sessao` ate `ate` (ms)? Id torto ⇒ nao. */
+function blocoMostradoAntes(entradas, { sessao, pergunta_id, ate }) {
+  if (!/^p-[0-9a-f]{16}$/.test(pergunta_id ?? "") || !Number.isFinite(ate)) return false;
+  const marca = new RegExp(`<!--\\s*pergunta\\s+${pergunta_id}(?:\\s*·\\s*sem registro)?\\s*-->`);
+  return entradas.some((x) => x?.sessionId === sessao && Date.parse(x?.timestamp ?? "") <= ate && marca.test(textoBrutoDe(x)));
+}
+
+/**
+ * O conserto que o agente faz sozinho, sem pedir nada ao operador, quando a resposta citada pelo
+ * `autorizar-ciclo` nao tem prova de origem humana: o nucleo o acrescenta a recusa
+ * `origem-sem-prova`. `null` com origem humana ou sem resposta. Paridade com a lib da Sistoli.
+ */
+export function consertoDaOrigem({ abertura, motivo }) {
+  if (motivo !== "sem-autoria" && motivo !== "prova-nao-resolve") return null;
+  const id = abertura?.pergunta_id ?? "a pergunta";
+  if (SESSAO_DE_NUVEM.test(abertura?.sessao ?? ""))
+    return `conserto sem o operador: ${id} foi aberta com id de nuvem, e a prova se le pelo transcript da sessao que mostrou o bloco; nessa sessao, procure a resposta digitada depois do bloco, com o numero e a letra: achou, rode o autorizar de novo no turno seguinte, sem pedir a resposta outra vez (reabrir no mesmo ciclo com o mesmo conteudo e o mesmo destinatario devolve o mesmo id); nao achou, a pergunta segue aberta`;
+  if (motivo === "sem-autoria")
+    return `conserto sem o operador: procure no transcript a resposta digitada depois do bloco de ${id}, com o numero e a letra; achou, rode o autorizar de novo no turno seguinte (o gancho grava a autoria no fim do turno); so sem ela a pergunta segue aberta`;
+  return `conserto sem o operador: a autoria de ${id} nao se reconfere no transcript da sessao da abertura; rode o autorizar nesta maquina, onde esse transcript existe`;
+}
+
+/**
  * Reconfere uma prova contra a pergunta. Devolve `null` (resolve) ou o motivo curto. A regra e a
  * mesma do gancho que a gravou e a que a T16 usa:
  *   - `transcript:<caminho>#<uuid>` — a entrada `uuid` do transcript e mensagem humana, da sessao da
@@ -291,12 +348,16 @@ export function conferirProva(autoria, { abertura, escolhas, lerEntradas = lerTr
   const depois = (e) => Date.parse(e?.timestamp ?? "") > abertaEm;
   // As tres formas leem o transcript DA SESSAO DA ABERTURA, achado pela pasta do Claude Code; na
   // `transcript:` o caminho gravado tem de ser esse mesmo — arquivo fabricado em outro lugar nao prova.
-  const arquivo = achar(abertura.sessao);
+  // Abertura gravada com id de nuvem: a sessao e a da autoria, com o bloco exigido (`sessaoDaProva`).
+  const ancora = sessaoDaProva(autoria, abertura);
+  if (!ancora) return "prova-nao-resolve";
+  const arquivo = achar(ancora.sessao);
   if (!arquivo || (forma === "transcript" && path.resolve(onde) !== path.resolve(arquivo))) return "prova-nao-resolve";
   const entradas = lerEntradas(arquivo);
   if (!entradas) return "prova-nao-resolve";
   const e = entradas.find((x) => x?.uuid === uuid);
-  if (!e || e.sessionId !== abertura.sessao) return "prova-nao-resolve";
+  if (!e || e.sessionId !== ancora.sessao) return "prova-nao-resolve";
+  if (ancora.daAutoria && !blocoMostradoAntes(entradas, { sessao: ancora.sessao, pergunta_id: abertura.pergunta_id, ate: Date.parse(e.timestamp ?? "") })) return "prova-nao-resolve";
   if (forma === "transcript") {
     return ehMensagemHumana(e) && depois(e) && textoCasaEscolhas(textoHumanoDe(e), escolhas, { itemUnico }) ? null : "prova-nao-resolve";
   }
@@ -369,7 +430,8 @@ export function perguntaDoAutorizar(pergunta_id, { eventos, lerEntradas = lerTra
   return {
     origem: o.origem,
     motivo: o.motivo,
-    abertura: ab ? { evento: "abertura", pergunta_id, ciclo: ab.ciclo ?? null, ponteiro: ab.ponteiro ?? null, itens: ab.itens ?? [] } : null,
+    conserto: consertoDaOrigem({ abertura: ab, motivo: o.motivo }),
+    abertura: ab ? { evento: "abertura", pergunta_id, ciclo: ab.ciclo ?? null, ponteiro: ab.ponteiro ?? null, itens: ab.itens ?? [], carimbo: ab.carimbo ?? null } : null,
     escolhas: escolhasDaResposta(resposta),
   };
 }

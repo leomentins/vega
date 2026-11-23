@@ -44,12 +44,15 @@ export const HOOKS_DO_NUCLEO = [
 /** Onde o motor mora, relativo a raiz da arvore. */
 export const DIRETORIO_DO_MOTOR = join(".claude", "skills", "vega", "motor");
 
+// Sem `raiz`, o motor e o diretorio deste arquivo: na arvore da Sistoli ele fica em
+// `<raiz>/.claude/skills/vega/motor`, mas no plugin exportado fica em `<plugin>/motor`, e tirar a
+// raiz quatro niveis acima (como era) apontava para fora do plugin — `--executar` saia 2 com
+// `hook ausente no motor da arvore` no repositorio limpo (VEGA-20 T41, run 44951294745).
 const ESTE = dirname(fileURLToPath(import.meta.url));
-const RAIZ_PADRAO = resolve(ESTE, "..", "..", "..", "..");
 
-/** Diretorio do motor na arvore `raiz`. */
-export function diretorioDoMotor(raiz = RAIZ_PADRAO) {
-  return join(resolve(raiz), DIRETORIO_DO_MOTOR);
+/** Diretorio do motor na arvore `raiz`; sem `raiz`, o diretorio deste proprio arquivo. */
+export function diretorioDoMotor(raiz) {
+  return raiz === undefined ? ESTE : join(resolve(raiz), DIRETORIO_DO_MOTOR);
 }
 
 /**
@@ -57,7 +60,7 @@ export function diretorioDoMotor(raiz = RAIZ_PADRAO) {
  * — nunca lanca. Aceita qualquer nome de hook valido (a prova de execucao por host planta
  * um canario aqui), nao so os do nucleo.
  */
-export function caminhoDoHook(nome, raiz = RAIZ_PADRAO) {
+export function caminhoDoHook(nome, raiz) {
   if (typeof nome !== "string" || !/^[a-z0-9][a-z0-9._-]*\.js$/i.test(nome)) {
     return { erro: "nome de hook invalido: " + String(nome), codigo: 2 };
   }
@@ -70,7 +73,7 @@ export function caminhoDoHook(nome, raiz = RAIZ_PADRAO) {
 }
 
 /** Inventario do que o motor serve: `{ diretorio, hooks, skills, codigo }` ou `{ erro, codigo }`. */
-export function inventario(raiz = RAIZ_PADRAO) {
+export function inventario(raiz) {
   const diretorio = diretorioDoMotor(raiz);
   if (!existsSync(diretorio)) {
     return { erro: "motor ausente da arvore: " + diretorio, codigo: 2 };
@@ -83,7 +86,7 @@ export function inventario(raiz = RAIZ_PADRAO) {
 }
 
 /** Confere que todo hook do nucleo existe na arvore. `{ ok, codigo, faltando, diretorio }`. */
-export function verificar(raiz = RAIZ_PADRAO) {
+export function verificar(raiz) {
   const diretorio = diretorioDoMotor(raiz);
   const faltando = HOOKS_DO_NUCLEO.filter((n) => !existsSync(join(diretorio, n)));
   return { ok: faltando.length === 0, codigo: faltando.length === 0 ? 0 : 2, faltando, diretorio };
@@ -100,7 +103,7 @@ function sair(codigo, linhas) {
 }
 
 function main(argv) {
-  const raiz = RAIZ_PADRAO;
+  const raiz = undefined;
   const json = argv.includes("--json");
 
   if (argv.includes("--verificar")) {

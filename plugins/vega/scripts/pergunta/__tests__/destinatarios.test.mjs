@@ -131,8 +131,9 @@ describe("leitura e conferência", () => {
 describe("o que sempre sobe ao operador nunca desce", () => {
   const t = conferirCamada(camada());
 
-  test("os quatro motivos: guard, instruções de sessão, canonico do ciclo, caminho clínico", () => {
-    assert.deepEqual([...SEMPRE_AO_OPERADOR].sort(), ["alcance-dos-hooks", "caminho-clinico-fora-dos-outputs", "canonico-do-ciclo", "superficie-de-instrucao"]);
+  test("os cinco motivos: guard, instruções de sessão, canonico do ciclo, caminho clínico e o que define a parada", () => {
+    // D-VEGA20-26: `define-a-parada` conta como publicação e nunca desce da condutora.
+    assert.deepEqual([...SEMPRE_AO_OPERADOR].sort(), ["alcance-dos-hooks", "caminho-clinico-fora-dos-outputs", "canonico-do-ciclo", "define-a-parada", "superficie-de-instrucao"]);
     for (const motivo of SEMPRE_AO_OPERADOR) {
       assert.equal(destinatarioEfetivo({ papel: NIVEL_DA_CONDUCAO, motivo }, t), "operador", motivo);
       assert.equal(destinatarioEfetivo({ papel: NIVEL_DA_CONDUCAO, motivos: ["faixa-com-merge", motivo] }, t), "operador", motivo);

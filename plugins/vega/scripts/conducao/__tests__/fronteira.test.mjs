@@ -100,6 +100,13 @@ test("entrada na forma da SKILL §2 passo 1 nao tem problema", () => {
   assert.deepEqual(problemasDaEntrada(entrada), []);
   assert.deepEqual(problemasDaEntrada({}), []);
   assert.deepEqual(problemasDaEntrada({ ci: null, proposta: null, filhas: [] }), []);
+  // Na fonte (hotfix conducao-corta-paradas-de-regra): objeto vazio é lista vazia, e campo a mais
+  // na herdeira ou na anterior passa como na filha.
+  assert.deepEqual(problemasDaEntrada({ aprovacoes: {}, filhas: {} }), []);
+  assert.deepEqual(problemasDaEntrada({ herdeira: { sessao: "s", estado: "IDLE", statusBucket: "IDLE", nonce: "n" } }), []);
+  assert.match(problemasDaEntrada({ herdeira: { sessao: 1 } })[0], /^herdeira\.sessao: /);
+  // Erro de digitação segue parando: sumiria com o teto do arquivar.
+  assert.deepEqual(problemasDaEntrada({ anterior: { sessao: "s", arquivamento: [] } }), ["anterior: campo desconhecido: arquivamento"]);
 });
 
 test("cada forma errada da entrada vira um problema nomeado", () => {
@@ -112,7 +119,7 @@ test("cada forma errada da entrada vira um problema nomeado", () => {
     [{ filhas: [{ sessao: 1 }] }, /^filhas\[0\]\.sessao: 1, esperado texto$/],
     [{ filhas: [{ tentativa: "1" }] }, /^filhas\[0\]\.tentativa: /],
     [{ filhas: [{ arquivamentos: "n" }] }, /^filhas\[0\]\.arquivamentos: /],
-    [{ aprovacoes: {} }, /^aprovacoes: esperado lista$/],
+    [{ aprovacoes: { T1: "x" } }, /^aprovacoes: esperado lista$/],
     [{ aprovacoes: [{ task: 1 }] }, /^aprovacoes\[0\]\.task: /],
     [{ ci: "verde" }, /^ci: "verde", esperado objeto$/],
     [{ ci: { sha: 1 } }, /^ci\.sha: /],

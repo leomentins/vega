@@ -235,7 +235,8 @@ export function escaparRegex(s) {
  * A v2 (VEGA-19 T45) poe o conteudo no id da pergunta; a linha da v1 segue lida.
  */
 export const VERSAO_ESQUEMA = 2;
-export const EVENTOS = Object.freeze(["abertura", "resposta", "autoria", "dispensa", "previsao", "destino"]);
+/** `a-confirmar` (VEGA-20 T8, D-VEGA20-6): a resposta fora do bloco; a pergunta segue aberta. */
+export const EVENTOS = Object.freeze(["abertura", "resposta", "autoria", "dispensa", "previsao", "destino", "a-confirmar"]);
 /** Origens da resposta (T10); `hook` nunca: quem sobe a origem e o pareador, por `autoria`. */
 export const ORIGENS_RESPOSTA = Object.freeze(["digitado", "digitado-no-hub-conferido", "repasse-hub", "agente", "padrao-da-fabrica"]);
 
@@ -307,6 +308,8 @@ export function chaveDoEvento(ev) {
       return sha("previsao", p, ev.modelo, ev.versao_esquema ?? VERSAO_ESQUEMA);
     case "destino":
       return sha("destino", p, ev.ponteiro);
+    case "a-confirmar":
+      return sha("a-confirmar", p, ev.carimbo);
     default:
       throw new ErroDestino("evento.evento: desconhecido");
   }

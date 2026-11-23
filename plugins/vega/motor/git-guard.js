@@ -19,8 +19,10 @@
 // Se ele falhar, nao ha one-shot e o modo e `hard`.
 // `off` e `soft` valem SO para a sessao (VEGA-26 T49, D-VEGA26-32): no tier subagent o modo
 // e `hard` qualquer que seja o arquivo, e o subagent nao grava `*-mode` nem `*-allow` por
-// Bash (`escritaDeEstadoPeloSubagent`, antes do early-exit sem `git`). Este motor e o dono
-// unico dessa regra de Bash; a escrita por Write/Edit e do `subagent-state-write-guard.js`.
+// Bash (`escritaDeEstadoPeloSubagent`, antes do early-exit sem `git`) nem por payload de escrita
+// de arquivo (`escritaDeArquivoPeloSubagent`, Write/Edit/MultiEdit/NotebookEdit e Serena). Desde a
+// VEGA-20 T9 este motor e o dono unico das duas, e tambem da regra do indice compartilhado
+// (`indiceCompartilhado`, portada do `shared-index-guard.js`).
 //
 // DESCARTE DA TROCA (VEGA-26 T34, matriz da T33, linha G1-troca): `git reset --keep <alvo>`
 // passa sem liberacao a mao quando o alvo e o origin do proprio ramo e o que sai e so
@@ -62,8 +64,11 @@
 //       subcomando, como stash e restore já haviam feito.
 //
 // Input (stdin JSON): { tool_name: "Bash"|"PowerShell", tool_input: { command }, cwd,
-//   agent_id?, agent_type? (presentes só em contexto subagent) }
-// NUNCA crash. Fallback: exit 0.
+//   session_id?, agent_id?, agent_type? (presentes só em contexto subagent) } — ou, no ramo de
+//   escrita, { tool_name: Write|Edit|MultiEdit|NotebookEdit|mcp__serena__<escrita>, tool_input:
+//   { file_path?, notebook_path?, path?, relative_path? }, ... }.
+// NUNCA crash. Fallback: exit 0 para a sessão; payload ilegível ou erro do ramo de escrita
+// fecham (exit 2) para subagent.
 //
 // 2026-08-23 (0.1.4): `branch -D` numa branch ciclo-* cuja tree já está no histórico de main
 // libera automático (branchDeleteContentPreserved, definida perto de restoreDiscardsWorktree)
@@ -793,6 +798,9 @@ const SUBAGENT_BLOCKED = [
 // (flag) nao contam como mencao. O curinga que o shell expande para um `*-mode`/`*-allow`
 // existente tambem e mencao (adiante). Residual: o nome montado so de pedacos sem `-mode`,
 // `-allow` nem `.claude/state` (`$a$b`) escapa — threat model e agente confuso, nao adversario.
+// Residual do mesmo tipo (D29a, VEGA-20): caminho de estado escrito com `/./` (`.claude/./state`)
+// ou dividido por dois `cd` (`cd .claude && cd state`) nao conta como mencao; os `*-mode` e
+// `*-allow` seguem protegidos pelo proprio nome, que o casamento ve em qualquer caminho.
 // Curinga (VEGA-26 T36/2, achados do `security-reviewer`): `echo off > .claude/st*/git-guard-mo?e`
 // nao tem nenhum dos tres literais, e o shell o expande para o arquivo de modo. Cada palavra e
 // lida como o shell a le (aspas e `\` viram literal, o resto pode ser curinga: `*`, `?`, `[..]`,
@@ -805,7 +813,107 @@ const SUBAGENT_BLOCKED = [
 // (`$PWD/.claude/st*/…`, `$'o'`, `$(pwd)`) vale `.*` quando a palavra ja tem curinga; sem curinga,
 // e o residual `$a$b` de cima.
 const MENCAO_DE_ESTADO = /(?<!-)-mode|(?<!-)-allow|\.claude[\\/]+state/i;
-const VERBOS_DE_LEITURA = new Set(["cat", "grep", "ls", "test", "stat", "head", "tail"]);
+// Lista FECHADA (VEGA-20 T9, D9a do operador): verbo que so le. `git` entra so com subcomando de
+// leitura (`SUBCOMANDOS_GIT_DE_LEITURA`). Verbo da lista que grava ou executa por OPCAO segue
+// barrado (`opcaoQueGrava`). Interpretador (`node`, `python3`, `perl`, `ruby`, `awk`, `sed`, `find`,
+// `xargs`, `env`, `bash -c`, `sh -c`) fica fora de proposito: o falso-positivo de `node -e` /
+// `python3 -c` so de leitura e residuo declarado, contado a parte (`residuo_interpretador`, T26).
+const VERBOS_DE_LEITURA = new Set([
+  "cat",
+  "grep",
+  "ls",
+  "test",
+  "stat",
+  "head",
+  "tail",
+  "cd",
+  "wc",
+  "sort",
+  "uniq",
+  "cut",
+  "diff",
+  "file",
+  "basename",
+  "dirname",
+  "realpath",
+  "git",
+]);
+const SUBCOMANDOS_GIT_DE_LEITURA = new Set([
+  "log",
+  "show",
+  "diff",
+  "status",
+  "rev-parse",
+  "ls-files",
+  "ls-tree",
+  "grep",
+  "merge-base",
+]);
+// atribuicao antes de `git` que muda o que ele executa ou onde grava
+const AMBIENTE_GIT_QUE_EXECUTA = /^(?:GIT_[A-Za-z0-9_]*|PAGER)=/;
+
+// opcao longa por PREFIXO, como o getopt do GNU e o parse-options do git a aceitam: `--out`,
+// `--output`, `--output=f` casam `--output`. Prefixo de 1 letra (`--o`) tambem: alarga, nunca estreita.
+function longaCasa(tok, ...nomes) {
+  if (!tok.startsWith("--") || tok.length < 3) return false;
+  const n = tok.includes("=") ? tok.slice(0, tok.indexOf("=")) : tok;
+  return nomes.some((nome) => nome.startsWith(n));
+}
+// grupo curto que contem a letra: `-o`, `-uo`, `-ofile`, `-Ovim`, `-iO`. Valor colado conta como
+// letra do grupo (`-tO` le como contendo `O`): falso-positivo fechado, nunca escape.
+const curtaContem = (tok, letra) => /^-[^-]/.test(tok) && tok.slice(1).includes(letra);
+
+// O verbo de leitura grava ou executa por opcao? `palavras` ja sem as atribuicoes do comeco.
+function opcaoQueGrava(palavras, atribuicoes) {
+  const [verbo, ...args] = palavras;
+  const ate = args.indexOf("--");
+  const opcoes = (ate >= 0 ? args.slice(0, ate) : args).filter((a) => a.startsWith("-") && a !== "-");
+  if (verbo === "sort")
+    return opcoes.some(
+      (a) => curtaContem(a, "o") || longaCasa(a, "--output", "--compress-program"),
+    );
+  if (verbo === "file") return opcoes.some((a) => curtaContem(a, "C") || longaCasa(a, "--compile"));
+  if (verbo === "uniq") {
+    // `uniq ENTRADA SAIDA` grava a SAIDA. `-f`/`-s`/`-w` consomem o token seguinte.
+    let posicionais = 0;
+    let fimDasOpcoes = false;
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i];
+      if (!fimDasOpcoes && a === "--") {
+        fimDasOpcoes = true;
+        continue;
+      }
+      if (!fimDasOpcoes && a.startsWith("-") && a !== "-") {
+        if (/^-[fsw]$/.test(a)) i++;
+        continue;
+      }
+      posicionais++;
+    }
+    return posicionais >= 2;
+  }
+  if (verbo === "git") {
+    if (atribuicoes.some((a) => AMBIENTE_GIT_QUE_EXECUTA.test(a))) return true;
+    // opcoes GLOBAIS (antes do subcomando): `-c`/`--config-env` trocam config (pager, diff
+    // externo), `--exec-path` troca o binario que roda.
+    let j = 0;
+    for (; j < args.length && args[j].startsWith("-"); j++) {
+      const a = args[j];
+      if (a === "-c" || longaCasa(a, "--config-env", "--exec-path") || /^-c./.test(a)) return true;
+      if (VALUE_OPTS.has(a)) j++;
+    }
+    const sub = (args[j] || "").toLowerCase();
+    if (!SUBCOMANDOS_GIT_DE_LEITURA.has(sub)) return true;
+    const resto = args.slice(j + 1);
+    const corte = resto.indexOf("--");
+    return (corte >= 0 ? resto.slice(0, corte) : resto).some(
+      (a) =>
+        a.startsWith("-") &&
+        (longaCasa(a, "--output", "--open-files-in-pager", "--ext-diff") ||
+          (!a.startsWith("--") && curtaContem(a, "O"))),
+    );
+  }
+  return false;
+}
 const ARQUIVO_DE_ESTADO = /-(mode|allow)$/i;
 const EXTGLOB = new Set(["+", "@", "!", "*", "?"]);
 // Teto do casamento (re-review 2, ReDoS): palavra com mais curingas ou mais longa que isto conta
@@ -979,23 +1087,85 @@ function escritaDeEstadoPeloSubagent(cmd, cwd) {
   const colado = cmd.replace(/['"\\]/g, "");
   if (!MENCAO_DE_ESTADO.test(cmd) && !MENCAO_DE_ESTADO.test(colado) && !curingaAlcancaEstado(cmd, cwd || process.cwd()))
     return false;
-  if (/\$\(|`/.test(cmd)) return true;
-  const semAspas = stripQuoted(cmd)
+  // `$(`, crase, substituicao de processo (`<(`, `>(`) e aspas ANSI-C (`$'…'`, `$"…"`) executam
+  // ou montam a palavra por fora do que esta leitura ve (fechamento de F1, `silent-failure-hunter`
+  // e `security-reviewer`: `cat <(tee .claude/state/x-mode <<<off)`)
+  if (/\$\(|`|[<>]\(|\$['"]/.test(cmd)) return true;
+  // Uma leitura so, caractere a caractere, como o shell (fechamento de F1, re-reviews do
+  // `security-reviewer`): regex de aspas simples e duplas em separado se atrapalham (`cat "'" ;
+  // cat a > <estado> ; cat "'"` sumia o meio). As palavras saem com aspas e `\` tirados e o
+  // conteudo mantido; `expande` marca `$`/crase fora de aspa simples e `{` fora de qualquer aspa,
+  // que montam a opcao depois desta leitura (`{--output=f,}`, `"${O:---output=f}"`).
+  const lido = desaspar(cmd);
+  if (lido.expande) return true;
+  // so a duplicacao de descritor (`2>&1`, `>&-`) sai; `>&arquivo` e `&>arquivo` e grava, e o `>`
+  // dele fica no texto para barrar
+  const texto = lido.texto
     .replace(/\d*>\s*\/dev\/null/g, " ")
-    .replace(/\d*>&\d*-?/g, " ");
-  if (/>/.test(semAspas)) return true;
-  const segmentos = semAspas.split(/\|\||&&|[|;&\n\r]/);
+    .replace(/\d*>&(?:\d+|-)(?![^\s|;&])/g, " ");
+  // `>` que sobra estava fora de aspas e sem escape: redirecao que grava
+  if (/>/.test(texto)) return true;
+  const segmentos = texto.split(/\|\||&&|[|;&\n\r]/);
   for (const seg of segmentos) {
     const palavras = seg.trim().split(/\s+/).filter(Boolean);
-    while (palavras.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(palavras[0])) palavras.shift();
-    if (!palavras.length) {
-      // segmento so de atribuicao (`f=.claude/state/...`) prepara a escrita do seguinte
-      if (seg.trim()) return true;
-      continue;
-    }
+    const atribuicoes = [];
+    while (palavras.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(palavras[0])) atribuicoes.push(palavras.shift());
+    // atribuicao cujo valor menciona estado prepara a escrita do seguinte (`f=.claude/state/...`);
+    // a que nao menciona e inerte (`X=1; cat .claude/state/git-guard-mode` passa)
+    if (atribuicoes.some((a) => MENCAO_DE_ESTADO.test(a))) return true;
+    if (!palavras.length) continue;
+    // curinga em posicao de opcao (`sort -? …`) vira a opcao que casar arquivo do diretorio (`-o`)
+    if (palavras.some((p) => p.startsWith("-") && /[*?[]/.test(p))) return true;
     if (!VERBOS_DE_LEITURA.has(palavras[0])) return true;
+    if (opcaoQueGrava(palavras, atribuicoes)) return true;
   }
   return false;
+}
+
+// a palavra como o shell a le: aspas e `\` saem, o conteudo fica. Separador e espaco que estavam
+// dentro de aspas ou escapados viram `\u0001`, para nao cortar segmento nem palavra.
+function desaspar(cmd) {
+  const SEP = /[\s|;&<>]/;
+  let out = "";
+  let q = null;
+  let expande = false;
+  for (let i = 0; i < cmd.length; i++) {
+    let c = cmd[i];
+    if (q) {
+      if (c === q) {
+        q = null;
+        continue;
+      }
+      if (q === '"' && (c === "$" || c === "`")) expande = true;
+      if (q === '"' && c === "\\" && i + 1 < cmd.length) {
+        // barra invertida + LF e continuacao: o bash apaga o par (aqui e fora de aspas). So o LF:
+        // barra + CR deixa o CR literal, e o LF seguinte separa comandos
+        if (cmd[i + 1] === "\n") {
+          i++;
+          continue;
+        }
+        c = cmd[++i];
+      }
+      out += SEP.test(c) ? "\u0001" : c;
+      continue;
+    }
+    if (c === "'" || c === '"') {
+      q = c;
+      continue;
+    }
+    if (c === "\\" && i + 1 < cmd.length) {
+      if (cmd[i + 1] === "\n") {
+        i++;
+        continue;
+      }
+      c = cmd[++i];
+      out += SEP.test(c) ? "\u0001" : c;
+      continue;
+    }
+    if (c === "$" || c === "`" || c === "{") expande = true;
+    out += c;
+  }
+  return { texto: out, expande };
 }
 
 // remove literais quoted — `git commit -m "remove git reset --hard do doc"` não dispara.
@@ -1102,23 +1272,621 @@ function logEvent(cwd, payload) {
   }
 }
 
+// --- ESCRITA DE ARQUIVO PELO SUBAGENT (VEGA-20 T9, D8b do operador) ---
+//
+// A regra inteira do `subagent-state-write-guard.js` passa ao motor, que fica dono unico da trava
+// de escrita de estado pelo subagent nos dois caminhos (Bash, acima, e payload de escrita de
+// arquivo, aqui). Subagent nao grava `*-mode` nem `*-allow`, em qualquer raiz, com o alvo
+// resolvido por `realpath` (link e `..`). Payload de subagent sem nenhum campo de path, JSON
+// ilegivel ou erro interno saem 2 (fail-closed). Sessao passa sempre. Sem modo e sem allow
+// proprios: o guard que protege o modo nao pode ter modo. O registro no `settings.json` (matcher
+// de escrita apontando para o motor) e da T11; ate la o guard antigo segue registrado.
+const FERRAMENTAS_DE_ESCRITA = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
+const SERENA_DE_ESCRITA =
+  /^mcp__serena__(?:create_text_file|replace_content|replace_symbol_body|insert_after_symbol|insert_before_symbol|rename_symbol|safe_delete_symbol)$/;
+const CAMPOS_DE_ALVO = ["file_path", "notebook_path", "path", "relative_path"];
+const SUBAGENT_NO_TEXTO = /"agent_(id|type)"/;
+
+function ehFerramentaDeEscrita(nome) {
+  return FERRAMENTAS_DE_ESCRITA.has(nome) || SERENA_DE_ESCRITA.test(String(nome || ""));
+}
+
+// realpath do ancestral mais proximo que existe + o resto do caminho; o proprio arquivo, se
+// existir (link para o state), tambem e resolvido.
+function resolverAlvo(alvo, cwd) {
+  const abs = path.resolve(cwd || process.cwd(), alvo);
+  try {
+    return fs.realpathSync(abs);
+  } catch {}
+  const resto = [];
+  let dir = abs;
+  for (let i = 0; i < 200; i++) {
+    const pai = path.dirname(dir);
+    resto.unshift(path.basename(dir));
+    dir = pai;
+    try {
+      return path.join(fs.realpathSync(dir), ...resto);
+    } catch {}
+    if (pai === path.dirname(pai)) break;
+  }
+  return abs;
+}
+
+function alvoEhArquivoDeEstado(alvo, cwd) {
+  return [path.basename(String(alvo)), path.basename(resolverAlvo(String(alvo), cwd))].some((n) =>
+    ARQUIVO_DE_ESTADO.test(n),
+  );
+}
+
+/** `null` = passa; string = motivo do bloqueio. Lanca so em erro interno (quem chama fecha). */
+function escritaDeArquivoPeloSubagent(input) {
+  const ti = (input && input.tool_input) || {};
+  const alvos = CAMPOS_DE_ALVO.map((c) => ti[c]).filter((v) => typeof v === "string" && v.length > 0);
+  if (!alvos.length) return "payload sem file_path/notebook_path/path/relative_path (o guard fecha).";
+  const cwd = input.cwd || process.cwd();
+  const hit = alvos.find((a) => alvoEhArquivoDeEstado(a, cwd));
+  return hit ? "escrita em arquivo de modo/allow de guard: " + hit : null;
+}
+
+function bloquearEscritaDeArquivo(cwd, motivo, input) {
+  logEvent(cwd, {
+    ts: new Date().toISOString(),
+    action: "blocked",
+    op: "escrita de arquivo de modo/allow pelo subagent",
+    tier: "subagent",
+    tool: input && input.tool_name,
+    agent_type: input && input.agent_type,
+    motivo,
+  });
+  process.stderr.write(
+    [
+      "GIT-GUARD block — TIER SUBAGENT: " + motivo,
+      "Arquivo de modo (`*-mode`) e de liberação (`*-allow`) de guard é da sessão principal:",
+      "`off`/`soft` e o one-shot valem só para ela.",
+      "NÃO tente alternativa nem workaround — PARE e retorne ao controller.",
+    ].join("\n") + "\n",
+  );
+  process.exit(2);
+}
+
+// --- INDICE COMPARTILHADO (VEGA-20 T9, D8b do operador) ---
+//
+// A regra inteira do `shared-index-guard.js` passa ao motor: na ARVORE PRINCIPAL (`.git`
+// diretorio) o indice e de N sessoes, e toda escrita de historico carrega pathspec explicito.
+//   R1 `git add` varredor (`.`, `-A`/`-u` sem pathspec, `:/`, `*`)
+//   R2 `git commit -a` / `-am`
+//   R3 `git commit` bare com indice alheio (staged fora do OWNED da sessao)
+//   R4 `git stash push` sem pathspec
+// OWNED: todo `git add` escopado grava o pathspec na sessao (`.claude/state/session-index/<id>`),
+// em qualquer tier e antes de qualquer saida que ainda tenha arvore resolvida. Worktree linkada
+// (`.git` arquivo) e arvore indeterminada saem sem julgar, com log.
+// Modo: no subagent `hard`, qualquer que seja o arquivo; na sessao, o PROPRIO mode-file
+// `.claude/state/shared-index-guard-mode` (hoje `off`, ruling 2a de 21/10/2026; ausencia = `soft`),
+// nunca o `git-guard-mode`. Allow: so `shared-index-guard-allow`, nunca `git-guard-allow`
+// (double-CONSUME e o bug de fc51500c); no subagent a linha casada e QUEIMADA e o bloqueio segue.
+// Fail-open, mas nunca mudo: erro do ramo loga e segue para o resto do motor.
+// Corte declarado do porte: a linha de "estado de divida em jogo" da mensagem do guard antigo lia o
+// cache do banco do harness por modulo do projeto; o motor nao importa script do projeto
+// (D-VEGA26-15), e a mensagem daqui manda ao verbo em vez de inventar a contagem.
+const SIG_MODO_PADRAO = "soft";
+const SIG_PROFUNDIDADE = 40;
+const SIG_OPCOES_DE_COMMIT_COM_VALOR = new Set([
+  "-m",
+  "--message",
+  "-F",
+  "--file",
+  "-c",
+  "--reedit-message",
+  "-C",
+  "--reuse-message",
+  "-t",
+  "--template",
+  "--author",
+  "--date",
+  "--fixup",
+  "--squash",
+  "--cleanup",
+  "-S",
+  "--gpg-sign",
+  "--trailer",
+]);
+const SIG_VARREDOR = new Set([".", "./", ":/", "*", ":/*", "..", "../"]);
+const SIG_LITERAL = "\u0001";
+
+function sigDirDoLog() {
+  return process.env.SHARED_INDEX_GUARD_LOG_DIR || path.join(raizDoProjeto(), ".claude", "state");
+}
+
+function sigLog(root, payload) {
+  try {
+    const dir = sigDirDoLog();
+    fs.mkdirSync(dir, { recursive: true });
+    fs.appendFileSync(
+      path.join(dir, "shared-index-guard.log"),
+      JSON.stringify({ ts: new Date().toISOString(), repo: root || process.cwd(), ...payload }) + "\n",
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function sigModo(root) {
+  try {
+    const p = path.join(root, ".claude", "state", "shared-index-guard-mode");
+    if (fs.existsSync(p)) {
+      const s = fs.readFileSync(p, "utf8").trim().toLowerCase();
+      if (s === "hard" || s === "soft" || s === "off") return s;
+      sigLog(root, { action: "mode-file-invalid", value: s, using: SIG_MODO_PADRAO });
+    }
+  } catch (e) {
+    sigLog(root, { action: "mode-read-error", err: String(e), using: SIG_MODO_PADRAO });
+  }
+  return SIG_MODO_PADRAO;
+}
+
+// Arvore principal = `.git` DIRETORIO; worktree linkada = `.git` ARQUIVO; `null` = indeterminado.
+function sigArvore(inicio) {
+  let dir;
+  try {
+    dir = path.resolve(inicio);
+  } catch (e) {
+    return { isMain: null, root: null, reason: "resolve-error:" + String(e) };
+  }
+  for (let i = 0; i < SIG_PROFUNDIDADE; i++) {
+    try {
+      const dotgit = path.join(dir, ".git");
+      if (fs.existsSync(dotgit)) {
+        const isDir = fs.statSync(dotgit).isDirectory();
+        return { isMain: isDir, root: dir, reason: isDir ? "git-dir" : "gitfile" };
+      }
+    } catch (e) {
+      return { isMain: null, root: null, reason: "stat-error:" + String(e) };
+    }
+    const pai = path.dirname(dir);
+    if (pai === dir) return { isMain: null, root: null, reason: "no-repo" };
+    dir = pai;
+  }
+  return { isMain: null, root: null, reason: "depth-cap" };
+}
+
+// Literal quoted vira UM token (nao some): apaga-lo fundiria `-m "x" a.md` com `-m msg`.
+// Literal sem espaco mantem o conteudo: `git add "."` segue varredor.
+function sigSemAspas(cmd) {
+  const repl = (inner) => (inner === "" || /\s/.test(inner) ? SIG_LITERAL : inner);
+  return cmd
+    .replace(/'([^']*)'/g, (_m, g1) => repl(g1))
+    .replace(/"((?:[^"\\]|\\.)*)"/g, (_m, g1) => repl(g1));
+}
+
+// grafia MSYS (`/d/sistoli`) no win32; fora dele `/d/x` e caminho absoluto legitimo.
+function sigCanonSpec(spec) {
+  const s = String(spec);
+  if (process.platform !== "win32") return s;
+  const v = s.replace(/\\/g, "/");
+  const msys = /^\/([a-zA-Z])(?:\/(.*))?$/.exec(v);
+  return msys ? msys[1] + ":/" + (msys[2] || "") : v;
+}
+
+// ultimo redirecionador explicito vence (`git -C` > `cd`), senao cwd.
+function sigDirEfetivo(scan, cwd) {
+  let dir = cwd;
+  const re = /(?:^|[;|&]\s*)cd\s+([^\s;|&]+)|\bgit\b[^\n;|&]*?\s-C\s+([^\s;|&]+)/g;
+  let m;
+  while ((m = re.exec(scan)) !== null) {
+    const alvo = m[1] || m[2];
+    if (alvo && alvo !== "-") {
+      try {
+        dir = path.resolve(cwd, sigCanonSpec(alvo.replace(/^["']|["']$/g, "")));
+      } catch {}
+    }
+  }
+  return dir;
+}
+
+const sigTokens = (resto) => (resto || "").trim().split(/\s+/).filter(Boolean);
+const sigNaoExpandido = (t) => /[$`]/.test(String(t || ""));
+
+function sigDepoisDoShell(brutos, resto) {
+  if (/\$\(|`/.test(String(resto || ""))) return { paths: [], unexpanded: ["$(…)"] };
+  return { paths: brutos.filter((p) => !sigNaoExpandido(p)), unexpanded: brutos.filter(sigNaoExpandido) };
+}
+
+function sigSeparar(tokens, comValor) {
+  const flags = [];
+  const paths = [];
+  let fim = false;
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (fim) {
+      paths.push(t);
+      continue;
+    }
+    if (t === "--") {
+      fim = true;
+      continue;
+    }
+    if (t.startsWith("-")) {
+      flags.push(t);
+      const base = t.includes("=") ? t.slice(0, t.indexOf("=")) : t;
+      if (comValor && comValor.has(base) && !t.includes("=")) i++;
+      continue;
+    }
+    paths.push(t);
+  }
+  return { flags, paths };
+}
+
+function sigSegmento(seg) {
+  const m = /\bgit\b[^\n;|&]*?\b(add|commit|stash)(?![-\w])([^\n]*)$/.exec(seg);
+  if (!m) return null;
+  const verbo = m[1];
+  const resto = m[2] || "";
+  const tokens = sigTokens(resto);
+
+  if (verbo === "add") {
+    const { flags, paths: brutos } = sigSeparar(tokens, null);
+    const { paths, unexpanded } = sigDepoisDoShell(brutos, resto);
+    const interativo = flags.some((f) => /^(-i|-p|--interactive|--patch)$/.test(f));
+    const varredor = paths.find((p) => SIG_VARREDOR.has(p));
+    if (paths.length === 0 || varredor) {
+      return {
+        rule: "R1",
+        op: "git add " + (varredor || flags.join(" ") || "").trim(),
+        detail: varredor
+          ? "pathspec varredor `" + varredor + "`"
+          : unexpanded.length
+            ? "só argumento não-expandido (`" + unexpanded[0] + "`) — se vier vazio, estagia tudo"
+            : interativo
+              ? "modo interativo sem pathspec"
+              : "sem pathspec — estagia tudo que casar",
+      };
+    }
+    return { rule: "OWN", op: "git add", paths };
+  }
+
+  if (verbo === "commit") {
+    const { flags, paths: brutos } = sigSeparar(tokens, SIG_OPCOES_DE_COMMIT_COM_VALOR);
+    const { paths, unexpanded } = sigDepoisDoShell(brutos, resto);
+    const todos = flags.find((f) => f === "--all" || /^-[a-z]*a[a-z]*$/.test(f));
+    if (todos)
+      return {
+        rule: "R2",
+        op: "git commit " + todos,
+        detail: "ignora o índice e commita TODO arquivo tracked modificado",
+      };
+    if (paths.length > 0) return null;
+    return {
+      rule: "R3",
+      op: "git commit",
+      detail: unexpanded.length
+        ? "pathspec só em argumento não-expandido (`" + unexpanded[0] + "`) — vazio ⇒ commit bare do índice inteiro"
+        : "commit bare (usa o índice inteiro)",
+    };
+  }
+
+  const sub = tokens.find((t) => !t.startsWith("-"));
+  if (sub && !/^(push|save)$/.test(sub)) return null;
+  const { paths: brutos } = sigSeparar(tokens.filter((t) => t !== "push" && t !== "save"), null);
+  const { paths, unexpanded } = sigDepoisDoShell(brutos, resto);
+  if (paths.length > 0) return null;
+  return {
+    rule: "R4",
+    op: "git stash" + (sub ? " " + sub : ""),
+    detail: unexpanded.length
+      ? "pathspec só em argumento não-expandido (`" + unexpanded[0] + "`) — vazio ⇒ leva o WIP de TODAS as janelas"
+      : "sem pathspec — leva o WIP de TODAS as janelas junto",
+  };
+}
+
+function sigAnalisar(scan) {
+  const owned = [];
+  for (const seg of scan.split(/[;|&\n]+/)) {
+    const hit = sigSegmento(seg);
+    if (!hit) continue;
+    if (hit.rule === "OWN") {
+      owned.push(...hit.paths);
+      continue;
+    }
+    return { hit, owned };
+  }
+  return { hit: null, owned };
+}
+
+function sigRelativo(spec, base, root) {
+  try {
+    if (!spec || spec.includes(SIG_LITERAL)) return null;
+    if (/^:/.test(spec) || /[*?[\]]/.test(spec)) return null;
+    const rel = path.relative(root, path.resolve(base, spec.replace(/^["']|["']$/g, "")));
+    if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) return null;
+    return rel.split(path.sep).join("/").replace(/\/+$/, "");
+  } catch {
+    return null;
+  }
+}
+
+const sigCoberto = (staged, lista) => lista.some((o) => staged === o || staged.startsWith(o + "/"));
+
+function sigArquivoDoDono(root, sessao) {
+  const safe = String(sessao || "").replace(/[^A-Za-z0-9._-]/g, "");
+  if (!safe || safe === "." || safe === "..") return null;
+  return path.join(root, ".claude", "state", "session-index", safe);
+}
+
+function sigLerDono(root, sessao) {
+  const p = sigArquivoDoDono(root, sessao);
+  if (!p) return null;
+  try {
+    if (!fs.existsSync(p)) return null;
+    const linhas = fs.readFileSync(p, "utf8").split("\n").map((l) => l.trim()).filter(Boolean);
+    return linhas.length ? linhas : null;
+  } catch (e) {
+    sigLog(root, { action: "owned-read-error", err: String(e), file: p });
+    return null;
+  }
+}
+
+function sigGravarDono(root, sessao, entradas) {
+  const p = sigArquivoDoDono(root, sessao);
+  if (!p || !entradas.length) return;
+  try {
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.appendFileSync(p, entradas.join("\n") + "\n");
+  } catch (e) {
+    sigLog(root, { action: "owned-write-error", err: String(e) });
+  }
+}
+
+function sigStaged(root) {
+  return execFileSync("git", ["-C", root, "diff", "--cached", "--name-only", "-z"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+  })
+    .split("\0")
+    .filter(Boolean);
+}
+
+// Escrita atomica (tmp+rename). Arquivo PROPRIO: nunca o `git-guard-allow`.
+function sigConsumirAllow(root, cmd) {
+  const p = path.join(root, ".claude", "state", "shared-index-guard-allow");
+  try {
+    if (!fs.existsSync(p)) return false;
+    const linhas = fs.readFileSync(p, "utf8").split("\n");
+    const idx = linhas.findIndex((l) => l.trim().length > 0 && cmd.includes(l.trim()));
+    if (idx === -1) return false;
+    linhas.splice(idx, 1);
+    const tmp = p + ".tmp" + process.pid;
+    fs.writeFileSync(tmp, linhas.join("\n"));
+    fs.renameSync(tmp, p);
+    return true;
+  } catch (e) {
+    sigLog(root, { action: "allow-consume-error", err: String(e), cmd });
+    return false;
+  }
+}
+
+function sigMensagem(hit, root, alheio) {
+  const conserto =
+    hit.rule === "R3"
+      ? [
+          "Arquivos no índice que NÃO são desta sessão:",
+          ...alheio.slice(0, 12).map((f) => "  • " + f),
+          alheio.length > 12 ? "  … +" + (alheio.length - 12) : null,
+          ...(alheio.some((s) => String(s).startsWith(".agents/estado/"))
+            ? ["  ⚠ o índice alheio toca .agents/estado/ — o estado vive no banco, não nesse arquivo"]
+            : []),
+          "",
+          "Faça assim:",
+          "  • commit escopado (ignora o índice alheio, é a forma correta):",
+          "      git commit -m '<msg>' -- <seus paths>",
+          "  • ou tire o alheio do índice (não descarta o trabalho dele):",
+          "      git restore --staged -- <path alheio>",
+        ].filter((l) => l !== null)
+      : [
+          "Faça assim:",
+          "  • estagie só os seus:   git add -- <path>...",
+          "  • commit escopado:      git commit -m '<msg>' -- <path>...",
+          "  • guardar WIP próprio:  git stash push -- <path>...",
+        ];
+  return [
+    "GIT-GUARD block (índice compartilhado) — na árvore compartilhada o índice não é seu:",
+    "  operação: " + hit.op,
+    "  motivo:   " + (hit.detail || ""),
+    "  árvore:   " + root,
+    "",
+    "Várias sessões dividem esta árvore E o mesmo índice. Estagiar/commitar sem escopo",
+    "arrasta o trabalho em voo das outras sessões para dentro do seu commit.",
+    "",
+    ...conserto,
+    "",
+    "Subagent: NÃO contorne — pare e reporte ao controller.",
+    "Autorização do operador (one-shot):",
+    "  echo '<substring do comando>' >> .claude/state/shared-index-guard-allow",
+  ].join("\n");
+}
+
+/**
+ * Julga o indice compartilhado. Devolve `{ bloqueia: true, msg }` ou `null` (segue para o resto
+ * do motor). Efeitos: grava OWNED, log, consome/queima allow, aviso `soft` no stderr. Erro
+ * interno loga e devolve `null` (fail-open, como o guard de origem).
+ */
+function indiceCompartilhado(input, cmd, isSubagent) {
+  let raizDoLog = null;
+  try {
+    const cwd = input.cwd || process.cwd();
+    const scan = sigSemAspas(cmd);
+    const { hit, owned } = sigAnalisar(scan);
+    const dir = sigDirEfetivo(scan, cwd);
+    const arvore = sigArvore(dir);
+    raizDoLog = arvore.root || cwd;
+    const modo = isSubagent ? "hard" : sigModo(raizDoLog);
+    if (modo === "off") return null;
+
+    if (owned.length && arvore.root) {
+      const norm = owned.map((p) => sigRelativo(p, dir, arvore.root)).filter(Boolean);
+      if (norm.length) sigGravarDono(arvore.root, input.session_id, norm);
+      if (norm.length !== owned.length)
+        sigLog(arvore.root, {
+          action: "owned-partial",
+          reason: "pathspec não normalizável (glob/magic)",
+          raw: owned,
+          cmd,
+        });
+    }
+
+    if (arvore.isMain !== true) {
+      if (hit)
+        sigLog(raizDoLog, {
+          action: arvore.isMain === false ? "skipped-worktree" : "skipped-undetermined",
+          reason: arvore.reason,
+          dir,
+          rule: hit.rule,
+          op: hit.op,
+          cmd,
+        });
+      return null;
+    }
+    if (!hit) return null;
+
+    let alheio = [];
+    if (hit.rule === "R3") {
+      const dono = sigLerDono(arvore.root, input.session_id);
+      if (!dono) {
+        sigLog(arvore.root, {
+          action: "skipped-no-ownership",
+          reason: "sessão sem OWNED gravado (estagiou por fora do tool?) — fail-open",
+          op: hit.op,
+          cmd,
+        });
+        return null;
+      }
+      if (dono.includes("*")) {
+        sigLog(arvore.root, { action: "skipped-unresolvable", op: hit.op, cmd });
+        return null;
+      }
+      let staged;
+      try {
+        staged = sigStaged(arvore.root);
+      } catch (e) {
+        sigLog(arvore.root, { action: "skipped-git-error", err: String(e), op: hit.op, cmd });
+        return null;
+      }
+      alheio = staged.filter((s) => !sigCoberto(s, dono));
+      if (!alheio.length) return null;
+    }
+
+    let nota = null;
+    if (isSubagent) {
+      if (sigConsumirAllow(arvore.root, cmd)) nota = "allow-burned-subagent";
+    } else if (sigConsumirAllow(arvore.root, cmd)) {
+      sigLog(arvore.root, { action: "allowed-one-shot", rule: hit.rule, op: hit.op, cmd });
+      return null;
+    }
+
+    const gravou = sigLog(arvore.root, {
+      action: modo === "hard" ? "blocked" : "logged",
+      rule: hit.rule,
+      op: hit.op,
+      foreign: alheio,
+      agent_type: input.agent_type,
+      ...(nota ? { allow: nota } : {}),
+      cmd,
+    });
+    if (modo === "soft") {
+      process.stderr.write(
+        "SHARED-INDEX [soft] " +
+          hit.rule +
+          " " +
+          hit.op +
+          (alheio.length ? " — índice alheio: " + alheio.join(", ") : "") +
+          (gravou ? "" : " (falha ao gravar o log)") +
+          "\n",
+      );
+      return null;
+    }
+    let msg = sigMensagem(hit, arvore.root, alheio);
+    if (nota)
+      msg +=
+        "\n\nAVISO: havia uma linha de autorização casando este comando — foi QUEIMADA e o\n" +
+        "comando segue bloqueado. Autorização é consumida pela sessão principal.";
+    return { bloqueia: true, msg };
+  } catch (e) {
+    sigLog(raizDoLog || process.cwd(), {
+      action: "unexpected-error",
+      err: String(e),
+      stack: e && e.stack ? String(e.stack).split("\n").slice(0, 3) : undefined,
+    });
+    return null;
+  }
+}
+
 let raw = "";
 // sem encoding explícito um chunk pode partir um caractere UTF-8 no meio: o comando
 // chega corrompido e tanto o scan quanto o log passam a mentir.
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (c) => (raw += c));
-process.stdin.on("error", () => process.exit(0));
+process.stdin.on("error", () => {
+  // sem payload nao ha como saber o tier: fecha so se o pedaco lido ja disser subagent
+  process.exit(SUBAGENT_NO_TEXTO.test(raw) ? 2 : 0);
+});
 process.stdin.on("end", () => {
   let input;
   try {
     input = JSON.parse(raw || "{}");
   } catch {
+    // payload ilegivel de subagent fecha (o caminho que libera e a escrita); o fallback aberto
+    // vale so para a sessao
+    if (SUBAGENT_NO_TEXTO.test(raw)) {
+      try {
+        process.stderr.write("git-guard: payload ilegível de subagent — o guard fecha.\n");
+      } catch {}
+      process.exit(2);
+    }
     try {
       process.stderr.write(
         "git-guard: stdin ilegível — comando liberado por fallback.\n",
       );
     } catch {}
     process.exit(0);
+  }
+  // ESCRITA DE ARQUIVO (T9, D8b): ANTES do retorno de `tool_name` fora de Bash/PowerShell, senao a
+  // entrada no matcher de escrita e no-op calado. Erro fecha para o subagent.
+  let ehEscrita = false;
+  try {
+    ehEscrita = Boolean(input) && ehFerramentaDeEscrita(input.tool_name);
+  } catch {
+    if (SUBAGENT_NO_TEXTO.test(raw)) process.exit(2);
+  }
+  if (ehEscrita) {
+    let subagentDeEscrita = false;
+    try {
+      subagentDeEscrita = Boolean(input.agent_id || input.agent_type);
+      if (!subagentDeEscrita) process.exit(0);
+      const motivo = escritaDeArquivoPeloSubagent(input);
+      if (motivo) bloquearEscritaDeArquivo(input.cwd || process.cwd(), motivo, input);
+      process.exit(0);
+    } catch (e) {
+      if (subagentDeEscrita || SUBAGENT_NO_TEXTO.test(raw)) {
+        try {
+          process.stderr.write(
+            "GIT-GUARD block — TIER SUBAGENT: erro interno do guard de escrita (fecha para subagent): " +
+              String(e) +
+              "\n",
+          );
+        } catch {}
+        process.exit(2);
+      }
+      try {
+        logEvent(input.cwd || process.cwd(), {
+          ts: new Date().toISOString(),
+          action: "guard-error",
+          op: "escrita de arquivo",
+          err: String((e && e.stack) || e),
+        });
+      } catch {}
+      process.exit(0);
+    }
   }
   try {
     if (input.tool_name !== "Bash" && input.tool_name !== "PowerShell")
@@ -1149,8 +1917,10 @@ process.stdin.on("end", () => {
           [
             "GIT-GUARD block — TIER SUBAGENT: o comando grava (ou pode gravar) arquivo de modo ou de",
             "liberação de guard (`*-mode`, `*-allow`, `.claude/state/`).",
-            "Desligar guard e autorizar comando são da sessão principal. Leitura pura (cat, grep,",
-            "ls, test, stat, head, tail, sem `>`) passa.",
+            "Desligar guard e autorizar comando são da sessão principal. Leitura pura passa: cat, grep,",
+            "ls, test, stat, head, tail, cd, wc, sort, uniq, cut, diff, file, basename, dirname, realpath",
+            "e git log/show/diff/status/rev-parse/ls-files/ls-tree/grep/merge-base, sem `>` nem opção",
+            "que grava ou executa. Interpretador (node, python3, awk, sed, find...) segue barrado.",
             "NÃO tente alternativa nem workaround — PARE e retorne ao controller.",
           ].join("\n") + "\n",
         );
@@ -1158,6 +1928,14 @@ process.stdin.on("end", () => {
       }
     }
     if (!cmd.includes("git")) process.exit(0);
+
+    // INDICE COMPARTILHADO (T9, D8b): modo e allow proprios, julgado antes do modo do git-guard
+    // (o `off` deste nao desliga aquele, nem o contrario).
+    const indice = indiceCompartilhado(input, cmd, isSubagent);
+    if (indice && indice.bloqueia) {
+      process.stderr.write(indice.msg + "\n");
+      process.exit(2);
+    }
 
     const cwdDoComando = input.cwd || process.cwd();
     // modo, one-shot e log saem da MESMA raiz (T34). Sem raiz: modo hard e sem one-shot; o

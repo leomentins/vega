@@ -347,3 +347,14 @@ test("C24: braco de case sozinho na linha nao vira binario", () => {
 test("C24: subshell entre parenteses fica num segmento so, lido pelo primeiro comando de dentro", () => {
   assert.deepEqual(executaveisDaVerificacao("(cd a && make) && node b.mjs"), ["node"]);
 });
+
+test("binario-ausente na fonte: atribuição com $( ) é uma palavra só, e opção nunca é binário", () => {
+  // Formas das Verificações que sairam binario-ausente (medido 20/11/2026: api, rev-parse, -n, -v, -d)/gitleaks).
+  assert.deepEqual(executaveisDaVerificacao(`S=$(gh api repos/x/y --jq .m | sed -n 's/a//p') && test -n "$S" && git merge-base --is-ancestor "$S" HEAD`), ["git"]);
+  assert.deepEqual(executaveisDaVerificacao(`V="$(command -v claude)" CI=1 node --test x.mjs`), ["node"]);
+  assert.deepEqual(executaveisDaVerificacao("G=$(mktemp -d)/gitleaks && GITLEAKS_BIN=$G bash x.sh && $G dir"), ["bash"]);
+  assert.deepEqual(executaveisDaVerificacao("EVENTO=pr HEAD_SHA=$(git rev-parse HEAD) BASE_REF=main node a.mjs"), ["node"]);
+  // Contraprova: o binário de verdade depois da atribuição segue acusado.
+  assert.deepEqual(executaveisDaVerificacao("X=$(echo a b) nao-existe-xyz --help"), ["nao-existe-xyz"]);
+  assert.deepEqual(executaveisDaVerificacao("time -p nao-existe-xyz"), ["nao-existe-xyz"]);
+});

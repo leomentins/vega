@@ -390,20 +390,13 @@ test("fixture .json não pergunta no trazer e fixture .mjs pergunta", () => {
     ".github/workflows/__tests__/fixtures/c.json",
     `${base}/skill/SKILL.md`,
   ]) assert.equal(ehDadoDeFixture(c), false, c);
-  assert.deepEqual(
-    motivosParaPerguntar({ caminhos: [".claude/rules/x/__tests__/fixtures/a.md"], canonico: "x/canonico.md", outputs: [], alcance: () => [] })
-      .filter((m) => m.motivo === "superficie-de-instrucao").flatMap((m) => m.caminhos),
-    [".claude/rules/x/__tests__/fixtures/a.md"],
-  );
-  const motivos = (caminhos, outputs = []) =>
-    motivosParaPerguntar({ caminhos, canonico: "x/canonico.md", outputs, alcance: () => [] }).filter((m) => m.motivo === "superficie-de-instrucao");
-  assert.deepEqual(motivos([json, md]), []);
-  assert.deepEqual(motivos([mjs]).flatMap((m) => m.caminhos), [mjs]);
-  // Declarado nos Outputs, o dublê executável segue sem perguntar (instrucao-declarada-em-outputs).
-  assert.deepEqual(motivos([mjs], [mjs]), []);
-  // Contraprova: a skill fora de fixture segue perguntando.
-  const skill = ".claude/skills/vega/skills/conducao/SKILL.md";
-  assert.deepEqual(motivos([skill]).flatMap((m) => m.caminhos), [skill]);
+  // D-VEGA20-26: no trazer, a superfície de instrução deixou de perguntar, fixture ou não;
+  // `ehDadoDeFixture` segue como a regra de quem separa dado de teste de instrução.
+  const motivos = (caminhos, outputs = []) => motivosParaPerguntar({ caminhos, canonico: "x/canonico.md", outputs });
+  for (const caminhos of [[".claude/rules/x/__tests__/fixtures/a.md"], [json, md], [mjs], [".claude/skills/vega/skills/conducao/SKILL.md"]]) {
+    assert.deepEqual(motivos(caminhos), [], JSON.stringify(caminhos));
+    assert.deepEqual(motivos(caminhos, caminhos), [], JSON.stringify(caminhos));
+  }
 });
 
 describe("na fonte: o registro de perguntas do projeto", { skip: !NA_FONTE && FORA }, () => {

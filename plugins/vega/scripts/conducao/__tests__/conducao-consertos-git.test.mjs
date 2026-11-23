@@ -387,7 +387,7 @@ test("C24 contraprova: commit do main com subject de marca da conducao segue rec
   a.pergunta("faixa-com-marca-da-conducao", "trazer", "T1", "--tentativa", "1");
 });
 
-test("C24 contraprova: resolucao do merge que devolve arquivo sensivel ao estado do main segue perguntando", (t) => {
+test("C24 contraprova: resolucao do merge que devolve arquivo sensivel ao estado do main segue na lista de fora dos Outputs", (t) => {
   const a = ambiente(t);
   // O ciclo tem uma regra que o main não tem; a filha a apaga dentro do merge do main.
   escreverEm(a.maestra, { ".claude/rules/do-ciclo.md": "regra do ciclo\n" });
@@ -403,8 +403,9 @@ test("C24 contraprova: resolucao do merge que devolve arquivo sensivel ao estado
   a.f("rm", "-q", ".claude/rules/do-ciclo.md");
   a.f("commit", "-q", "--no-edit");
   a.filhaEmpurra("T1", 1);
-  const p = a.pergunta("trazer-exige-aprovacao", "trazer", "T1", "--tentativa", "1");
-  assert.deepEqual(p.motivos.find((m) => m.motivo === "superficie-de-instrucao")?.caminhos, [".claude/rules/do-ciclo.md"]);
+  // D-VEGA20-26: a superfície de instrução não para mais; a resolução do merge segue contada no diff e vai ao relato.
+  const s = a.ok("trazer", "T1", "--tentativa", "1", "--sessao", "s1");
+  assert.deepEqual(s.foraDosOutputs, [".claude/rules/do-ciclo.md"]);
 });
 
 test("P21/P24 contraprova: server action e rota de API no segmento dos Steps seguem perguntando", (t) => {
@@ -419,7 +420,7 @@ test("P21/P24 contraprova: server action e rota de API no segmento dos Steps seg
   assert.deepEqual(p.motivos.find((m) => m.motivo === "caminho-clinico-fora-dos-outputs").caminhos.sort(), [`${TELA}/actions.ts`, `${TELA}/api/route.ts`]);
 });
 
-test("C24 contraprova: arquivo que ciclo e main mudaram, resolvido pela versao do main, segue perguntando", (t) => {
+test("C24 contraprova: arquivo que ciclo e main mudaram, resolvido pela versao do main, segue na lista de fora dos Outputs", (t) => {
   const a = ambiente(t);
   escreverEm(a.maestra, { ".claude/rules/x.md": "v0\n" });
   a.g("add", "-A");
@@ -439,6 +440,6 @@ test("C24 contraprova: arquivo que ciclo e main mudaram, resolvido pela versao d
   a.f("add", "-A");
   a.f("commit", "-q", "--no-edit");
   a.filhaEmpurra("T1", 1);
-  const p = a.pergunta("trazer-exige-aprovacao", "trazer", "T1", "--tentativa", "1");
-  assert.deepEqual(p.motivos.find((m) => m.motivo === "superficie-de-instrucao")?.caminhos, [".claude/rules/x.md"]);
+  const s = a.ok("trazer", "T1", "--tentativa", "1", "--sessao", "s1");
+  assert.deepEqual(s.foraDosOutputs, [".claude/rules/x.md"]);
 });

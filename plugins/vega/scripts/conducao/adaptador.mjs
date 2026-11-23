@@ -645,7 +645,7 @@ function funcao(v, onde) {
 }
 
 const OBRIGATORIOS_DO_CODIGO = Object.freeze(["plano", "publicacao", "caminhosProtegidos", "telasProtegidasDosSteps", "foraDasTelasDosSteps", "carimbo", "ci"]);
-const OPCIONAIS_DO_CODIGO = Object.freeze(["marcasDeRodadas", "alcanceDosHooks", "fechamentoDoCiclo", "capacidade", "esperandoAVez", "caminhosQuePerguntam"]);
+const OPCIONAIS_DO_CODIGO = Object.freeze(["marcasDeRodadas", "alcanceDosHooks", "fechamentoDoCiclo", "capacidade", "esperandoAVez", "caminhosQuePerguntam", "respostasDasParadas", "definemAParada"]);
 // Nome antigo → nome novo (HN-29 T41): lido até a migração dos adaptadores na F5.
 const NOMES_ANTIGOS_DO_CODIGO = Object.freeze([
   ["caminhosClinicos", "caminhosProtegidos"],
@@ -689,7 +689,13 @@ function comNomesNovos(c, onde) {
  * (D18a do operador, 16/11/2026: os globs de dado de paciente ou caminho
  * clínico, cuja task pede o sim de novo mesmo coberta pelo sim do ciclo;
  * default `caminhosProtegidos`, que o projeto estreita quando parte deles é só
- * publicação).
+ * publicação); `respostasDasParadas` (VEGA-20 T6: a função que devolve a
+ * resposta registrada de cada parada da condução, `[{ decisao, resposta,
+ * quando }]`, que a calibração da aposentadoria junta ao log; default `null`,
+ * e sem ela nenhum motivo calibra); `definemAParada` (VEGA-20 T46: os globs
+ * do projeto que definem a parada de publicação, somados aos do motor em
+ * `consentimento.mjs`; default `null`, nunca `[]` — quem lê sem a lista veta
+ * `define-a-parada`).
  * Ausente vale o default; presente com tipo errado recusa.
  * Nome antigo de campo (`NOMES_ANTIGOS_DO_CODIGO`) carrega com aviso (`comNomesNovos`).
  */
@@ -726,6 +732,8 @@ export function validarCodigo(bruto, onde = "código do adaptador") {
   }
   const capacidade = c.capacidade === undefined ? null : funcao(c.capacidade, `${onde}.capacidade`);
   const esperandoAVez = c.esperandoAVez === undefined ? null : funcao(c.esperandoAVez, `${onde}.esperandoAVez`);
+  const respostasDasParadas = c.respostasDasParadas === undefined ? null : funcao(c.respostasDasParadas, `${onde}.respostasDasParadas`);
+  const definemAParada = c.definemAParada === undefined ? null : lista(c.definemAParada, `${onde}.definemAParada`);
   const caminhosProtegidos = lista(c.caminhosProtegidos, `${onde}.caminhosProtegidos`);
   const caminhosQuePerguntam = c.caminhosQuePerguntam === undefined ? caminhosProtegidos : lista(c.caminhosQuePerguntam, `${onde}.caminhosQuePerguntam`);
   return Object.freeze({
@@ -742,6 +750,8 @@ export function validarCodigo(bruto, onde = "código do adaptador") {
     fechamentoDoCiclo,
     capacidade,
     esperandoAVez,
+    respostasDasParadas,
+    definemAParada,
   });
 }
 
@@ -905,4 +915,32 @@ export function esperandoAVezDoProjeto(repo) {
   if (!Array.isArray(r) || !r.every((s) => typeof s === "string"))
     throw new ErroAdaptador(`esperandoAVez: esperado lista de textos (veio ${JSON.stringify(r)?.slice(0, 80)})`, "vez-ilegivel");
   return Object.freeze([...r]);
+}
+
+const DECISAO_DA_PARADA = /^d-[0-9a-f]{16}$/;
+const RESPOSTA_DA_PARADA = /^[A-Za-z0-9._:+-]{1,200}$/;
+
+/**
+ * As respostas registradas das paradas da condução (VEGA-20 T6), pela
+ * `respostasDasParadas()` do código do adaptador: `[{ decisao, resposta,
+ * quando }]`, uma por decisão (o id `d-…` que o evento `pergunta` do log
+ * grava), com a resposta em token e o horário ISO. Sem a função ⇒ `null`, e a
+ * calibração não tem histórico. Função que lança ou resposta fora da forma
+ * recusa (`respostas-ilegivel`): a calibração para em vez de contar histórico
+ * parcial.
+ */
+export function respostasDasParadasDoProjeto(repo, opcoes) {
+  const ler = codigoDoAdaptador(repo).respostasDasParadas;
+  if (!ler) return null;
+  let r;
+  try {
+    r = ler(opcoes);
+  } catch (e) {
+    throw new ErroAdaptador(`respostasDasParadas: a leitura do adaptador falhou (${e?.message ?? String(e)})`, "respostas-ilegivel");
+  }
+  const boa = (x) =>
+    x && typeof x === "object" && DECISAO_DA_PARADA.test(x.decisao ?? "") && RESPOSTA_DA_PARADA.test(x.resposta ?? "") && Number.isFinite(Date.parse(x.quando ?? ""));
+  if (!Array.isArray(r) || !r.every(boa))
+    throw new ErroAdaptador(`respostasDasParadas: esperado lista de { decisao, resposta, quando } (veio ${JSON.stringify(r)?.slice(0, 80)})`, "respostas-ilegivel");
+  return Object.freeze(r.map((x) => Object.freeze({ decisao: x.decisao, resposta: x.resposta, quando: new Date(x.quando).toISOString() })));
 }

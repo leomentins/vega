@@ -326,3 +326,53 @@ export function conferirMandato({ papel = null, quem, mandato = null, alcada = n
   if (em_nome_de !== null && em_nome_de !== delegacao.de) throw new ErroDestinatarios("em_nome_de da decisão de Vega é o delegante");
   return Object.freeze({ quem, mandato: m, papel: papelDoTitular, em_nome_de: delegacao.de, divida: false, delegacao: Object.freeze(reg) });
 }
+
+// ── a pergunta da operária (VEGA-20 T22, AC-VEGA20-4) ───────────────────────
+
+/** A classe da pergunta da operária que fica na condutora: a decisão técnica de dentro da task. */
+export const CLASSE_QUE_DESCE = "tecnica";
+
+/**
+ * Classes que a operária declara e que sobem ao operador: as que a tabela já não deixa descer
+ * (`SEMPRE_AO_OPERADOR`), mais `caminho-clinico` (o nome curto de `caminho-clinico-fora-dos-outputs`)
+ * e `permissao` (recusa do classificador ou pedido de clique, que a condutora não destrava).
+ */
+export const CLASSES_QUE_SOBEM = Object.freeze([...SEMPRE_AO_OPERADOR, "caminho-clinico", "permissao"]);
+
+/** Toda classe que o aviso reconhece. Fora dela, a pergunta sobe (fail-closed). */
+export const CLASSES_DA_PERGUNTA = Object.freeze([CLASSE_QUE_DESCE, ...CLASSES_QUE_SOBEM]);
+
+/** O estado do trabalho que o aviso de pergunta declara. Sem o campo, `parado`. */
+export const TRABALHO_DA_PERGUNTA = Object.freeze(["parado", "pronto"]);
+
+const CAMPO_DO_AVISO = /^(classe|trabalho):([a-z0-9][a-z0-9-]{0,63})$/;
+
+/**
+ * Os campos da pergunta da operária, lidos da primeira linha do aviso
+ * (`T<k>-FALHA pergunta classe:<c> trabalho:<parado|pronto> <nonce>`), entre o motivo e o nonce.
+ * `classe`: a declarada se reconhecida, senão `null` (ausente ou desconhecida — a pergunta sobe).
+ * `trabalho`: `parado` ou `pronto`; ausente ou fora da lista vale `parado`.
+ */
+export function camposDaPergunta(aviso) {
+  const linha = String(aviso ?? "").trim().split(/\r?\n/)[0];
+  const meio = linha.split(/\s+/).slice(2, -1);
+  let classe = null;
+  let trabalho = "parado";
+  for (const tok of meio) {
+    const m = CAMPO_DO_AVISO.exec(tok);
+    if (!m) continue;
+    if (m[1] === "classe") classe = CLASSES_DA_PERGUNTA.includes(m[2]) ? m[2] : null;
+    else trabalho = TRABALHO_DA_PERGUNTA.includes(m[2]) ? m[2] : "parado";
+  }
+  return Object.freeze({ classe, trabalho });
+}
+
+/**
+ * Quem recebe a pergunta da operária: a `condutora` por padrão, quando a classe é a técnica; o
+ * `operador` quando a classe é das que sobem, ausente ou não reconhecida. A técnica ainda passa por
+ * `destinatarioEfetivo`, para o que a tabela não deixa descer nunca descer.
+ */
+export function destinatarioDaPerguntaDaFilha({ classe = null } = {}, tabela = carregar()) {
+  if (classe !== CLASSE_QUE_DESCE) return OPERADOR;
+  return destinatarioEfetivo({ papel: NIVEL_DA_CONDUCAO, motivo: classe }, tabela);
+}

@@ -155,6 +155,24 @@ test("regraAbrir — a coberta pelo sim do ciclo sai com cobertasPeloCiclo; a pe
   assert.equal(p.porque, "caminho-clinico");
 });
 
+test("regraAbrir — task-sensivel uma vez por fase: a pergunta lista pelo nome todas as sensíveis pendentes, e o sim cobre todas", () => {
+  const t1 = task("T1", { classe: "sensivel", protegida: ["apps/x/labs/a.tsx"], simProprio: "caminho-clinico" });
+  const t2 = task("T2");
+  const t3 = task("T3", { classe: "sensivel", publicacao: ["db push"], simProprio: "publicacao-que-altera" });
+  const ctx = (aprovacoes) => ({ ...abrirCtx({ tasks: [t1, t2, t3], servidor: [t1, t2], aprovacoes }), fase: { id: "F1", tasks: ["T1", "T2", "T3"] }, feita: () => false });
+  const p = regraAbrir(ctx([]));
+  assert.equal(p.acao, "perguntar");
+  assert.equal(p.motivo, "task-sensivel");
+  assert.equal(p.task, "T1");
+  assert.deepEqual(p.tasks.map((x) => [x.task, x.porque]), [["T1", "caminho-clinico"], ["T3", "publicacao-que-altera"]]);
+  // O sim gravado para as tasks listadas abre a fase inteira sem nova pergunta.
+  const aprovacoes = p.tasks.map((x) => ({ task: x.task, nonce: p.nonce }));
+  assert.equal(regraAbrir(ctx(aprovacoes)).acao, "abrir");
+  // Formato antigo (só a primeira aprovada): a seguinte ainda pergunta, só ela.
+  const so1 = regraAbrir({ ...ctx([{ task: "T1", nonce: "x" }]), servidor: [t3] });
+  assert.deepEqual(so1.tasks.map((x) => x.task), ["T3"]);
+});
+
 for (const c of ABRIR)
   test(`regraAbrir — ${c.caso} ⇒ ${c.espera ?? "null"}`, () => {
     const r = regraAbrir(abrirCtx(c.over));
@@ -378,6 +396,45 @@ const TABELA = {
   regraReplano: [
     { caso: "plano do HEAD igual", ctx: { fases: [["F1", [task("T1")]]] }, espera: null },
     { caso: "task nova no meio da fase, sem ruling", ctx: { fases: [["F1", [task("T1")]]], fasesHead: [["F1", [task("T1"), task("T3")]]] }, espera: "perguntar:plano-mudou" },
+    {
+      caso: "re-plano que cita a pergunta respondida (Replano-Pergunta) reautoriza pela resposta, sem segunda pergunta",
+      ctx: {
+        fases: [["F1", [task("T1")]]],
+        fasesHead: [["F1", [task("T1"), task("T3", { classe: "sensivel", protegida: ["apps/x/labs/a.tsx"], simProprio: "caminho-clinico" })]]],
+        replanos: [{ sha: "1".repeat(40), subject: "re-plano à mão", motivo: null, pergunta: "p-0123456789abcdef" }],
+      },
+      espera: "autorizar-pela-resposta",
+    },
+    {
+      caso: "re-plano pela resposta que mexe em task de outra fase segue perguntando",
+      ctx: {
+        fases: [["F1", [task("T1")]], ["F2", [task("T2", { fase: "F2" })]]],
+        fasesHead: [["F1", [task("T1"), task("T3")]], ["F2", [task("T2", { fase: "F2" }), task("T4", { fase: "F2" })]]],
+        replanos: [{ sha: "1".repeat(40), subject: "re-plano à mão", motivo: null, pergunta: "p-0123456789abcdef" }],
+      },
+      espera: "perguntar:plano-mudou",
+    },
+    {
+      caso: "re-plano pela resposta que traz task de outra fase para esta segue perguntando",
+      ctx: {
+        fases: [["F1", [task("T1")]], ["F2", [task("T2")]]],
+        fasesHead: [["F1", [task("T1"), task("T2")]], ["F2", []]],
+        replanos: [{ sha: "1".repeat(40), subject: "re-plano à mão", motivo: null, pergunta: "p-0123456789abcdef" }],
+      },
+      espera: "perguntar:plano-mudou",
+    },
+    {
+      caso: "re-plano com dois commits que citam perguntas diferentes segue perguntando",
+      ctx: {
+        fases: [["F1", [task("T1")]]],
+        fasesHead: [["F1", [task("T1"), task("T3")]]],
+        replanos: [
+          { sha: "1".repeat(40), subject: "a", motivo: null, pergunta: "p-0123456789abcdef" },
+          { sha: "2".repeat(40), subject: "b", motivo: null, pergunta: null },
+        ],
+      },
+      espera: "perguntar:plano-mudou",
+    },
     {
       caso: "re-plano de ruling sem mudar classe herda",
       ctx: { fases: [["F1", [task("T1")]]], fasesHead: [["F1", [task("T1"), task("T3")]]], replanos: [{ sha: "1".repeat(40), subject: `${CICLO}-F1/D-TESTE1-2 — re-plano de T3: tarefa nova` }] },

@@ -36,10 +36,10 @@ import { fileURLToPath } from "node:url";
 import { codigoDoAdaptador, lerAdaptador, nomeDoOperador, paginaDoProjeto, posseDoProjeto } from "./adaptador.mjs";
 import { ENV_GIT, PRAZO_REDE_MS, git as rodar, tentarGit as tentar } from "./git-exec.mjs";
 import { ErroPlano, caminhoDoCanonico, lerPlanoCongelado, lerPlanoNoCommit } from "./ler-plano.mjs";
-import { RE, lerMarcas, trailers as lerTrailers, ultimaAutorizacao } from "./marcas.mjs";
+import { RE, lerMarcas, niveisDasMarcas, trailers as lerTrailers, ultimaAutorizacao } from "./marcas.mjs";
 import {
   CASOS,
-  camposDoCarimbo,
+  settingsMudaAParada,
   consentidoPorDecisaoDaTask,
   devolverAosMotivos,
   gateDaConferenciaPublicada,
@@ -47,14 +47,17 @@ import {
   gravarRegistrosDoTrazer,
   lerConsentimentos,
   exigirPerguntaDoAutorizar,
+  exigirRespostaDaMaestra,
   pecasDoConsentimento,
   registroDoConsentimento,
   PERGUNTA_ID_RE,
   TRAILER_DA_PERGUNTA,
+  TRAILER_PERGUNTA_DA_PARADA,
   registrosDoTrazer,
   simDaPublicacaoDoCiclo,
   simDoCorpo,
 } from "./consentimento.mjs";
+import { perguntar as construirPergunta } from "./pergunta.mjs";
 import * as verbos from "./verbos.mjs";
 import { saidasGeradas } from "../vega/declaracao.mjs";
 
@@ -123,6 +126,14 @@ export const refs = {
   aviso: (ciclo, task, n) => `refs/conducao-aviso/${ciclo}/${task}/${n}`,
   avisoVisto: (ciclo, task, n) => `refs/conducao-local/${ciclo}/aviso/${task}/${n}`,
   buscaAviso: (ciclo, task, n) => `refs/conducao-busca/${ciclo}/aviso/${task}/${n}`,
+  // O pedido de herdeira em 3 níveis: na árvore irmã do brief, que os guards de push já conhecem.
+  pedido: (ciclo, nonce) => `refs/conducao-brief/${ciclo}/pedido/${nonce}`,
+  buscaPedido: (ciclo, nonce) => `refs/conducao-busca/${ciclo}/pedido/${nonce}`,
+  // O pedido atendido pela maestra: a sessão criada, para um PASSAR repetido não criar outra.
+  atendido: (ciclo, nonce) => `refs/conducao-brief/${ciclo}/atendido/${nonce}`,
+  buscaAtendido: (ciclo, nonce) => `refs/conducao-busca/${ciclo}/atendido/${nonce}`,
+  // A reserva da maestra antes do create_session: um PASSAR repetido no meio vira pergunta, nunca outra condutora.
+  reserva: (ciclo, nonce) => `refs/conducao-brief/${ciclo}/reserva/${nonce}`,
 };
 
 // ── commits vazios da condução ───────────────────────────────────────────────
@@ -479,7 +490,9 @@ export const DESFECHO_SEM_COPIA = "registrado-sem-copia";
  */
 export function comCopia(repo, ciclo, saida) {
   try {
-    return { ...saida, copia: empurrarCopia({ repo, ciclo }) };
+    const r = { ...saida, copia: empurrarCopia({ repo, ciclo }) };
+    // A parada copiada volta pelo construtor: sem ele, sai sem ponteiro e o log recusa o evento tipado.
+    return saida.acao === "perguntar" ? construirPergunta(r) : r;
   } catch (e) {
     if (!(e instanceof ErroPlano) || !RECUSAS_DA_COPIA.has(e.codigo)) throw e;
     return { ...saida, acao: DESFECHO_SEM_COPIA, desfecho: saida.acao, motivo: e.codigo, detalhe: e.message, remedio: "empurrar-copia", copia: null };
@@ -500,7 +513,7 @@ function copiaNoOrigin(repo, ciclo) {
  * do canonico no HEAD em `Conducao-Plano` — o plano que a T6 congela. A
  * maestra só chama depois da resposta dele, num turno dele.
  */
-export function autorizarFase({ repo, ciclo, fase, sim, doCiclo = false, pergunta = null, pecas = null }) {
+export function autorizarFase({ repo, ciclo, fase, sim, doCiclo = false, pergunta = null, pecas = null, maestra = null }) {
   const verbo = doCiclo ? "autorizar-ciclo" : "autorizar-fase";
   exigir(FASE_RE.test(fase ?? ""), "uso", `${verbo} exige a fase F<n>, veio ${JSON.stringify(fase ?? null)}`);
   exigir(sim && sim.trim(), "sim-ausente", `${verbo} exige o texto do sim de ${nomeDoOperador(repo)} (--sim)`);
@@ -515,15 +528,65 @@ export function autorizarFase({ repo, ciclo, fase, sim, doCiclo = false, pergunt
   // D-VEGA19-48: o `--sim` entra aparado, no mesmo aparo do `simDoCorpo` com que a herança relê a
   // marca: a conferência de agora e a da herança comparam o mesmo texto.
   const simAparado = sim.trim();
+  let aceitaParada = false;
+  let daParada = false;
   if (pergunta) {
     const pc = pecas ?? pecasDoConsentimento(repo);
-    exigirPerguntaDoAutorizar({ repo, perguntas: registroDoConsentimento(pc, pergunta), pergunta_id: pergunta, ciclo, fase, sim: simAparado });
-  }
+    const citacao = doCiclo ? replanoCitaAPergunta(repo, ciclo, fase, pergunta) : null;
+    aceitaParada = citacao !== null;
+    exigirPerguntaDoAutorizar({
+      repo,
+      perguntas: registroDoConsentimento(pc, pergunta),
+      pergunta_id: pergunta,
+      ciclo,
+      fase,
+      sim: simAparado,
+      aceitaParada,
+      paradaAbertaDesde: citacao?.desde ?? null,
+      aoAceitarParada: () => (daParada = true),
+    });
+    // 3 níveis: o operador responde na sessão da maestra, e o repasse dela só vale com o recibo
+    // conferido (`repasse-hub`, que fica de pé só com o texto da mensagem, recusa). Com a marca de
+    // 3 níveis no ramo, `--maestra` é obrigatório: pular a conferência não cai na regra de 2 níveis.
+    if (maestra === null) exigir(niveisDasMarcas(lerMarcas(repo)).niveis !== 3, "maestra-ausente", `${verbo} em 3 níveis exige --maestra <a maestra da entrada>: a resposta tem de ser do operador nesta sessão ou na da maestra, com o recibo conferido`);
+    else exigirRespostaDaMaestra({ perguntas: registroDoConsentimento(pc, pergunta), pergunta_id: pergunta, maestra });
+  } else exigir(maestra === null, "uso", `${verbo}: --maestra só com --pergunta`);
   const { blob, plano } = lerPlanoNoCommit(repo, "HEAD", ciclo);
   exigir(plano.fases.some((f) => f.id === fase), "fase-ausente", `${fase} não está no plano ${blob}`);
-  const trailers = { "Conducao-Plano": blob, ...(doCiclo ? { "Conducao-Ciclo": "sim" } : {}), ...(pergunta ? { [TRAILER_DA_PERGUNTA]: pergunta } : {}) };
+  // Sim pela resposta de uma parada: a marca diz, para a herança reler a pergunta igual.
+  const trailers = {
+    "Conducao-Plano": blob,
+    ...(doCiclo ? { "Conducao-Ciclo": "sim" } : {}),
+    ...(pergunta ? { [TRAILER_DA_PERGUNTA]: pergunta } : {}),
+    ...(daParada ? { [TRAILER_PERGUNTA_DA_PARADA]: "sim" } : {}),
+  };
   const sha = commitVazio(repo, ciclo, `Conducao: ${fase} autorizada`, { corpo: simAparado, trailers });
   return comCopia(repo, ciclo, { acao: "autorizada", ciclo, fase, sha, plano: blob, ...(doCiclo ? { doCiclo: true } : {}), ...(pergunta ? { pergunta } : {}) });
+}
+
+/**
+ * O re-plano desta fase nasceu da resposta a `pergunta` (hotfix conducao-corta-paradas-de-regra):
+ * `{ desde }` (epoch s da última autorização da fase) quando todo commit do canonico desde ela cita a
+ * pergunta em `Replano-Pergunta`; senão null (fase nunca autorizada, git que falha, citação que falta).
+ */
+function replanoCitaAPergunta(repo, ciclo, fase, pergunta) {
+  const ultima = lerMarcas(repo).filter((m) => m.tipo === "autorizada" && m.fase === fase).at(-1);
+  if (!ultima?.sha) return null;
+  let caminho;
+  try {
+    caminho = caminhoDoCanonico(repo, "HEAD", ciclo);
+  } catch {
+    return null;
+  }
+  // A mesma prova da regra (`respostaQueReplanejou`): TODO commit da linha do ciclo que mexeu no
+  // canonico desde a autorização cita esta pergunta, e há ao menos um.
+  const r = tentar(repo, ["log", "--first-parent", "--format=%H%x1f%(trailers:key=Replano-Pergunta,valueonly=true,separator=%x2c)%x1e", `${ultima.sha}..HEAD`, "--", caminho]);
+  if (r.status !== 0) return null;
+  const commits = r.saida.split("\x1e").map((x) => x.trim()).filter(Boolean);
+  if (!commits.length || !commits.every((c) => (c.split("\x1f")[1] ?? "").split(",").map((v) => v.trim()).includes(pergunta))) return null;
+  // A hora da autorização: a pergunta da parada tem de ter sido aberta depois dela (dentro desta fase).
+  const desde = Number(tentar(repo, ["log", "-1", "--format=%ct", ultima.sha]).saida);
+  return Number.isFinite(desde) && desde > 0 ? { desde } : null;
 }
 
 /**
@@ -536,8 +599,197 @@ export function autorizarFase({ repo, ciclo, fase, sim, doCiclo = false, pergunt
  * em relação ao plano congelado aqui. Seguem pedindo: publicação por task,
  * task sensível de fase herdada (por nonce) e as perguntas da vigia.
  */
-export function autorizarCiclo({ repo, ciclo, fase, sim, pergunta = null, pecas = null }) {
-  return autorizarFase({ repo, ciclo, fase, sim, doCiclo: true, pergunta, pecas });
+export function autorizarCiclo({ repo, ciclo, fase, sim, pergunta = null, pecas = null, maestra = null }) {
+  return autorizarFase({ repo, ciclo, fase, sim, doCiclo: true, pergunta, pecas, maestra });
+}
+
+/**
+ * `resposta-da-maestra --pergunta <p-…> --maestra <id>` (3 níveis, hotfix
+ * vega-maestra-leva-pergunta): a condutora confere, antes de aplicar a
+ * decisão pelo verbo que o motivo pede, que a resposta registrada é do
+ * operador — nesta sessão, ou na da maestra da entrada, provada pelo recibo
+ * conferido. Nada grava. Recusa ⇒ `ErroPlano` (o motivo de
+ * `exigirRespostaDaMaestra`).
+ */
+export function respostaDaMaestra({ repo, pergunta, maestra, pecas = null }) {
+  exigir(PERGUNTA_ID_RE.test(pergunta ?? ""), "pergunta-ausente", `resposta-da-maestra exige --pergunta <p-…>, veio ${JSON.stringify(pergunta ?? null)}`);
+  const pc = pecas ?? pecasDoConsentimento(repo);
+  const r = exigirRespostaDaMaestra({ perguntas: registroDoConsentimento(pc, pergunta), pergunta_id: pergunta, maestra });
+  return { acao: "aplicar", pergunta, maestra, origem: r.origem, recibo: r.recibo };
+}
+
+// ── níveis da condução e pedido de herdeira (hotfix vega-conducao-niveis) ────
+
+/**
+ * A referência no origin, sem depender do idioma do git: `ls-remote --exit-code` sai 0 quando
+ * ela existe e 2 quando não; qualquer outra saída (rede, credencial, prazo) é origin inalcançável.
+ */
+function refNoOrigin(repo, ref) {
+  const r = tentar(repo, ["ls-remote", "--exit-code", "origin", ref], { rede: true });
+  if (r.status === 0) return { estado: "existe" };
+  if (r.status === 2) return { estado: "ausente" };
+  return { estado: "inalcancavel", erro: (r.erro || `git ls-remote saiu ${r.status ?? "sem status (prazo de rede)"}`).split("\n").slice(-2).join(" | ") };
+}
+
+/** Os níveis que a condução aceita: 2 (condutora → operária) ou 3 (maestra → condutora → operária). */
+export const NIVEIS = Object.freeze([2, 3]);
+
+/**
+ * `niveis <2|3> --sim <texto>`: `Conducao: ciclo niveis <n>`, com o texto do
+ * operador no corpo e `Conducao-Niveis` no trailer (a marca só vale com os
+ * dois iguais). A última marca vence: trocar de nível no meio do ciclo é outra
+ * marca, que vale na passagem seguinte. Só depois da resposta do operador, num
+ * turno dele.
+ */
+export function registrarNiveis({ repo, ciclo, niveis, sim, pergunta = null }) {
+  exigir(NIVEIS.includes(niveis), "uso", `niveis exige 2 ou 3, veio ${JSON.stringify(niveis ?? null)}`);
+  exigir(sim && sim.trim(), "sim-ausente", `niveis exige o texto da resposta de ${nomeDoOperador(repo)} (--sim)`);
+  if (pergunta !== null) exigir(PERGUNTA_ID_RE.test(pergunta), "pergunta-ausente", `niveis: --pergunta deve ser um id p-…, veio ${JSON.stringify(pergunta)}`);
+  const trailers = { "Conducao-Niveis": String(niveis), ...(pergunta ? { [TRAILER_DA_PERGUNTA]: pergunta } : {}) };
+  const sha = commitVazio(repo, ciclo, `Conducao: ciclo niveis ${niveis}`, { corpo: sim.trim(), trailers });
+  return comCopia(repo, ciclo, { acao: "niveis-registrados", ciclo, niveis, sha, ...(pergunta ? { pergunta } : {}) });
+}
+
+/** Campos que o pedido de herdeira leva; o resto da ação não viaja. */
+const CAMPOS_DO_PEDIDO = Object.freeze(["tipo", "fase", "faseDaPassagem", "nome", "ordinal", "modelo", "tentativa", "texto", "trazer", "prazoMin", "sessaoLimpa", "de"]);
+
+/**
+ * O pedido de herdeira (3 níveis): a condutora não cria a herdeira; grava no
+ * origin, em `refs/conducao-brief/<ciclo>/pedido/<nonce>`, um commit filho do
+ * HEAD cuja mensagem leva a ação de criar (texto, modelo, nome) em JSON, e a
+ * maestra o lê pelo nonce (`lerPedido`). O texto da herdeira nunca viaja por
+ * mensagem: a mensagem leva só a linha `PASSAR <fase> <nonce>`. Idempotente:
+ * o mesmo nonce com o mesmo pedido já no origin sai `ja-pedido`.
+ */
+export function gravarPedido({ repo, ciclo, nonce, pedido }) {
+  exigir(/^[0-9a-f]{16}$/.test(nonce ?? ""), "uso", `pedido exige o nonce de 16 hex da ação, veio ${JSON.stringify(nonce ?? null)}`);
+  const corpo = { ciclo, nonce, ...Object.fromEntries(CAMPOS_DO_PEDIDO.filter((k) => pedido[k] !== undefined).map((k) => [k, pedido[k]])) };
+  const json = JSON.stringify(corpo);
+  const head = rodar(repo, ["rev-parse", "HEAD"]);
+  const tree = rodar(repo, ["rev-parse", "HEAD^{tree}"]);
+  const commit = rodar(repo, ["commit-tree", tree, "-p", head], { entrada: `Pedido de herdeira: ${ciclo} nonce ${nonce}\n\n${json}` });
+  const ref = refs.pedido(ciclo, nonce);
+  const push = tentar(repo, ["push", "--porcelain", `--force-with-lease=${ref}:`, "origin", `${commit}:${ref}`], { rede: true });
+  // O mesmo commit (mesmo pedido, mesmo segundo) sai `=` no porcelain: já estava lá.
+  if (push.status === 0) return { acao: /^=\t/m.test(push.saida ?? "") ? "ja-pedido" : "pedido-gravado", ciclo, nonce, ref, commit, base: head };
+  // Já existe? O mesmo pedido é repetição inofensiva; outro, com o mesmo nonce, é gate.
+  const lido = lerPedido({ repo, ciclo, nonce, exigirBase: false });
+  if (lido.acao === "pedido" && JSON.stringify(lido.pedido) === json) return { acao: "ja-pedido", ciclo, nonce, ref, commit: lido.commit, base: lido.base };
+  return perguntar("pedido-recusado-no-origin", { ciclo, nonce, ref, detalhe: push.erro.split("\n").slice(-3).join(" | ") });
+}
+
+/**
+ * O pedido de herdeira pelo nonce, do origin (`gravarPedido`): busca a
+ * referência, lê a mensagem do commit e confere ciclo e nonce. Sai
+ * `{ acao: "pedido", pedido, commit, base }`, ou `perguntar` com o motivo
+ * (`pedido-ausente`, `pedido-ilegivel`, `pedido-de-outro-nonce`).
+ */
+export function lerPedido({ repo, ciclo, nonce, exigirBase = true }) {
+  exigir(/^[0-9a-f]{16}$/.test(nonce ?? ""), "uso", `pedido exige --nonce de 16 hex, veio ${JSON.stringify(nonce ?? null)}`);
+  const ref = refs.pedido(ciclo, nonce);
+  const busca = refs.buscaPedido(ciclo, nonce);
+  // Só a referência que o origin não tem é ausência; rede, credencial ou prazo é origin inalcançável.
+  const noOrigin = refNoOrigin(repo, ref);
+  if (noOrigin.estado === "ausente") return perguntar("pedido-ausente", { ciclo, nonce, ref });
+  if (noOrigin.estado === "inalcancavel") return perguntar("pedido-inalcancavel", { ciclo, nonce, ref, detalhe: noOrigin.erro });
+  const f = tentar(repo, ["fetch", "--quiet", "origin", `+${ref}:${busca}`], { rede: true });
+  if (f.status !== 0) return perguntar("pedido-inalcancavel", { ciclo, nonce, ref, detalhe: (f.erro ?? "").split("\n").slice(-2).join(" | ") });
+  try {
+    const commit = rodar(repo, ["rev-parse", busca]);
+    const base = tentar(repo, ["rev-parse", "-q", "--verify", `${busca}^`]).saida || null;
+    const corpo = rodar(repo, ["log", "-1", "--format=%b", busca]);
+    let pedido;
+    try {
+      pedido = JSON.parse(corpo);
+    } catch (e) {
+      return perguntar("pedido-ilegivel", { ciclo, nonce, ref, detalhe: e.message });
+    }
+    if (!pedido || pedido.ciclo !== ciclo || pedido.nonce !== nonce)
+      return perguntar("pedido-de-outro-nonce", { ciclo, nonce, ref, detalhe: `o pedido lido é de ${pedido?.ciclo ?? "?"} nonce ${pedido?.nonce ?? "?"}` });
+    if (exigirBase && !base) return perguntar("pedido-ilegivel", { ciclo, nonce, ref, detalhe: "o commit do pedido não tem pai" });
+    return { acao: "pedido", ciclo, nonce, ref, commit, base, pedido };
+  } finally {
+    tentar(repo, ["update-ref", "-d", busca]);
+  }
+}
+
+/**
+ * O atendimento do pedido `nonce` pela maestra, do origin: `{ sessao }` da condutora criada, ou
+ * `null` quando ainda não foi atendido. Origin inalcançável lança `ErroPlano` (`pedido-inalcancavel`):
+ * sem saber, a maestra não cria.
+ */
+export function lerAtendido({ repo, ciclo, nonce }) {
+  const ref = refs.atendido(ciclo, nonce);
+  const busca = refs.buscaAtendido(ciclo, nonce);
+  const noOrigin = refNoOrigin(repo, ref);
+  if (noOrigin.estado === "ausente") return null;
+  if (noOrigin.estado === "inalcancavel") throw new ErroPlano("pedido-inalcancavel", `o atendimento de ${nonce} não se leu do origin: ${noOrigin.erro}`);
+  const f = tentar(repo, ["fetch", "--quiet", "origin", `+${ref}:${busca}`], { rede: true });
+  if (f.status !== 0) {
+    throw new ErroPlano("pedido-inalcancavel", `o atendimento de ${nonce} não se leu do origin: ${(f.erro ?? "").split("\n").slice(-2).join(" | ")}`);
+  }
+  try {
+    const corpo = rodar(repo, ["log", "-1", "--format=%b", busca]);
+    let lido;
+    try {
+      lido = JSON.parse(corpo);
+    } catch (e) {
+      throw new ErroPlano("pedido-ilegivel", `o atendimento de ${nonce} não se lê: ${e.message}`);
+    }
+    if (lido?.ciclo !== ciclo || lido?.nonce !== nonce || typeof lido?.sessao !== "string") throw new ErroPlano("pedido-ilegivel", `o atendimento de ${nonce} é de outro pedido`);
+    return { sessao: lido.sessao };
+  } finally {
+    tentar(repo, ["update-ref", "-d", busca]);
+  }
+}
+
+/**
+ * `maestra-atendeu --nonce <x> --sessao-criada <id>`: grava no origin que o pedido `nonce` foi
+ * atendido pela sessão criada. Cria, nunca sobrescreve: a mesma sessão de novo sai `ja-atendido`;
+ * outra, `perguntar atendido-por-outra` (duas condutoras para um pedido: gate).
+ */
+export function reservarAtendimento({ repo, ciclo, nonce, maestra, base }) {
+  const ref = refs.reserva(ciclo, nonce);
+  const noOrigin = refNoOrigin(repo, ref);
+  if (noOrigin.estado === "inalcancavel") throw new ErroPlano("pedido-inalcancavel", `a reserva de ${nonce} não se leu do origin: ${noOrigin.erro}`);
+  if (noOrigin.estado === "existe") return { reservado: false, ref };
+  const arvore = rodar(repo, ["rev-parse", `${base}^{tree}`]);
+  const commit = rodar(repo, ["commit-tree", arvore, "-p", base], { entrada: `Pedido em atendimento: ${ciclo} nonce ${nonce}\n\n${JSON.stringify({ ciclo, nonce, maestra })}` });
+  const push = tentar(repo, ["push", "--porcelain", `--force-with-lease=${ref}:`, "origin", `${commit}:${ref}`], { rede: true });
+  // Lease recusado (linha `!` do porcelain) = outra maestra reservou entre a leitura e o push: em
+  // atendimento, não criar. Outra falha (rede, prazo) não diz quem reservou: origin inalcançável.
+  if (push.status !== 0 && !/^!\t/m.test(push.saida ?? "")) throw new ErroPlano("pedido-inalcancavel", `a reserva de ${nonce} não subiu ao origin: ${(push.erro || "sem saída").split(String.fromCharCode(10)).slice(-2).join(" | ")}`);
+  return { reservado: push.status === 0, ref, ...(push.status !== 0 ? { detalhe: (push.erro ?? "").split("\n").slice(-2).join(" | ") } : {}) };
+}
+
+/** A reserva existe no origin (`true`/`false`); inalcançável lança. */
+export function temReserva({ repo, ciclo, nonce }) {
+  const noOrigin = refNoOrigin(repo, refs.reserva(ciclo, nonce));
+  if (noOrigin.estado === "inalcancavel") throw new ErroPlano("pedido-inalcancavel", `a reserva de ${nonce} não se leu do origin: ${noOrigin.erro}`);
+  return noOrigin.estado === "existe";
+}
+
+/**
+ * Antes do `create_session` da condutora pedida, a maestra reserva o atendimento no origin
+ * (`refs/conducao-brief/<ciclo>/reserva/<nonce>`, criada com lease vazio). Reserva sem atendimento
+ * é condutora que pode ter nascido sem registro (a maestra caiu, ou o atendimento foi recusado):
+ * o `maestra` com esse nonce sai `perguntar pedido-em-atendimento`, nunca outra condutora.
+ */
+export function gravarAtendido({ repo, ciclo, nonce, sessao }) {
+  exigir(/^[0-9a-f]{16}$/.test(nonce ?? ""), "uso", `maestra-atendeu exige --nonce de 16 hex, veio ${JSON.stringify(nonce ?? null)}`);
+  exigir(typeof sessao === "string" && sessao.trim() && !sessao.includes("<"), "uso", `maestra-atendeu exige --sessao-criada <id devolvido pelo create_session>, veio ${JSON.stringify(sessao ?? null)}`);
+  const lido = lerPedido({ repo, ciclo, nonce });
+  if (lido.acao === "perguntar") return lido;
+  const ja = lerAtendido({ repo, ciclo, nonce });
+  if (ja) return ja.sessao === sessao.trim() ? { acao: "ja-atendido", ciclo, nonce, sessao: ja.sessao } : perguntar("atendido-por-outra", { ciclo, nonce, sessao: sessao.trim(), atendidoPor: ja.sessao });
+  const arvore = rodar(repo, ["rev-parse", `${lido.commit}^{tree}`]);
+  const commit = rodar(repo, ["commit-tree", arvore, "-p", lido.commit], {
+    entrada: `Pedido atendido: ${ciclo} nonce ${nonce}\n\n${JSON.stringify({ ciclo, nonce, sessao: sessao.trim() })}`,
+  });
+  const ref = refs.atendido(ciclo, nonce);
+  const push = tentar(repo, ["push", "--porcelain", `--force-with-lease=${ref}:`, "origin", `${commit}:${ref}`], { rede: true });
+  if (push.status !== 0) return perguntar("atendido-recusado-no-origin", { ciclo, nonce, ref, detalhe: (push.erro ?? "").split("\n").slice(-3).join(" | ") });
+  return { acao: "atendido", ciclo, nonce, sessao: sessao.trim(), ref, commit };
 }
 
 /** As origens da autorização herdada: o re-plano de ruling, o sim do ciclo e o re-plano que seguiu sozinho (T43). */
@@ -624,7 +876,9 @@ export function conferirPerguntaDaHeranca({ repo, ciclo, autorizacao, pecas = nu
   exigir(perguntaDaAutorizacao(repo, raiz) === pergunta, "pergunta-ilegivel", `${autorizacao.slice(0, 8)} cita ${pergunta}, a marca do sim ${raiz.slice(0, 8)} não`);
   const sim = simDoCorpo(rodar(repo, ["log", "-1", "--format=%b", raiz]));
   const pc = pecas ?? pecasDoConsentimento(repo);
-  exigirPerguntaDoAutorizar({ repo, perguntas: registroDoConsentimento(pc, pergunta), pergunta_id: pergunta, ciclo, fase, sim, marca: raiz });
+  // A marca autorizada pela resposta de uma parada relê a pergunta como foi conferida ao gravá-la.
+  const aceitaParada = lerTrailers(rodar(repo, ["log", "-1", "--format=%b", raiz]))[TRAILER_PERGUNTA_DA_PARADA] === "sim";
+  exigirPerguntaDoAutorizar({ repo, perguntas: registroDoConsentimento(pc, pergunta), pergunta_id: pergunta, ciclo, fase, sim, marca: raiz, aceitaParada });
   return pergunta;
 }
 
@@ -651,6 +905,14 @@ export function abrir({ repo, ciclo, task, tentativa, nonce, falhou = null }) {
   // Em passagem não abre operária (VEGA-37 T15); o marcador é marca: passa pela cerca da posse.
   exigirForaDaPassagem(repo, "o abrir");
   exigirPosse({ repo, ciclo });
+  // O mesmo abrir repetido (mesmo nonce) sai antes de tudo, sem regravar a falha: o marcador só
+  // nasce depois dela, então ela já está no ramo (hotfix conducao-corta-paradas-de-regra).
+  const localAntes = refs.tentativaLocal(ciclo, task, tentativa);
+  const marcadorAntes = revOuNull(repo, localAntes);
+  if (marcadorAntes) {
+    const mesma = mesmaAbertura({ repo, ciclo, task, tentativa, nonce, marcador: marcadorAntes, refLocal: localAntes });
+    if (mesma) return mesma;
+  }
   // Tentativa nova depois de falha decidida (T12): a falha da anterior entra
   // no ramo antes do marcador, para a contagem nunca depender da maestra.
   let falha = null;
@@ -669,6 +931,7 @@ export function abrir({ repo, ciclo, task, tentativa, nonce, falhou = null }) {
   }
 
   const local = refs.tentativaLocal(ciclo, task, tentativa);
+  // Abertura do mesmo nonce já saiu lá em cima; aqui só a de outro nonce, que pergunta.
   if (revOuNull(repo, local)) return perguntar("tentativa-ja-existe", { ciclo, task, tentativa, ref: local });
 
   const ref = refs.tentativa(ciclo, task, tentativa);
@@ -713,6 +976,45 @@ export function abrir({ repo, ciclo, task, tentativa, nonce, falhou = null }) {
     brief: { ref: refBrief, commit: commitBrief, linhas: b.brief.replace(/\n$/, "").split("\n").length },
     partida,
     ...(falha ? { falha } : {}),
+  };
+}
+
+/**
+ * A abertura já gravada desta tentativa, quando é a do mesmo `nonce`: o marcador local com o subject
+ * do `abrir`, a mesma ponta no origin e o commit do brief filho dele. Devolve a saída `aberta` que o
+ * primeiro `abrir` deu (com `jaAberta: true`), ou null — qualquer peça fora do lugar volta à pergunta.
+ */
+function mesmaAbertura({ repo, ciclo, task, tentativa, nonce, marcador, refLocal }) {
+  if (rodar(repo, ["log", "-1", "--format=%s", marcador]).trim() !== `Conducao: abrir ${task} tentativa ${tentativa} nonce ${nonce}`) return null;
+  const ref = refs.tentativa(ciclo, task, tentativa);
+  const refBrief = refs.brief(ciclo, task, tentativa);
+  const noOrigin = (r) => {
+    const linha = tentar(repo, ["ls-remote", "origin", r], { rede: true });
+    if (linha.status !== 0) return null;
+    const [sha, nome] = String(linha.saida ?? "").trim().split("\t");
+    return nome === r ? sha : null;
+  };
+  if (noOrigin(ref) !== marcador) return null;
+  const commitBrief = noOrigin(refBrief);
+  if (!commitBrief || tentar(repo, ["cat-file", "-e", `${commitBrief}^{commit}`]).status !== 0) return null;
+  if (revOuNull(repo, `${commitBrief}^`) !== marcador) return null;
+  const brief = rodar(repo, ["log", "-1", "--format=%b", commitBrief], { cru: true });
+  const partida = partidaDoBrief(brief, { ciclo, task, tentativa, nonce, ref, refBrief });
+  if (!partida) return null;
+  return {
+    acao: "aberta",
+    ciclo,
+    task,
+    tentativa,
+    nonce,
+    ref,
+    refLocal,
+    marcador,
+    base: revOuNull(repo, `${marcador}^`),
+    brief: { ref: refBrief, commit: commitBrief, linhas: brief.replace(/\n$/, "").split("\n").length },
+    partida,
+    jaAberta: true,
+    aviso: `${task} tentativa ${tentativa} já estava aberta com este nonce: a partida é a mesma. Criar a operária só se nenhuma sessão desta tentativa existir (list_sessions children); senão, seguir com a que existe.`,
   };
 }
 
@@ -1081,18 +1383,19 @@ export function trazer({ repo, ciclo, task, tentativa, shaAvisado = null, sessao
   // Os casos que o operador já decidiu seguem sem pergunta e ficam registrados (VEGA-37 T33):
   // o texto de cada um é o corpo da decisão que o mapa do §1.5 do canonico do HEAD aponta
   // (D-VEGA37-34/35) ou, na pergunta repetida, o corpo da marca de origem; sem ele, o caso pergunta.
+  // D-VEGA20-26: o trazer para só no caminho clínico fora dos Outputs e no que define a parada;
+  // hook, superfície de instrução e canonico vão ao relato (`foraDosOutputs`, `canonicoAlterado`).
   const decidido = verbos.decidirNoTrazer({
     caminhos,
     canonico,
     outputs: t.outputs,
     passos: t.passos ?? [],
     codigo: codigoDoAdaptador(repo),
-    instrucoes: lerAdaptador(repo).sessao.instrucoes,
     consentimentos: lerConsentimentos(repo, { ciclo }),
     ciclo,
     fase: t.fase,
-    // D-VEGA19-58: a revisão aprovada da tentativa cobre o que ela viu; o leitor é o do `conferir-carimbo`.
-    carimbo: carimboDaTentativa(repo, { faixa, ponta, publicacao: Boolean(t.publicacao?.length || t.simProprio) }),
+    // O `settings*.json` define a parada só quando o diff da faixa toca o registro do gate de publicação.
+    registraAParada: (c) => diffRegistraAParada(repo, marcador, ponta, c),
   });
   const doCanonico = tentar(repo, ["show", `HEAD:${canonico}`]);
   const textoDoCanonico = doCanonico.status === 0 ? doCanonico.saida : "";
@@ -1147,7 +1450,8 @@ export function trazer({ repo, ciclo, task, tentativa, shaAvisado = null, sessao
 
   // Os casos a registrar viajam no `trazida`: é dele que o `regravar-consentimentos` os relê (D-VEGA37-36).
   const consentidos = doTrazer.registros.map((r) => consentidoDoRegistro(r.registro));
-  const registro = gravarTrazida(repo, { ciclo, task, tentativa, nonce, marcador, ponta, sessao, base: head, ate, modo, consentidos });
+  const foraDosOutputsDaTask = decidido.foraDosOutputs;
+  const registro = gravarTrazida(repo, { ciclo, task, tentativa, nonce, marcador, ponta, sessao, base: head, ate, modo, consentidos, foraDosOutputs: foraDosOutputsDaTask, canonicoAlterado: decidido.canonicoAlterado });
   const apagada = apagarTentativa(repo, ciclo, task, tentativa);
   const trazida = {
     ...base,
@@ -1157,6 +1461,8 @@ export function trazer({ repo, ciclo, task, tentativa, shaAvisado = null, sessao
     ...(regeneradas.length ? { regeneradas } : {}),
     ...(puladas.length ? { puladas } : {}),
     ...(carimboOrfao ? { carimboOrfao } : {}),
+    foraDosOutputs: foraDosOutputsDaTask,
+    canonicoAlterado: decidido.canonicoAlterado,
     registro,
     apagada,
   };
@@ -1164,10 +1470,16 @@ export function trazer({ repo, ciclo, task, tentativa, shaAvisado = null, sessao
   // pergunta com o remédio, nunca só um campo da saída (D-VEGA37-36).
   const gravados = gravarComPergunta({ repo, ciclo, registros: doTrazer.registros, gravarRegistros });
   if (gravados.erro) return comCopia(repo, ciclo, perguntaSemRegistro(trazida, gravados.erro, consentidos.length));
+  // D-VEGA20-26: uma linha do relato por arquivo de fora dos Outputs, e uma pelo canonico, nunca calado.
+  const avisoOperador = [
+    ...foraDosOutputsDaTask.map((c) => `${task} trouxe de fora dos Outputs: ${c}`),
+    ...(decidido.canonicoAlterado ? [`${task} alterou o canonico do ciclo: ${canonico}`] : []),
+  ];
   return comCopia(repo, ciclo, {
     acao: "trazida",
     ...trazida,
     ...(gravados.consentimentos.length ? { consentimentos: gravados.consentimentos } : {}),
+    ...(avisoOperador.length ? { avisoOperador } : {}),
   });
 }
 
@@ -1419,36 +1731,6 @@ function ultimoCodigoNoHead(repo) {
 }
 
 /**
- * O carimbo de revisão da tentativa, lido na árvore da ponta pelo mesmo
- * leitor do `conferir-carimbo` (`carimbo.achar` do adaptador): o do último
- * commit não-prosa da faixa ou, quando ele é um cherry-pick sem carimbo
- * próprio, o do sha de origem (`orfao`, `para` = esse commit). Devolve os
- * campos que `carimboCobreAPonta` confere, ou null — sem carimbo, sem
- * adaptador que o ache, ou erro de leitura: o trazer pergunta como antes.
- */
-function carimboDaTentativa(repo, { faixa, ponta, publicacao }) {
-  try {
-    const achar = codigoDoAdaptador(repo).carimbo?.achar;
-    const ultimo = ultimoCommitDeCodigo(repo, faixa);
-    if (!achar || !ultimo) return null;
-    const arquivosDoHead = rodar(repo, ["ls-tree", "-r", "--name-only", ponta]).split("\n");
-    const lerArquivo = (p) => rodar(repo, ["show", `${ponta}:${p}`]);
-    let caminho = achar({ sha: ultimo, arquivosDoHead, lerArquivo });
-    let orfao = null;
-    if (!caminho) {
-      const de = shaDoCherryPick(rodar(repo, ["log", "-1", "--format=%B", ultimo]));
-      if (!de) return null;
-      caminho = achar({ sha: de, arquivosDoHead, lerArquivo });
-      if (!caminho) return null;
-      orfao = { de, para: ultimo };
-    }
-    return { ...camposDoCarimbo(lerArquivo(caminho)), caminho, ultimo, ponta, orfao, publicacao };
-  } catch {
-    return null;
-  }
-}
-
-/**
  * Cherry-pick muda o sha de todo commit trazido: carimbo que a filha gravou
  * para o último commit de código dela fica órfão no ramo, e o rito do brief
  * (que procura `<sha8>.md` do último commit não-prosa por `ls-tree`) refaz a
@@ -1496,6 +1778,9 @@ function gravarTrazida(repo, d) {
       `Conducao-Modo: ${d.modo}`,
       // Sempre, mesmo vazio: ausente ≠ vazio (débito `conducao-consentidos-do-trailer-ausente-vazio`).
       `Conducao-Consentidos: ${Buffer.from(JSON.stringify(d.consentidos ?? []), "utf8").toString("base64url")}`,
+      // D-VEGA20-26: sempre, mesmo vazio (ausente ≠ vazio): o que veio de fora dos Outputs e o canonico à parte.
+      `Conducao-Fora-Dos-Outputs: ${Buffer.from(JSON.stringify(d.foraDosOutputs ?? []), "utf8").toString("base64url")}`,
+      `Conducao-Canonico-Alterado: ${d.canonicoAlterado ? "sim" : "nao"}`,
     ].join("\n"),
   ].join("\n");
   const obj = rodar(repo, ["commit-tree", vazia, "-p", d.ponta, "-m", msg]);
@@ -1518,6 +1803,62 @@ export function consentidosDoTrailer(v) {
   } catch {
     return null;
   }
+}
+
+/**
+ * Os caminhos do trailer `Conducao-Fora-Dos-Outputs` (D-VEGA20-26): a lista,
+ * `undefined` quando ausente (trazida de antes da T43) ou null quando não se lê.
+ */
+export function foraDosOutputsDoTrailer(v) {
+  if (v === undefined) return undefined;
+  try {
+    const lista = JSON.parse(Buffer.from(v, "base64url").toString("utf8"));
+    return Array.isArray(lista) && lista.every((c) => typeof c === "string") ? lista : null;
+  } catch {
+    return null;
+  }
+}
+
+/** `Conducao-Canonico-Alterado`: `sim`/`nao`; ausente ⇒ undefined; outro valor é ilegível (null), nunca "não alterado". */
+export function canonicoAlteradoDoTrailer(v) {
+  if (v === undefined) return undefined;
+  return { sim: true, nao: false }[v] ?? null;
+}
+
+/** Os trailers do relato (D-VEGA20-26), crus, para a marca `conferida` levar adiante; só os presentes. */
+export const TRAILERS_DO_RELATO = Object.freeze(["Conducao-Fora-Dos-Outputs", "Conducao-Canonico-Alterado"]);
+function relatoDoTrailer(tr) {
+  // O que não se lê vai à marca como `ilegivel` (lido de novo como null), nunca o texto cru adiante.
+  const legivel = { "Conducao-Fora-Dos-Outputs": (v) => foraDosOutputsDoTrailer(v) !== null, "Conducao-Canonico-Alterado": (v) => canonicoAlteradoDoTrailer(v) !== null };
+  return Object.fromEntries(TRAILERS_DO_RELATO.filter((k) => tr[k] !== undefined).map((k) => [k, legivel[k](tr[k]) ? tr[k] : "ilegivel"]));
+}
+
+/**
+ * O relato de uma trazida ou de uma marca `conferida`, lido dos trailers
+ * crus (D-VEGA20-26): `{ foraDosOutputs, canonicoAlterado }`, cada um
+ * `undefined` quando ausente e `null` quando ilegível.
+ */
+export function relatoDosTrailers(tr = {}) {
+  return { foraDosOutputs: foraDosOutputsDoTrailer(tr["Conducao-Fora-Dos-Outputs"]), canonicoAlterado: canonicoAlteradoDoTrailer(tr["Conducao-Canonico-Alterado"]) };
+}
+
+/**
+ * O `settings*.json` muda, entre `marcador` e `ponta`, o que liga o gate de
+ * publicação (`settingsMudaAParada`, D-VEGA20-26): o texto de cada lado vem
+ * por `<rev>:<caminho>`, que o git lê literal. Ausente num lado é ausente;
+ * erro de leitura de quem existe conta como mudança: o trazer para, nunca
+ * segue calado.
+ */
+function diffRegistraAParada(repo, marcador, ponta, caminho) {
+  const ILEGIVEL = "\u0000ilegivel";
+  const lado = (rev) => {
+    const r = tentar(repo, ["cat-file", "blob", `${rev}:${caminho}`]);
+    if (r.status === 0) return r.saida;
+    // Ausente só quando a árvore se lê e não tem o caminho; qualquer outra falha (prazo, erro) é ilegível.
+    const ls = tentar(repo, ["--literal-pathspecs", "ls-tree", "--name-only", rev, "--", caminho]);
+    return ls.status === 0 && ls.saida.trim() === "" ? undefined : ILEGIVEL;
+  };
+  return settingsMudaAParada(lado(marcador), lado(ponta));
 }
 
 /** Registros `trazida` pendentes do ciclo (sem conferência nem revert gravados). */
@@ -1549,6 +1890,11 @@ export function lerTrazidas(repo, ciclo) {
       modo: tr["Conducao-Modo"] ?? null,
       // Ausente ⇒ [] (trazida de antes da T33, sem caso a registrar); ilegível segue null.
       consentidos: tr["Conducao-Consentidos"] === undefined ? [] : consentidosDoTrailer(tr["Conducao-Consentidos"]),
+      // D-VEGA20-26: ausente ⇒ undefined (trazida de antes da T43, sem a lista); ilegível ⇒ null.
+      foraDosOutputs: foraDosOutputsDoTrailer(tr["Conducao-Fora-Dos-Outputs"]),
+      canonicoAlterado: canonicoAlteradoDoTrailer(tr["Conducao-Canonico-Alterado"]),
+      // O texto cru dos dois, que a marca `conferida` copia: o relato sobrevive ao apagar do registro.
+      relato: relatoDoTrailer(tr),
     });
   }
   return out;

@@ -27,7 +27,13 @@ const COM_A_REGUA = [...TEXTOS, "skills/conducao/references/brief-operaria.md", 
 /** As declarações que as suítes leem: o projeto de teste e o projeto de exemplo do plugin. */
 const DECLARACOES = [path.resolve(AQUI, "fixtures", "projeto-de-teste", ".altair", "adaptador.json"), path.resolve(RAIZ, "exemplo", ".vega", "declaracao.json")];
 // Teto ao medido na VEGA-19 T43 (a skill e o contrato com o re-plano que segue sozinho): 6670 palavras.
-const FAIXA = { min: 5500, max: 6670 };
+// Hotfix vega-conducao-niveis: a condução em 3 níveis (papel novo, a pergunta dos níveis e o
+// `pedir-herdeira`, a ordem do fechar-ciclo em 3 níveis) somou 275 palavras à skill, com o corpo
+// da maestra em references/maestra.md, fora da soma: 6661 → 6936 medidas. Teto ao medido.
+// Hotfix vega-maestra-leva-pergunta: em 3 níveis o operador responde na sessão da maestra (o papel
+// na tabela, a linha da §Três níveis, o ponteiro da §3.1 e a regra do send_message) somou 30
+// palavras, com o passo a passo em references/maestra.md §A pergunta: 6936 → 6966. Teto ao medido.
+const FAIXA = { min: 5500, max: 6966 };
 // Gente que decide fora da condução e não é operador declarado.
 const OUTRAS_PESSOAS = ["Fulano", "Beltrano"];
 

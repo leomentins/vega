@@ -391,6 +391,11 @@ test("extrator não sai vazio: cada classe acha ao menos um item no código", ()
 // Fora de crase, "maestra" só em linha que a declara aposentada ou antiga
 // (identificadores como `criar-fechamento` ou `sessaoMaestra` ficam entre crases).
 // A T45 estende a varredura ao `contrato-atual.md` (CONTRATO, nesta pasta).
+// Hotfix vega-conducao-niveis (pedido do operador, 20/11/2026): a maestra volta só
+// na condução em 3 níveis, que cria condutoras e não vigia a janela delas. A
+// maestra antiga segue aposentada: fora de crase, "maestra" só em linha que diz
+// aposentada/antiga ou que nomeia os 3 níveis, ou dentro da seção `## Três níveis`
+// da skill (o corpo dela mora em `references/maestra.md`, fora desta varredura).
 test("o contrato atual não descreve papel aposentado", () => {
   const skill = new URL("../../../skills/conducao/", import.meta.url);
   const arquivos = [
@@ -400,10 +405,22 @@ test("o contrato atual não descreve papel aposentado", () => {
   const achados = [];
   for (const [rel, onde] of arquivos) {
     const linhas = readFileSync(onde, "utf8").split("\n");
+    let naSecao = false;
     linhas.forEach((linha, i) => {
+      if (/^## /.test(linha)) naSecao = rel === "SKILL.md" && /^## Três níveis\s*$/.test(linha);
+      if (naSecao) return;
       const semCrase = linha.replace(/`[^`]*`/g, "");
-      if (/maestra/i.test(semCrase) && !/aposentad|antig/i.test(semCrase)) achados.push(`${rel}:${i + 1}`);
+      if (/maestra/i.test(semCrase) && !/aposentad|antig|3 níveis|três níveis/i.test(semCrase)) achados.push(`${rel}:${i + 1}`);
     });
   }
-  assert.deepEqual(achados, [], `"maestra" fora de crase sem dizer aposentado/antigo: ${achados.join(", ")}`);
+  assert.deepEqual(achados, [], `"maestra" fora de crase sem dizer aposentado/antigo/3 níveis: ${achados.join(", ")}`);
+});
+
+test("a maestra de 3 níveis tem a seção na skill e o corpo na referência", () => {
+  const skill = new URL("../../../skills/conducao/", import.meta.url);
+  const corpo = readFileSync(new URL("SKILL.md", skill), "utf8");
+  assert.match(corpo, /^## Três níveis$/m);
+  assert.match(corpo, /references\/maestra\.md/);
+  const maestra = readFileSync(new URL("references/maestra.md", skill), "utf8");
+  for (const termo of ["PASSAR <fase> <nonce>", "PARADA <motivo>", "PERGUNTA <p-…>", "RESPOSTA <p-…>", "Recibo:", "resposta-da-maestra", "passar-maestra", "HERDEIRA", "--linhagem"]) assert.ok(maestra.includes(termo), `maestra.md sem ${termo}`);
 });

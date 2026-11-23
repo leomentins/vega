@@ -79,6 +79,9 @@ export const ATRIBUTOS = Object.freeze([
   "recomendada",
   "destinatario",
   "textoSha256",
+  // O porquê da parada que junta vários (`trazer-exige-aprovacao`): só os nomes, `a+b`, nunca os caminhos
+  // (hotfix conducao-corta-paradas-de-regra: as 156 paradas medidas até 20/11/2026 não o traziam).
+  "motivos",
   // Vigia por estado (VEGA-37 T21, `vigia.mjs`): eventos `vida`, `queda` e
   // `aviso-da-vigia`. Só tokens, números e o dia `America/Sao_Paulo`.
   "despertador",
@@ -86,6 +89,15 @@ export const ATRIBUTOS = Object.freeze([
   "intervaloMin",
   "dia",
   "instante",
+  // Aposentadoria da parada de resposta constante (VEGA-20 T19): o evento `aposentada`.
+  "resposta",
+  "n",
+  "sequencias",
+  "decisoes",
+  "por",
+  // A volta da parada aposentada (VEGA-20 T20): o evento `volta` a mando leva o recibo da frase do
+  // operador, `<sessao>/<evento>` — ids, nunca o texto.
+  "recibo",
 ]);
 
 const TOKEN = /^[A-Za-z0-9._:/+@-]{1,200}$/;

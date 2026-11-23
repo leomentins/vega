@@ -10,7 +10,9 @@ import { after, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { lerAdaptador } from "../adaptador.mjs";
 import { arquivoDoLog, lerLog, validarLinha } from "../log-eventos.mjs";
-import { ErroPergunta, EVENTO, comPergunta, decisaoDe, foiConstruida, gravar, perguntar } from "../pergunta.mjs";
+import { PONTEIRO_DO_AUTORIZAR } from "../consentimento.mjs";
+import { DESTINATARIOS_DA_CONDUCAO, ErroPergunta, EVENTO, PONTEIRO_DA_PARADA, comPergunta, decisaoDe, foiConstruida, formaDe, gravar, perguntar, ponteiroDa } from "../pergunta.mjs";
+import { criarPergunta } from "../../pergunta/forma.mjs";
 import * as verbos from "../verbos.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
@@ -256,6 +258,22 @@ describe("gravação no destino do adaptador", () => {
     assert.deepEqual(lerLog(arquivoDoLog(CICLO, decl.pastaDoLog)), []);
   });
 
+  test("a parada do trazer grava no log o nome de cada motivo, nunca os caminhos", () => {
+    const decl = lerAdaptador(repoCom(FALSO), { env: estacao() });
+    const motivos = [
+      { motivo: "alcance-dos-hooks", caminhos: [".claude/hooks/x.js"] },
+      { motivo: "canonico-do-ciclo", caminhos: ["a/canonico.md"] },
+      { motivo: "alcance-dos-hooks", caminhos: [".claude/hooks/y.js"] },
+    ];
+    const p = perguntar({ motivo: "trazer-exige-aprovacao", ciclo: CICLO, task: "T3", tentativa: 1, nonce: "0123456789abcdef", motivos });
+    gravar(p, decl, { quando: QUANDO });
+    const linhas = lerLog(arquivoDoLog(CICLO, decl.pastaDaPergunta));
+    linhas.forEach(validarLinha);
+    const ev = linhas.find((l) => l.linha === "evento" && l.acao === EVENTO);
+    assert.equal(ev.atributos.motivos, "alcance-dos-hooks+canonico-do-ciclo");
+    assert.doesNotMatch(JSON.stringify(ev), /hooks\/x\.js|canonico\.md/);
+  });
+
   test("saída que não passou pelo construtor não grava", () => {
     const decl = lerAdaptador(repoCom(FALSO), { env: estacao() });
     assert.throws(() => gravar({ acao: "perguntar", motivo: "sem-saida", ciclo: CICLO }, decl), /construtor/);
@@ -266,7 +284,8 @@ describe("gravação no destino do adaptador", () => {
     const repo = repoCom(FALSO);
     const r = spawnSync(process.execPath, [CLI, "abrir", "--repo", repo, "--ciclo", CICLO, "T1", "--modo-maestra", "default"], { env, encoding: "utf8" });
     assert.equal(r.status, 1, r.stderr);
-    assert.equal(JSON.parse(r.stdout).motivo, "modo-da-maestra");
+    const saida = JSON.parse(r.stdout);
+    assert.equal(saida.motivo, "modo-da-maestra");
     assert.doesNotMatch(r.stderr, /nao gravado/);
     const X = lerAdaptador(repo, { env }).pastaDaPergunta;
     const ev = lerLog(arquivoDoLog(CICLO, X)).filter((l) => l.linha === "evento");
@@ -274,6 +293,8 @@ describe("gravação no destino do adaptador", () => {
     const tipada = ev.find((e) => e.acao === EVENTO);
     assert.equal(tipada.atributos.motivo, "modo-da-maestra");
     assert.equal(tipada.atributos.destinatario, "operador");
+    // A parada sai com o ponteiro da pergunta registrada, e ele carrega o id que o log gravou.
+    assert.equal(saida.ponteiro, `${PONTEIRO_DA_PARADA}modo-da-maestra:${tipada.atributos.decisao}`);
   });
 
   test("projeto de teste: a pergunta lida do log v1 tem id, sessão, opções, recomendada, destinatário e sha256; nada cai e o texto não vaza", () => {
@@ -323,5 +344,27 @@ describe("gravação no destino do adaptador", () => {
     assert.deepEqual(ev.objetos.map((o) => o.id), [`ciclo:${CICLO}`, `fase:${CICLO}/F2`, `task:${CICLO}/T12`, `tentativa:${CICLO}/T12/1`]);
     const cru = readFileSync(arquivo, "utf8");
     for (const t of [textoA, textoB, recomendacao, "João", "paciente"]) assert.ok(!cru.includes(t), `texto livre em claro no .jsonl: ${t}`);
+  });
+});
+
+describe("ponteiro da parada registrada", () => {
+  test("conducao:<motivo>:<decisao> com o id do log; sim do ciclo aponta autorizar-ciclo:F<n>; + vira ponto", () => {
+    const p = perguntar({ motivo: "trazer-exige-aprovacao", ciclo: CICLO, task: "T3", tentativa: 1, nonce: "n1" });
+    assert.equal(ponteiroDa(p), `conducao:trazer-exige-aprovacao:${decisaoDe(p).id}`);
+    assert.equal(ponteiroDa(perguntar({ motivo: "autorizar-ciclo", ciclo: CICLO, fase: "F2", nonce: "n2" })), `${PONTEIRO_DO_AUTORIZAR}F2`);
+    // O plano-mudou também: o sim dele entra pelo autorizar-ciclo, que confere este ponteiro.
+    assert.equal(ponteiroDa(perguntar({ motivo: "plano-mudou", ciclo: CICLO, fase: "F3", nonce: "n3" })), `${PONTEIRO_DO_AUTORIZAR}F3`);
+    // Sem fase legível, o sim do ciclo cai na forma comum: nunca um autorizar-ciclo: que não autoriza nada.
+    assert.ok(ponteiroDa(perguntar({ motivo: "autorizar-ciclo", ciclo: CICLO })).startsWith("conducao:autorizar-ciclo:d-"));
+    assert.ok(ponteiroDa(perguntar({ motivo: "a+b", ciclo: CICLO })).startsWith("conducao:a.b:d-"));
+    assert.throws(() => ponteiroDa({ acao: "perguntar", motivo: "x", ciclo: CICLO }), ErroPergunta);
+  });
+
+  test("a forma da pergunta aceita o ponteiro como vem, inclusive com o motivo mais longo", () => {
+    const p = perguntar({ motivo: `${"m".repeat(199)}+`, ciclo: CICLO, numero: 4, opcoes: [{ id: "a", texto: "x" }, { id: "b", texto: "y" }], recomendada: "a" });
+    const forma = formaDe(p, { sessao: "s-teste", has_patient_data: false });
+    const opcoes = { destinatarios: DESTINATARIOS_DA_CONDUCAO, Erro: ErroPergunta };
+    assert.doesNotThrow(() => criarPergunta({ ...forma, ponteiro: ponteiroDa(p) }, opcoes));
+    assert.throws(() => criarPergunta({ ...forma, ponteiro: "conducao:a+b:d-0" }, opcoes), ErroPergunta);
   });
 });

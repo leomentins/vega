@@ -133,7 +133,9 @@ test("perguntar de task protegida: os caminhos saem em caminhosProtegidos", () =
   assert.equal(r.acao, "perguntar");
   assert.equal(r.motivo, "task-sensivel");
   assert.deepEqual(r.caminhosProtegidos, ["app/fichas/laudo.tsx"]);
-  assert.deepEqual(Object.keys(r).sort(), ["acao", "caminhosProtegidos", "ciclo", "fase", "head", "motivo", "nonce", "plano", "porque", "publicacao", "task", "tentativa"]);
+  assert.deepEqual(Object.keys(r).sort(), ["acao", "caminhosProtegidos", "ciclo", "fase", "head", "motivo", "nonce", "plano", "porque", "publicacao", "task", "tasks", "tentativa"]);
+  // Uma pergunta por fase: as sensíveis pendentes vão pelo nome em `tasks`.
+  assert.deepEqual(r.tasks, [{ task: "T1", porque: "caminho-clinico", publicacao: [], caminhosProtegidos: ["app/fichas/laudo.tsx"] }]);
 });
 
 test("abrir com aviso do reinício: o aviso sai em avisoOperador", () => {

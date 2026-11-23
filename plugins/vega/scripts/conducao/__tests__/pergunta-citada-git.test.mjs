@@ -223,3 +223,46 @@ test("o PHI_DO_CASO do embutido é o do núcleo, e o registro recusa CPF e CNS c
     rmSync(pasta, { recursive: true, force: true });
   }
 });
+
+test("no exemplo, a resposta da parada que pediu o re-plano reautoriza a fase só com o trailer Replano-Pergunta", (t) => {
+  // Hotfix conducao-corta-paradas-de-regra: a pergunta `conducao:<motivo>:<id>` de uma parada que
+  // replaneja (ci-vermelho, pergunta da filha…) é o sim da fase sob o plano novo, sem a segunda
+  // pergunta `plano-mudou` — só quando TODO commit do canonico desde a autorização a cita.
+  const e = exemplo(t);
+  autorizar(e, perguntaNoRegistro(e));
+  const PLANO = path.join(e.dir, "docs", "planos", `${CICLO}.md`);
+  const replano = (trailer) => {
+    writeFileSync(PLANO, readFileSync(PLANO, "utf8") + "\n<!-- re-plano -->\n");
+    e.g("add", "-A");
+    e.g("commit", "-q", "-m", `${CICLO}-F1 — re-plano`, ...(trailer ? ["-m", trailer] : []));
+  };
+  const daParada = { ponteiro: "conducao:ci-vermelho:d-0123456789abcdef" };
+  const citada = perguntaNoRegistro(e, { abertura: daParada });
+  // Sem re-plano no canonico, ou com commit do canonico que não a cita: recusa como antes.
+  assert.throws(() => autorizar(e, citada), recusa("pergunta-de-outra-fase"));
+  replano(null);
+  replano(`Replano-Pergunta: ${citada}`);
+  assert.throws(() => autorizar(e, citada), recusa("pergunta-de-outra-fase"));
+  // Só o commit citado: autoriza, e a marca diz que o sim veio de uma parada; o motivo fora das
+  // paradas que replanejam (`task-sensivel`) recusa mesmo citado.
+  const e3 = exemplo(t);
+  autorizar(e3, perguntaNoRegistro(e3));
+  const PLANO3 = path.join(e3.dir, "docs", "planos", `${CICLO}.md`);
+  // A parada é desta fase: aberta depois da autorização; a aberta antes (outra fase) recusa.
+  const depois = new Date(Date.now() + 60_000).toISOString();
+  const respondida = { timestamp: new Date(Date.now() + 120_000).toISOString() };
+  const ok = perguntaNoRegistro(e3, { abertura: { ...daParada, carimbo: depois }, mensagem: respondida });
+  const outro = perguntaNoRegistro(e3, { abertura: { ponteiro: "conducao:task-sensivel:d-0123456789abcdef", carimbo: depois }, mensagem: respondida });
+  const antiga = perguntaNoRegistro(e3, { abertura: daParada });
+  writeFileSync(PLANO3, readFileSync(PLANO3, "utf8") + "\n<!-- re-plano -->\n");
+  e3.g("add", "-A");
+  e3.g("commit", "-q", "-m", `${CICLO}-F1 — re-plano`, "-m", `Replano-Pergunta: ${ok}\nReplano-Pergunta: ${outro}\nReplano-Pergunta: ${antiga}`);
+  assert.throws(() => autorizar(e3, outro), recusa("pergunta-de-outra-fase"));
+  assert.throws(() => autorizar(e3, antiga), recusa("pergunta-de-outra-fase"));
+  const r = autorizar(e3, ok);
+  assert.ok(["autorizada", "registrado-sem-copia"].includes(r.acao), JSON.stringify(r));
+  assert.equal(e3.g("log", "-1", "--format=%(trailers:key=Conducao-Pergunta,valueonly)"), ok);
+  assert.equal(e3.g("log", "-1", "--format=%(trailers:key=Conducao-Pergunta-Parada,valueonly)"), "sim");
+  // A herança relê a mesma pergunta pela marca, sem tropeçar no ponteiro da parada.
+  assert.equal(conferirPerguntaDaHeranca({ repo: e3.dir, ciclo: CICLO, autorizacao: e3.head() }), ok);
+});

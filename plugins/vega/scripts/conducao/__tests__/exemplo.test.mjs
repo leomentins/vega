@@ -186,54 +186,44 @@ test("o projeto de exemplo é conduzido de ponta a ponta: proximo, abrir, trazer
   assert.deepEqual(aud.saida.tasks.map((x) => x.task), ["T1", "T2"]);
 });
 
-// D-VEGA19-46 (T34): o exemplo não tem filtro de PHI próprio (adaptador `superpowers`); o caso
-// consentido no trazer passa pelo gate do caso, sem perguntar — como antes da T16.
+// D-VEGA20-26 (T43): no exemplo do plugin (adaptador `superpowers`, sem filtro de PHI próprio), a
+// superfície de instrução não para o trazer, com contrato no HEAD ou sem: a declarada nos Outputs segue
+// calada, e a de fora vai ao relato e ao registro `trazida`, sem caso de consentimento a gravar.
 const SKILL = ".claude/skills/despedida/SKILL.md";
 
-test("no exemplo do plugin, o caso consentido no trazer passa sem perguntar e deixa a marca do consentimento", (t) => {
-  // O padrão da fábrica é lido do contrato da condução no HEAD do projeto, no caminho do plugin. No
-  // corpo instalado sem `.git` (seed dir, D-VEGA19-38) o caminho é null por desenho e o caso
-  // pergunta (fail-closed, D-VEGA19-29); dentro de um repositório git o caminho tem de sair.
-  const contrato = caminhoDoContrato();
-  const comGit = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd: AQUI, encoding: "utf8" }).status === 0;
-  if (comGit) assert.ok(contrato, "o contrato da condução tem caminho no repositório do plugin");
-  else assert.equal(contrato, null, "fora de um repositório git o contrato não tem caminho");
-  const a = ambiente(t, {
-    preparar: (dir) => {
-      if (contrato) {
-        mkdirSync(path.dirname(path.join(dir, contrato)), { recursive: true });
-        cpSync(path.resolve(AQUI, "..", "..", "..", "skills", "conducao", "references", "contrato.md"), path.join(dir, contrato));
-      }
-      const plano = path.join(dir, "docs", "planos", `${CICLO}.md`);
-      const texto = readFileSync(plano, "utf8");
-      const antes = "- Criar: `src/despedida.mjs`\n";
-      assert.ok(texto.includes(antes), "o plano de exemplo declara src/despedida.mjs");
-      writeFileSync(plano, texto.replace(antes, `${antes}- Criar: \`${SKILL}\`\n`));
-    },
+for (const declarada of [true, false]) {
+  test(`no exemplo do plugin, a superfície de instrução ${declarada ? "declarada" : "fora dos Outputs"} é trazida sem perguntar`, (t) => {
+    // O contrato da condução tem caminho no repositório do plugin; no corpo instalado sem `.git`
+    // (seed dir, D-VEGA19-38) é null por desenho, e o trazer não depende mais dele (D-VEGA20-26).
+    const contrato = caminhoDoContrato();
+    const comGit = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd: AQUI, encoding: "utf8" }).status === 0;
+    if (comGit) assert.ok(contrato, "o contrato da condução tem caminho no repositório do plugin");
+    else assert.equal(contrato, null, "fora de um repositório git o contrato não tem caminho");
+    const a = ambiente(t, {
+      preparar: (dir) => {
+        if (!declarada) return;
+        const plano = path.join(dir, "docs", "planos", `${CICLO}.md`);
+        const texto = readFileSync(plano, "utf8");
+        const antes = "- Criar: `src/despedida.mjs`\n";
+        assert.ok(texto.includes(antes), "o plano de exemplo declara src/despedida.mjs");
+        writeFileSync(plano, texto.replace(antes, `${antes}- Criar: \`${SKILL}\`\n`));
+      },
+    });
+    a.ok("autorizar-ciclo", "F1", "--sim", SIM_DA_F1, "--pergunta", a.pergunta);
+    const p = a.ok("proximo", "--entrada", JSON.stringify({ sessaoMaestra: "session_maestra_f1" }));
+    assert.equal(p.acao, "abrir", JSON.stringify(p));
+    const tarefa = p.tarefas[0];
+    assert.equal(tarefa.task, "T1");
+    const s = a.ok("abrir", tarefa.task, "--tentativa", String(tarefa.tentativa), "--nonce", tarefa.nonce, "--modo-maestra", "auto");
+    const [arquivos, subject] = TRABALHO.T1;
+    a.filhaTrabalha(s.ref, { ...arquivos, [SKILL]: "# despedida\n\nDiz até logo.\n" }, subject);
+    const tr = a.ok("trazer", tarefa.task, "--tentativa", String(tarefa.tentativa), "--sessao", "s-T1");
+    assert.equal(tr?.acao, "trazida", JSON.stringify(tr));
+    assert.deepEqual(tr.foraDosOutputs, declarada ? [] : [SKILL]);
+    assert.equal(tr.canonicoAlterado, false);
+    assert.equal(a.g("show", `HEAD:${SKILL}`), "# despedida\n\nDiz até logo.", "o trabalho da filha foi trazido");
+    // Nenhum caso a gravar: a superfície de instrução deixou de ser motivo, e não volta como consentido.
+    const casos = a.g("log", "--format=%(trailers:key=Conducao-Consentimento,valueonly)", "-n", "20").split("\n").filter(Boolean);
+    assert.deepEqual(casos, []);
   });
-  a.ok("autorizar-ciclo", "F1", "--sim", SIM_DA_F1, "--pergunta", a.pergunta);
-  const p = a.ok("proximo", "--entrada", JSON.stringify({ sessaoMaestra: "session_maestra_f1" }));
-  assert.equal(p.acao, "abrir", JSON.stringify(p));
-  const tarefa = p.tarefas[0];
-  assert.equal(tarefa.task, "T1");
-  const s = a.ok("abrir", tarefa.task, "--tentativa", String(tarefa.tentativa), "--nonce", tarefa.nonce, "--modo-maestra", "auto");
-  const [arquivos, subject] = TRABALHO.T1;
-  a.filhaTrabalha(s.ref, { ...arquivos, [SKILL]: "# despedida\n\nDiz até logo.\n" }, subject);
-  const trazer = ["trazer", tarefa.task, "--tentativa", String(tarefa.tentativa), "--sessao", "s-T1"];
-  if (!contrato) {
-    // Sem o contrato no HEAD, o padrão da fábrica não se lê: o caso consentido pergunta.
-    const r = a.cli(...trazer);
-    assert.equal(r.saida?.acao, "perguntar", `${r.status}\n${r.stderr}\n${r.linhas.join("\n")}`);
-    assert.deepEqual(r.saida.motivos.map((m) => m.motivo), ["superficie-de-instrucao"]);
-    return;
-  }
-  const tr = a.ok(...trazer);
-  assert.notEqual(tr?.acao, "perguntar", JSON.stringify(tr));
-  const casos = a.g("log", "--format=%(trailers:key=Conducao-Consentimento,valueonly)", "-n", "20").split("\n").filter(Boolean);
-  assert.ok(casos.includes("instrucao-declarada-em-outputs"), `marca do consentimento ausente: ${JSON.stringify(casos)}`);
-  assert.equal(a.g("show", `HEAD:${SKILL}`), "# despedida\n\nDiz até logo.", "o trabalho da filha foi trazido");
-  // O caso consentido foi ao registro do destino git do exemplo (abertura e resposta, D-VEGA19-57).
-  const registro = readFileSync(path.join(a.maestra, ".vega", "sessao-conducao-consentimento.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
-  assert.deepEqual(registro.map((e) => e.evento), ["abertura", "resposta"]);
-  assert.equal(registro[1].origem_resposta, "padrao-da-fabrica");
-});
+}

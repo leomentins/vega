@@ -25,6 +25,8 @@ export const RE = {
   passagem: /^Conducao: (F\d{1,2}) em passagem$/,
   confirmada: /^Conducao: (F\d{1,2}) passagem confirmada$/,
   desistida: /^Conducao: (F\d{1,2}) passagem desistida$/,
+  niveis: /^Conducao: ciclo niveis ([23])$/,
+  aposentada: /^Conducao: (T\d{1,3}) aposentada ([a-z0-9][a-z0-9-]{0,63})$/,
 };
 
 /** Nonce de ação da maestra: 16 hex, a saída de `nonce()` em `conducao.mjs`. Global: use com `matchAll`. */
@@ -104,6 +106,21 @@ export function marcasDoLog(bruto) {
       marcas.push({ tipo: "confirmada", sha, fase: m[1], confirma: tr["Conducao-Confirma"] ?? null, epoca: tr["Conducao-Epoca"] ?? null, arvoreSuja: tr["Conducao-Arvore-Suja"] ?? null });
     else if ((m = RE.desistida.exec(subject)) && tr["Conducao-Passagem"] === m[1])
       marcas.push({ tipo: "desistida", sha, fase: m[1], desistida: tr["Conducao-Desistida"] ?? null });
+    // Níveis da condução (2 ou 3): só vale com o trailer `Conducao-Niveis` igual ao número do subject.
+    else if ((m = RE.niveis.exec(subject)) && tr["Conducao-Niveis"] === m[1])
+      marcas.push({ tipo: "niveis", sha, niveis: Number(m[1]) });
+    // Aposentadoria da parada (VEGA-20 T19): só vale com o trailer `Conducao-Aposentada` igual ao motivo do subject.
+    else if ((m = RE.aposentada.exec(subject)) && tr["Conducao-Aposentada"] === m[2])
+      marcas.push({
+        tipo: "aposentada",
+        sha,
+        task: m[1],
+        motivo: m[2],
+        nonce: tr["Conducao-Nonce"] ?? null,
+        resposta: tr["Conducao-Resposta"] ?? null,
+        iguais: /^\d+$/.test(tr["Conducao-Iguais"] ?? "") ? Number(tr["Conducao-Iguais"]) : null,
+        tentativa: /^\d+$/.test(tr["Conducao-Tentativa"] ?? "") ? Number(tr["Conducao-Tentativa"]) : null,
+      });
   }
   return marcas;
 }
@@ -131,4 +148,17 @@ export function lerMarcas(repo, ref = "HEAD") {
 export function ultimaAutorizacao(marcas) {
   const a = marcas.findLast((m) => m.tipo === "autorizada");
   return a ? { tipo: "autorizada", sha: a.sha, fase: a.fase, plano: a.plano || null } : null;
+}
+
+/**
+ * Em quantos níveis o ciclo é conduzido (a última marca `niveis`), com a
+ * origem: `marca` (o operador escolheu), `legado` (ciclo já autorizado sem a
+ * marca: conduzido em 2, como antes da escolha existir) ou `sem-escolha`
+ * (nada autorizado e nenhuma marca: a condução pergunta antes de começar).
+ */
+export function niveisDasMarcas(marcas) {
+  const m = marcas.findLast((x) => x.tipo === "niveis");
+  if (m) return { niveis: m.niveis, origem: "marca", sha: m.sha };
+  if (marcas.some((x) => x.tipo === "autorizada")) return { niveis: 2, origem: "legado", sha: null };
+  return { niveis: null, origem: "sem-escolha", sha: null };
 }

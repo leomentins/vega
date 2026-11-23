@@ -44,7 +44,8 @@
  *                      (`Conducao-Ramo`) e descende dela
  *   epoca-da-posse     a posse, pelo leitor da cerca, é desta árvore com a época
  *                      da nota + 1, e a época gravada no git-dir é a mesma
- *   inscricao-feita    `entrada.inscrita` é `true`, ou o projeto não tem proposta
+ *   inscricao-feita    `entrada.inscrita` é `true`, ou o projeto não tem proposta,
+ *                      ou o ciclo roda em 3 níveis (a inscrição é da maestra, VEGA-20 T37)
  *                      (`ci: false` na declaração, o mesmo modo da T9), com o pulo
  *
  * A passagem lida é a aberta no HEAD, ou a que a última `confirmada` confirma.
@@ -67,7 +68,7 @@ import * as adaptador from "./adaptador.mjs";
 import { lerPosseDaCerca, passagemAberta } from "./git-conducao.mjs";
 import { tentarGit } from "./git-exec.mjs";
 import { ErroPlano, lerPlanoNoCommit } from "./ler-plano.mjs";
-import { lerMarcas } from "./marcas.mjs";
+import { lerMarcas, niveisDasMarcas } from "./marcas.mjs";
 import * as pergunta from "./pergunta.mjs";
 import { casoDeConferencia } from "./verbos.mjs";
 
@@ -474,8 +475,9 @@ function epocaDaPosse(repo, p, lerPosse, ciclo) {
   return conferida(C, "ok", `dona na época ${posse.epoca} (a da nota, ${daNota}, + 1)`);
 }
 
-function inscricaoFeita(temCi, entrada) {
+function inscricaoFeita(temCi, entrada, arranjo = 2) {
   const C = "inscricao-feita";
+  if (arranjo === 3) return conferida(C, "ok", "3 níveis: a inscrição na proposta é da maestra o ciclo inteiro (a herdeira não se inscreve)");
   if (!temCi) return conferida(C, "ok", "projeto sem proposta: inscrição pulada (projeto-sem-proposta)");
   if (entrada?.inscrita === true) return conferida(C, "ok", "inscrita na proposta do ramo");
   return conferida(C, "falha", "a herdeira não disse que se inscreveu na proposta", 'chamar subscribe_pr_activity na proposta do ramo e rodar o pré-voo com --entrada \'{"inscrita":true}\'');
@@ -488,7 +490,8 @@ function inscricaoFeita(temCi, entrada) {
  */
 export function conferenciasDaHerdeira({ repo, ciclo = null, entrada = {}, temCi = true, lerPosse = lerPosseDaCerca, marcas = lerMarcas(repo) }) {
   const p = passagemDaHerdeira(marcas);
-  return { passagem: p, conferencias: [arvoreNaPonta(repo, p), epocaDaPosse(repo, p, lerPosse, ciclo), inscricaoFeita(temCi, entrada)] };
+  const arranjo = niveisDasMarcas(marcas).niveis ?? 2;
+  return { passagem: p, conferencias: [arvoreNaPonta(repo, p), epocaDaPosse(repo, p, lerPosse, ciclo), inscricaoFeita(temCi, entrada, arranjo)] };
 }
 
 /** A tarefa pede julgamento: fechamento ou review-gate, conferência do operador, ou classe sensível. */

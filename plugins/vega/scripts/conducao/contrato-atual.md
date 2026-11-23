@@ -22,6 +22,9 @@ Alcance de cada conjunto:
 | `perguntar` | leva a pergunta ao operador; o `motivo` diz qual |
 | `cutucar` | manda a `mensagem` à filha caída (`sessao`) e passa `cutucadaEm` nessa filha da entrada seguinte (T18). O `cutucadaEm` vale só para a queda em curso (T40): com `caidaEm` na filha (o instante em que quem conduz a leu `FAILED` pela primeira vez nesta queda, gravado uma vez e não regravado enquanto ela seguir `FAILED`; posterior a `agora` é `entrada-invalida`), `cutucadaEm` anterior a ele é de queda velha e não conta, e a sessão que voltou e caiu de novo recebe o seu `cutucar`; sem `caidaEm`, vale o `cutucadaEm` como veio |
 | `herdar-autorizacao` | grava a autorização herdada da fase (re-plano de ruling ou sim do ciclo), sem perguntar ao operador |
+| `autorizar-pela-resposta` | no lugar do `perguntar plano-mudou`, quando todo commit do re-plano desde a autorização da fase traz o trailer `Replano-Pergunta` com o mesmo id (`pergunta`): a resposta do operador que pediu o re-plano é o sim da fase sob o plano novo. Quem conduz roda o `comando` (`autorizar-ciclo F<n> --pergunta <p-…> --sim "<texto da opção escolhida>"`), que confere a resposta humana, o ciclo, a opção e o uso único, e aceita o ponteiro `conducao:` só de parada que replaneja (`PARADAS_QUE_REPLANEJAM`) e só quando todo commit do canonico desde a autorização a cita; a marca leva `Conducao-Pergunta-Parada: sim`, que a herança relê; passa o `aviso` ao operador, com as tasks mudadas e as sensíveis cobertas pelo nome (`sensiveis`). Fase reaberta sem fechamento segue perguntando (hotfix conducao-corta-paradas-de-regra) |
+| `aposentada` | no lugar do `perguntar` de task cuja calibração (`calibracao.mjs`, T6) está no degrau `aposentado` e cuja instância passa os vetos (publicação, caminho protegido ou clínico, estação `condutora`, exclusões de `consentimento.mjs`, salvo `canonico-do-ciclo`) (VEGA-20 T19): quem conduz roda o `comando` (`aposentar --nonce <nonce>`, que refaz o `proximo` e grava o commit `Conducao: T<k> aposentada <motivo>` com o trailer `Conducao-Aposentada`), aplica a `opcao` da resposta constante como aplicaria a do operador, com `textoDeQuemResponde` onde a opção pede o texto do operador, e põe o `relato` (`seguiu sozinha: <motivo> (<n> iguais)`) no relato que já entrega; nunca mensagem própria. A instância leva os Outputs, os caminhos dos Steps e o que a trazida trouxe de fora dos Outputs; task sem Outputs para. Uma aposentadoria por task e motivo: a mesma de volta depois do commit sai `perguntar` com `aposentadaAplicada` |
+| `reentregar` | tentativa aberta sem operária na entrada, dentro do `prazoMin` da task e fora do reinício da ponte: quem conduz roda o `comando` (`abrir T<k> --tentativa <n> --nonce <nonce da tentativa>`, que devolve a mesma partida com `jaAberta: true`), confere por `list_sessions` que a operária dessa tentativa não existe e só então a cria; existindo, só a põe na entrada. Passado o prazo, `perguntar tentativa-sem-filha` (hotfix conducao-corta-paradas-de-regra) |
 | `fazer-condutora` | executa ela mesma a task de estação `condutora` (`maestra`, o nome antigo, lido igual) e registra com `--condutora` (`--maestra` aceito), trailer `Conducao-Executor: condutora` |
 | `fechar-fase` | conduz a task de fechamento da fase |
 | `encerrar-sessao` | grava o encerramento da fase anterior e, em `criar`, leva o `criar-condutora` da fase seguinte, que a própria condutora executa (VEGA-37 T8); `texto` é o prompt da sessão nova |
@@ -46,10 +49,10 @@ A lista de ações do cabeçalho de `conducao.mjs` não cita `fazer-condutora`; 
 | ação | motivo | quando |
 | --- | --- | --- |
 | `perguntar` | `autorizar-ciclo` | fase seguinte sem autorização (ou nenhuma autorização ainda, com `sugestao`) e sem sim do ciclo que a cubra — inclusive task que mudou de classe ou de sensibilidade desde o sim; pede o sim do ciclo, porque o `autorizar-fase` foi aposentado (T13); o sim entra com `--pergunta <p-…>`, a pergunta registrada de origem humana (VEGA-19 T16) |
-| `perguntar` | `entrada-invalida` | a entrada de quem conduz (`--entrada`) não se lê ou tem forma errada (`problemasDaEntrada`: campo desconhecido, lista que não é lista, tipo errado); vem antes de toda decisão, com `problemas` (T17) |
+| `perguntar` | `entrada-invalida` | a entrada de quem conduz (`--entrada`) não se lê ou tem forma errada (`problemasDaEntrada`: campo de cima desconhecido, lista que não é lista, tipo errado); vem antes de toda decisão, com `problemas` (T17). Objeto vazio no lugar de lista vale como lista vazia, e `statusBucket` e `nonce` a mais na herdeira ou na anterior passam (outro campo a mais segue parando) (hotfix conducao-corta-paradas-de-regra) |
 | `perguntar` | `consentimento-nao-gravado` | tentativa trazida com caso que seguiu sem pergunta ainda sem registro no git (o `trazer` não o gravou); vem antes de toda decisão, com `remedio: regravar-consentimentos` — a task não segue enquanto faltar (D-VEGA37-36, VEGA-37 T34) |
 | `perguntar` | `trazida-ilegivel` | registro `trazida` cujos casos não se leem (trailer `Conducao-Consentidos` ilegível, ou sem `Conducao-Base` no regravar); vem antes de toda decisão, com `remedio: operador` e sem o comando do regravar, que releria o mesmo trailer (VEGA-19 T16) |
-| `perguntar` | `plano-mudou` | o canonico no HEAD difere do plano congelado na autorização, sem herança possível |
+| `perguntar` | `plano-mudou` | o canonico no HEAD difere do plano congelado na autorização, sem herança possível e sem a resposta que pediu o re-plano citada em `Replano-Pergunta` (com ela, `autorizar-pela-resposta`) |
 | `perguntar` | `replano-repetido` | o re-plano com `Replano-Motivo` caberia na regra do re-plano sozinho, mas a chave dele já apareceu num re-plano anterior do ciclo: seguir, consertar o molde, ou os dois |
 | `perguntar` | `fase-autorizada-fora-do-plano` | nenhuma fase autorizada existe no plano congelado |
 | `perguntar` | `fase-reaberta-sem-fechamento` | fase reaberta cujas tasks novas não terminam em fechamento, ou reautorizada com o fechamento velho já conferido |
@@ -57,17 +60,18 @@ A lista de ações do cabeçalho de `conducao.mjs` não cita `fazer-condutora`; 
 | `perguntar` | `ci-vermelho` | CI vermelho no HEAD antes do `encerrar-sessao` ou do `fechar-ciclo` |
 | `perguntar` | `trazida-sem-conferencia` | tentativa trazida sem conferência gravada (interrupção no meio do trazer); na task de conferência do operador por arquivo, traz `conferenciaDoOperador` (e `liveUxGate: true`, o nome antigo, mantido no caso por arquivo) |
 | `perguntar` | `conferencia-do-operador` | tentativa trazida de task de conferência do operador por pergunta (T14, 7-a): o resultado é do operador — opções `sim` (conferência com `--operador`) e `nao` (`--rodada nao --operador`, rodada nova) |
-| `perguntar` | `task-sensivel` | fora do sim dado à fase, task que toca caminho clínico (`caminhosQuePerguntam`) ou publica alterando o existente (`porque`: `caminho-clinico` · `publicacao-que-altera`), sem aprovação dela em `aprovacoes` (por task, toda tentativa); publicação só de acréscimo sai coberta pelo sim do ciclo (D18a) |
+| `perguntar` | `task-sensivel` | fora do sim dado à fase, task que toca caminho clínico (`caminhosQuePerguntam`) ou publica alterando o existente (`porque`: `caminho-clinico` · `publicacao-que-altera`), sem aprovação dela em `aprovacoes` (por task, toda tentativa); publicação só de acréscimo sai coberta pelo sim do ciclo (D18a). Uma pergunta por fase: `tasks` lista pelo nome toda sensível pendente da fase, e o sim vale para todas (uma aprovação por task listada); `task` e `porque` são os da primeira (hotfix conducao-corta-paradas-de-regra) |
 | `perguntar` | `sem-saida` | nenhuma regra decide: tasks pendentes com dependências não feitas |
 | `perguntar` | `marcador-invalido` | tentativa em voo sem nonce legível no marcador |
 | `perguntar` | `pergunta-da-filha` | a filha avisou `T<k>-FALHA pergunta <nonce>`; resposta com re-plano encerra a tentativa por `registrar-falha --coberta pergunta --motivo`, fora de todo teto |
 | `perguntar` | `segunda-falha` | falha avisada, ou Verificação vermelha revertida, numa task que já tem 1 falha contada |
 | `perguntar` | `filha-sumiu` | as filhas da tentativa estão `ARCHIVED` sem aviso, fora do reinício da ponte |
-| `perguntar` | `tentativa-sem-filha` | tentativa em voo sem filha nenhuma na entrada, fora do reinício da ponte |
+| `perguntar` | `tentativa-sem-filha` | tentativa em voo sem filha nenhuma na entrada, fora do reinício da ponte e passado o `prazoMin` da task (dentro dele, `reentregar`) |
 | `perguntar` | `filha-esperando-clique` | filha viva da tentativa com `statusBucket` `BLOCKED` (ou estado `REQUIRES_ACTION`), sem aviso: no primeiro ciclo da vigia, sem falha a gravar (T18) |
 | `perguntar` | `prazo-vencido` | tentativa aberta há mais que o `prazoMin` da task |
 | `perguntar` | `teto-de-falhas` | task com 2 falhas contadas |
 | `perguntar` | `teto-de-falhas-ambiente` | task no teto próprio de falhas de ambiente (`BOTOES.tetoFalhasAmbiente`) |
+| `reentregar` | `operaria-nao-nasceu` | tentativa em voo sem filha nenhuma na entrada, dentro do `prazoMin` da task e fora do reinício da ponte: o `abrir` com o mesmo nonce devolve a mesma partida |
 | `cutucar` | `filha-caida` | todas as filhas vivas da tentativa com `statusBucket` `FAILED`, sem aviso e sem `cutucadaEm` desta queda (T40): a mensagem vem antes de contar falha de ambiente (T18) |
 | `esperar` | `mesclado` | a proposta do ciclo está `MERGED`: depois do merge o `proximo` não emite nada |
 | `esperar` | `ci-pendente` | sem veredito de CI no HEAD antes do `encerrar-sessao` ou do `fechar-ciclo` |
@@ -91,6 +95,7 @@ A lista de ações do cabeçalho de `conducao.mjs` não cita `fazer-condutora`; 
 | --- | --- | --- |
 | `perguntar` | `e.codigo` | `erroComoPergunta`: o plano no HEAD ou o congelado não se lê; o motivo é o código do `ErroPlano` de `ler-plano.mjs` |
 | `perguntar` | `motivo` | `{ motivo, … }` abreviado em `decidir`: o 1º elemento da tupla de `perguntasDaVigia` (os literais estão em §Motivos por ação; o teste exige que a vigia só cresça por `push([…])` com motivo literal) |
+| `aposentada` | `parada.motivo` | `acaoDaAposentadoria` (regras.mjs, VEGA-20 T19): o motivo da parada que a calibração aposentou — o de uma `perguntar` de §Motivos por ação |
 | `esperar` | `motivoDoCtx(ctx)` | `regraFecharCiclo` e `maestraCriarFechamento` (nome antigo), com o ciclo já marcado encerrado: o fechamento roda em outra sessão. `motivoDoFechamento` do `fechamentoDoCiclo` do adaptador — `<comando sem a barra>-em-sessao-limpa`; sem o campo, `fechamento-em-sessao-limpa` |
 
 ## Motivos da falha anterior
@@ -150,8 +155,12 @@ O subject inteiro casa a regex; o corpo não conta (o `--grep` do git só filtra
 | `passagem` | `^Conducao: (F\d{1,2}) em passagem$` | lerMarcas |
 | `confirmada` | `^Conducao: (F\d{1,2}) passagem confirmada$` | lerMarcas |
 | `desistida` | `^Conducao: (F\d{1,2}) passagem desistida$` | lerMarcas |
+| `niveis` | `^Conducao: ciclo niveis ([23])$` | lerMarcas |
+| `aposentada` | `^Conducao: (T\d{1,3}) aposentada ([a-z0-9][a-z0-9-]{0,63})$` | lerMarcas |
 
 A marca `encerrada` só conta com o trailer `Conducao-Encerrada` igual à fase do subject. As três de passagem (VEGA-37 T15) só contam com o trailer `Conducao-Passagem` igual à fase do subject; a última das três ser `passagem` é o estado "em passagem", em que `abrir` e `registrar-conferencia --publicacao feita` recusam.
+
+A marca `niveis` (hotfix vega-conducao-niveis) só conta com o trailer `Conducao-Niveis` igual ao número do subject; a última vence. Sem ela, ciclo já autorizado roda em 2 níveis (legado) e ciclo sem autorização pergunta (`conducao.mjs niveis`).
 
 ## Trailers lidos
 
@@ -177,6 +186,11 @@ A marca `encerrada` só conta com o trailer `Conducao-Encerrada` igual à fase d
 | `Conducao-Confirma` | lerMarcas | o sha da marca `passagem` que a marca `confirmada` fecha (T16) |
 | `Conducao-Arvore-Suja` | lerMarcas | na marca `confirmada`: a árvore da anterior estava suja e não se desmonta (T16) |
 | `Conducao-Depois` | lerMarcas | na marca `encerrada`: `passar` pede a passagem na fronteira; sem ele, a marca antiga segue lida como antes (T16) |
-| `Conducao-Nonce` | lerMarcas | nonce da ação `encerrar-sessao` que gravou a marca `encerrada` |
+| `Conducao-Nonce` | lerMarcas | nonce da ação `encerrar-sessao` que gravou a marca `encerrada`; na `aposentada`, o da ação `aposentada` |
+| `Conducao-Aposentada` | lerMarcas | precisa igualar o motivo do subject para a marca `aposentada` valer (VEGA-20 T19) |
+| `Conducao-Resposta` | lerMarcas | a resposta constante que a marca `aposentada` aplicou |
+| `Conducao-Iguais` | lerMarcas | o `n` da calibração na marca `aposentada`: a linha `seguiu sozinha: <motivo> (<n> iguais)` do relato |
+| `Conducao-Tentativa` | lerMarcas | a tentativa da task na marca `aposentada`: a mesma parada de volta para |
+| `Conducao-Niveis` | lerMarcas | precisa igualar o número do subject para a marca `niveis` valer |
 
-`lerMarcas` guarda também o bloco inteiro de trailers em `conferida`, `falhou`, `revertida`, `rodada` e `carimbo`, para o `auditar` ler (`Conducao-Task`, `Conducao-Verificacao`, `Conducao-Publicacao`, `Conducao-Executor`, e `Conducao-Publicacao-Dispensada: operador` — a dispensa de publicação de task `nao-se-aplica` que o plano liga a publicação, T16; commit antigo sem ele vale pela frase que o adaptador lista em `publicacao.frasesLegadas`); a tabela lista só o que `lerMarcas` e `ultimaAutorizacao` consultam por nome.
+`lerMarcas` guarda também o bloco inteiro de trailers em `conferida`, `falhou`, `revertida`, `rodada` e `carimbo`, para o `auditar` ler (`Conducao-Task`, `Conducao-Verificacao`, `Conducao-Publicacao`, `Conducao-Executor`, e `Conducao-Publicacao-Dispensada: operador` — a dispensa de publicação de task `nao-se-aplica` que o plano liga a publicação, T16; commit antigo sem ele vale pela frase que o adaptador lista em `publicacao.frasesLegadas`); a `conferida` leva também `Conducao-Fora-Dos-Outputs` e `Conducao-Canonico-Alterado`, copiados do registro `trazida`, de onde o `retomar` devolve o relato em `conferidas` e o ilegível em `avisosDoRelato` (D-VEGA20-26); a tabela lista só o que `lerMarcas` e `ultimaAutorizacao` consultam por nome.

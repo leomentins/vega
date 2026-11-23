@@ -577,6 +577,21 @@ testeNaFonte("sem prova da gravação a marca não afirma a pergunta, e a rebaix
   assert.equal(depois.sha, completa.sha, "a que afirma a pergunta vence: nenhuma terceira marca");
 });
 
+testeNaFonte("re-plano sozinho de fixture grava no registro de perguntas sem registro-recusado, e a marca sai com Conducao-Pergunta (D-VEGA20-29)", (t) => {
+  const r = novoRepo(t);
+  const reg = registroComOsSins();
+  const sim = "sim, pode tocar a fase";
+  const citada = reg.simHumano(sim);
+  const origem = r.autorizada(sim, citada);
+  const pedidos = [c.pedidoDeCaso({ caso: c.CASOS.replanoSozinho, fase: "F2", origem })];
+  const [g] = c.gravarCasosHerdados({ repo: r.dir, ciclo: CICLO, pedidos, quem: "operador", cerca: () => {}, pecas: { phi: phiDoProjeto, perguntas: reg } });
+  assert.match(g.pergunta, c.PERGUNTA_ID_RE);
+  const resposta = reg.eventos.find((e) => e.pergunta_id === g.pergunta && e.evento === "resposta");
+  assert.equal(resposta.quem, "vega");
+  assert.equal(resposta.mandato, "engenharia");
+  assert.match(r.trailers(), new RegExp(`^Conducao-Pergunta: ${g.pergunta}`, "m"));
+});
+
 describe("na fonte: o registro e o gate de PHI do projeto", { skip: !NA_FONTE && FORA }, () => {
   for (const [nome, fn] of NA_FONTE_TESTES) test(nome, fn);
 });

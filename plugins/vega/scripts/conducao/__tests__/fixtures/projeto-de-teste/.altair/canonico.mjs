@@ -120,6 +120,9 @@ export default Object.freeze({
     "db/funcoes/**",
   ]),
 
+  /** O que define a parada de publicação no projeto, somado ao que o motor guarda (`.vega/**`, `.altair/**`). */
+  definemAParada: Object.freeze(["**/hooks/gate-de-publicacao.js", "**/liberacao-da-publicacao.mjs", "db/scripts/**"]),
+
   /** Telas sensíveis que os Steps da task liberam no `trazer`; migração e função nunca. */
   telasProtegidasDosSteps: Object.freeze(["app/telas/fichas/**", "app/telas/agenda/**"]),
 

@@ -19,7 +19,9 @@
  * (na Sistoli, `.vega/sistoli.mjs`). Adaptador sem ela ⇒ o comando recusa (`pecasDoProjeto`).
  *
  * Os quatro verbos:
- * - `abrir` — entrada `{ sessao, ciclo?, chave?, pergunta, supersedes? }`; grava o evento `abertura`
+ * - `abrir` — entrada `{ sessao?, ciclo?, chave?, pergunta, supersedes? }`; grava o evento `abertura`
+ *   (a sessão é o id do transcript local: sem ela, `CLAUDE_CODE_SESSION_ID`; id de nuvem recusa,
+ *   `sessaoDoAbrir`; a reabertura que só corrige um id de nuvem gravado devolve o id antigo)
  *   (idempotente: o mesmo estado dá o mesmo `pergunta_id` e a mesma chave) e devolve o bloco. Registro
  *   fora do ar não trava: o bloco sai marcado `sem registro` e o evento fica na fila (D-VEGA19-24).
  *   Reabertura calada some (T45, D-VEGA19-56): a mesma sessão, número e assunto com outro conteúdo
@@ -34,7 +36,9 @@
  *   esquema da abertura. `--recibo "<sessao> <evento>"` (a forma de `RECIBO_GRAVADO`) grava o recibo
  *   do repasse na coluna; `--por` diz por onde a resposta chegou (`detalhe.rota.por`, que pode
  *   diferir do da abertura). A resposta grava o mandato da rota `para` da abertura; `quem` fica nulo
- *   (quem sobe quem respondeu é a autoria, T41) (D-VEGA19-54, T40).
+ *   (quem sobe quem respondeu é a autoria, T41) (D-VEGA19-54, T40). A resposta que não casa com o
+ *   bloco (número que a pergunta não tem, letra fora das opções) grava `a-confirmar` com o literal e
+ *   a leitura, não fecha a pergunta e sai com a frase de confirmação (D-VEGA20-6, VEGA-20 T8).
  * - `dispensar` — `--pergunta <id> [--motivo]`; grava `dispensa`, que mantém a pergunta aberta.
  * - `ler` — o estado calculado (`estadoDasPerguntas`) e, no banco, a linha `fila: N pendentes…`.
  *   As ligações (`ligacoesDasPerguntas` da forma) entram por cima: `superada` (com `superada_por`),
@@ -73,6 +77,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { conferirPor, conteudoDaPergunta, criarPergunta, ESQUEMAS_ACEITOS, estadoComLigacoes, idDaPergunta, ligacoesDasPerguntas, MANDATOS, mandatoDoPapel, mesmoEscopo, numerosDoItem } from "./forma.mjs";
 import { SESSAO_DO_CONSENTIMENTO } from "../conducao/consentimento.mjs";
 import { carregar as carregarDestinatarios } from "./destinatarios.mjs";
+import { origemEfetiva as origemDaProva, SESSAO_DE_NUVEM } from "./prova.mjs";
 import { renderizar } from "./renderizar.mjs";
 import { sombrear } from "./sombra.mjs";
 import { caminhoDeCodigo, caminhoDoEmbutido, codigoDoAdaptador, ehNomeEmbutido, lerAdaptador } from "../conducao/adaptador.mjs";
@@ -256,6 +261,14 @@ export async function registroDoProjeto(repo, { pecas = null } = {}) {
 
 // ── interpretação da resposta ───────────────────────────────────────────────
 
+/** O tipo (e o evento) da resposta que não casa com o bloco: volta ao operador (D-VEGA20-6). */
+export const A_CONFIRMAR = "a-confirmar";
+
+/** A frase que a sessão mostra ao operador quando a resposta sai `a-confirmar`. */
+export function fraseDeConfirmacao(leitura) {
+  return `Li a resposta assim: ${leitura}. Ela não vale como escolha: confirme a opção que quis, ou responda de novo.`;
+}
+
 const LETRA_UNICA = /^\(?([a-z])\)?\s*(?:$|[—–\-:,.;!]\s*([\s\S]*)$)/i;
 const TOKEN = /(?<![A-Za-z0-9])D?(\d{1,4})([a-zA-Z])(?![A-Za-z0-9])/g;
 
@@ -263,24 +276,40 @@ const TOKEN = /(?<![A-Za-z0-9])D?(\d{1,4})([a-zA-Z])(?![A-Za-z0-9])/g;
  * Lê o literal do operador contra os itens da abertura (`[{ numero, opcoes: [{ letra }] }]`;
  * `null` quando a abertura é restrita e não guarda as letras: confere só a sintaxe).
  * Devolve `{ tipo, escolhas: [{ numero, letra }], ecoada, comentario, alternativa_livre }`:
- * `tipo` ∈ `opcao` · `opcao-com-comentario` · `alternativa-livre`. Letra que não é opção do item
- * recusa alto; número fora do bloco é texto.
+ * `tipo` ∈ `opcao` · `opcao-com-comentario` · `alternativa-livre` · `a-confirmar`. Número de
+ * decisão que o bloco não tem, ou letra fora das opções do item, não vale como escolhida nem recusa
+ * (D-VEGA20-6, VEGA-20 T8): sai `a-confirmar`, sem escolhas, com a `leitura` da sessão
+ * (`D7a não existe neste bloco` · `D1d: d não é opção de D1`), e volta ao operador. Duas letras no
+ * mesmo item seguem recusando. Abertura restrita sem as letras (`itens` nulo): só a sintaxe.
  */
 export function interpretarResposta(literal, itens) {
   if (typeof literal !== "string" || !literal.trim()) throw new ErroComando("responder exige o texto literal do operador");
   const texto = literal.trim();
   const conhecidos = Array.isArray(itens) && itens.length > 0 ? new Map(itens.map((it) => [it.numero, new Set((it.opcoes ?? []).map((o) => o.letra))])) : null;
   const escolhas = [];
+  const foraDoBloco = [];
   let resto = texto;
+  // Número que o bloco não tem só é número de decisão com o `D` escrito, ou quando a resposta é só
+  // tokens (`7a`, `7a 8b`): sem isso, `5h`, `10m` e `2x` do texto livre seguem como texto.
+  const soTokens = texto.replace(TOKEN, " ").replace(/[\s,;.:/+&e-]+/gi, "") === "";
   for (const m of texto.matchAll(TOKEN)) {
     const numero = Number(m[1]);
     const letra = m[2].toLowerCase();
-    if (conhecidos && !conhecidos.has(numero)) continue;
-    if (conhecidos && !conhecidos.get(numero).has(letra)) throw new ErroComando(`D${numero}${letra}: ${letra} nao e opcao de D${numero}`);
+    if (conhecidos && !conhecidos.has(numero)) {
+      if (/^d/i.test(m[0]) || soTokens) foraDoBloco.push(`D${numero}${letra} não existe neste bloco`);
+      continue;
+    }
+    if (conhecidos && !conhecidos.get(numero).has(letra)) {
+      foraDoBloco.push(`D${numero}${letra}: ${letra} não é opção de D${numero}`);
+      continue;
+    }
     const ja = escolhas.find((e) => e.numero === numero);
     if (ja && ja.letra !== letra) throw new ErroComando(`D${numero}: duas letras na mesma resposta (${ja.letra} e ${letra})`);
     if (!ja) escolhas.push({ numero, letra });
     resto = resto.replace(m[0], " ");
+  }
+  if (foraDoBloco.length > 0) {
+    return { tipo: A_CONFIRMAR, escolhas: [], ecoada: [], comentario: null, alternativa_livre: false, leitura: [...new Set(foraDoBloco)].join("; ") };
   }
   if (escolhas.length === 0 && conhecidos && conhecidos.size === 1) {
     const m = LETRA_UNICA.exec(texto);
@@ -371,10 +400,45 @@ function recusaDeReabertura(codigo, existente, detalhe) {
  * - `supersedes` que não existe no registro, ou que cita a própria pergunta.
  * Com `supersedes` válido, as duas primeiras recusas não valem: a nova cita a que supera.
  */
-async function conferirReabertura(registro, { p, bruta, sessao, ciclo, supersedes, opcoes }) {
+/**
+ * A abertura gravada e a mesma pergunta que se abre agora: o mesmo conteudo, os mesmos numeros, o
+ * mesmo ponteiro, a mesma marca de paciente e o mesmo destinatario (papel e mandato).
+ */
+function mesmaAbertura(a, p) {
+  return (
+    typeof p.conteudo === "string" &&
+    a.conteudo === p.conteudo &&
+    numerosDoItem(a.item).join(",") === p.itens.map((it) => it.numero).join(",") &&
+    (a.ponteiro ?? null) === (p.ponteiro ?? null) &&
+    a.has_patient_data === p.has_patient_data &&
+    // O mesmo destinatário: outro papel ou mandato é outra pergunta, nunca a de antes com rota nova.
+    (a.rota?.para?.papel ?? a.papel ?? null) === (p.rota?.para?.papel ?? p.papel ?? null) &&
+    (a.rota?.para?.mandato ?? null) === (p.rota?.para?.mandato ?? null)
+  );
+}
+
+/**
+ * Confere a reabertura e devolve `{ pergunta, existente }`: a pergunta a gravar e, quando ela já está
+ * aberta no registro, a abertura gravada — cujo carimbo a reabertura mantém (T44, D-VEGA20-27 item 3:
+ * o `abrir` repetido não move o `aberta_em` que o pareador mede).
+ */
+async function conferirReabertura(registro, args) {
+  const r = await conferirReaberturaNoRegistro(registro, args);
+  return r && typeof r === "object" && "pergunta" in r ? r : { pergunta: r, existente: null };
+}
+
+async function conferirReaberturaNoRegistro(registro, { p, bruta, sessao, ciclo, supersedes: pedido, opcoes }) {
   const aqui = { sessao, ciclo };
+  let supersedes = pedido;
+  if (supersedes !== null && supersedes === p.id) {
+    // T44 (D-VEGA20-27 item 3): o mesmo conteudo da o mesmo id; superar a si mesma e reabrir a mesma
+    // pergunta, que so vale enquanto ela esta aberta (sem resposta). Respondida, a recusa de antes.
+    const l = await registro.ler({ pergunta_id: p.id });
+    const aberta = l.eventos.some((e) => e.pergunta_id === p.id && e.evento === "abertura") && !l.eventos.some((e) => e.pergunta_id === p.id && e.evento === "resposta");
+    if (!aberta) throw new ErroComando("supersedes: a pergunta nao supera a si mesma");
+    supersedes = null;
+  }
   if (supersedes !== null) {
-    if (supersedes === p.id) throw new ErroComando("supersedes: a pergunta nao supera a si mesma");
     const l = await registro.ler({ pergunta_id: supersedes });
     const alvo = l.eventos.find((e) => e.pergunta_id === supersedes && e.evento === "abertura");
     if (!alvo && l.sem_registro) {
@@ -383,6 +447,13 @@ async function conferirReabertura(registro, { p, bruta, sessao, ciclo, supersede
       process.stderr.write(`aviso: conferencia-sem-registro: supersedes ${supersedes} nao conferido (registro fora do ar)\n`);
     } else if (!alvo) throw new ErroComando(`supersedes-inexistente: ${supersedes} sem abertura no registro nem na fila`);
     else if (!mesmoEscopo(aqui, alvo)) throw new ErroComando(`supersedes-fora-do-escopo: ${supersedes} e de ${ciclo ? "outro ciclo" : "outra sessao ou de um ciclo"}; o elo vale so no mesmo ciclo (fora de ciclo, na mesma sessao)`);
+    // T44 (D-VEGA20-27 item 3): superar uma pergunta AINDA ABERTA com o mesmo conteudo e o mesmo
+    // destinatario so para mostrar o bloco de novo nao abre outra: devolve a mesma, com o mesmo
+    // `aberta_em`. Conteudo diferente (ou a pergunta ja respondida) segue abrindo outra.
+    const respondida = l.eventos.some((e) => e.pergunta_id === supersedes && e.evento === "resposta");
+    // So a da mesma sessao e do mesmo assunto: outra sessao (ou outro assunto) que supera e outra pergunta.
+    const mesmaSessao = alvo?.sessao === sessao && (alvo?.assunto == null || alvo.assunto === p.assunto);
+    if (alvo && !respondida && mesmaSessao && mesmaAbertura(alvo, p)) return { pergunta: criarPergunta({ ...bruta, id: supersedes }, opcoes), existente: alvo };
   }
   const leitura = await registro.ler(ciclo ? { ciclo } : { sessao });
   // A conferencia que nao viu o registro inteiro avisa e segue: abrir nunca trava por registro fora
@@ -391,7 +462,16 @@ async function conferirReabertura(registro, { p, bruta, sessao, ciclo, supersede
   if (leitura.truncado) process.stderr.write("aviso: conferencia-truncada: a leitura do registro foi cortada no teto; numero ja usado mais antigo pode nao ter sido visto\n");
   const noEscopo = (e) => (ciclo ? e.ciclo === ciclo : e.sessao === sessao && (e.ciclo ?? null) === null);
   const aberturas = leitura.eventos.filter((e) => e.evento === "abertura" && typeof e.pergunta_id === "string" && noEscopo(e) && e.sessao !== SESSAO_DO_CONSENTIMENTO);
-  if (aberturas.some((a) => a.pergunta_id === p.id)) return p;
+  const ja = aberturas.find((a) => a.pergunta_id === p.id);
+  if (ja) return { pergunta: p, existente: ja };
+  // Reabertura que só corrige o id de nuvem (hotfix pergunta-nao-pede-resposta-duas-vezes): a
+  // abertura do mesmo ciclo gravada com id de nuvem, com o mesmo conteúdo, os mesmos números e o
+  // mesmo ponteiro, segue sendo a pergunta. O id dela volta, e a resposta que o operador já digitou
+  // depois daquele bloco vale (a prova se lê pelo transcript em que o bloco saiu, `prova.mjs`).
+  if (ciclo !== null && supersedes === null && typeof p.conteudo === "string") {
+    const daNuvem = aberturas.find((a) => SESSAO_DE_NUVEM.test(a.sessao ?? "") && mesmaAbertura(a, p));
+    if (daNuvem) return { pergunta: criarPergunta({ ...bruta, id: daNuvem.pergunta_id }, opcoes), existente: daNuvem };
+  }
   let escolhida = p;
   if (bruta.id == null) {
     const base = { sessao, numero: p.numero, assunto: p.assunto, tentativa: bruta.tentativa ?? null };
@@ -402,7 +482,7 @@ async function conferirReabertura(registro, { p, bruta, sessao, ciclo, supersede
       (await registro.ler({ pergunta_id: idDaV1 })).eventos.find((e) => e.pergunta_id === idDaV1 && e.evento === "abertura") ??
       null;
     if (v1) {
-      if (mesmoConteudoDaV1(v1, p)) return criarPergunta({ ...bruta, versao: 1 }, opcoes);
+      if (mesmoConteudoDaV1(v1, p)) return { pergunta: criarPergunta({ ...bruta, versao: 1 }, opcoes), existente: v1 };
       if (supersedes === null) throw recusaDeReabertura("conteudo-diferente", idDaV1, `D${p.numero} com o mesmo assunto ja aberta nesta sessao com outro conteudo`);
     }
     const v2 = aberturas.find(
@@ -419,14 +499,36 @@ async function conferirReabertura(registro, { p, bruta, sessao, ciclo, supersede
 }
 
 /**
+ * A sessão da abertura (hotfix pergunta-nao-pede-resposta-duas-vezes, 20/11/2026): é o id do
+ * transcript local, onde o operador lê o bloco e responde — a prova da resposta se lê por ele. Sem
+ * `sessao` na entrada, sai de `CLAUDE_CODE_SESSION_ID`; id de nuvem (`session_…`, `cse_…`) recusa
+ * `sessao-de-nuvem`, dizendo qual usar; sem a entrada e sem a variável (estação sem ela), recusa
+ * pedindo o id do transcript.
+ */
+export function sessaoDoAbrir(daEntrada, env = process.env) {
+  const local = env?.CLAUDE_CODE_SESSION_ID;
+  const localValida = typeof local === "string" && SESSAO.test(local) && !SESSAO_DE_NUVEM.test(local);
+  const qual = localValida
+    ? `use ${local} (CLAUDE_CODE_SESSION_ID) ou tire o campo sessao da entrada`
+    : `use o id do transcript local: o nome do .jsonl desta conversa, na pasta projects do Claude Code${typeof local === "string" && SESSAO_DE_NUVEM.test(local) ? " (CLAUDE_CODE_SESSION_ID aqui tambem e de nuvem e nao serve)" : ""}`;
+  if (daEntrada === undefined || daEntrada === null) {
+    if (!localValida) throw new ErroComando(`abrir: sem sessao na entrada e sem CLAUDE_CODE_SESSION_ID no ambiente: ${qual}`);
+    return local;
+  }
+  if (typeof daEntrada !== "string" || !SESSAO.test(daEntrada)) throw new ErroComando("abrir: sessao fora da forma ([A-Za-z0-9_-])");
+  if (SESSAO_DE_NUVEM.test(daEntrada)) throw new ErroComando(`sessao-de-nuvem: ${daEntrada} e o id da nuvem, nao o do transcript em que o operador responde; ${qual}`);
+  return daEntrada;
+}
+
+/**
  * Abre a pergunta: valida pela forma, grava a abertura e só então devolve o bloco.
  * Devolve `{ pergunta_id, texto, nativo, sem_registro, motivo, gravados, ja_existiam, fila }`.
  */
-export async function abrir(entrada, { registro, destinatarios = carregarDestinatarios(), carimbo, sombra = null } = {}) {
-  if (!entrada || typeof entrada !== "object" || Array.isArray(entrada)) throw new ErroComando("abrir: esperado objeto { sessao, ciclo?, chave?, pergunta }");
+export async function abrir(entrada, { registro, destinatarios = carregarDestinatarios(), carimbo, sombra = null, env = process.env } = {}) {
+  if (!entrada || typeof entrada !== "object" || Array.isArray(entrada)) throw new ErroComando("abrir: esperado objeto { sessao?, ciclo?, chave?, pergunta }");
   for (const k of Object.keys(entrada)) if (!CAMPOS_DO_ABRIR.has(k)) throw new ErroComando(`abrir: campo desconhecido ${k.replace(/[^A-Za-z0-9_]/g, "").slice(0, 40)}`);
-  const { sessao, ciclo = null, chave = null, achado = false, supersedes = null } = entrada;
-  if (typeof sessao !== "string" || !SESSAO.test(sessao)) throw new ErroComando("abrir: sessao obrigatoria ([A-Za-z0-9_-])");
+  const { ciclo = null, chave = null, achado = false, supersedes = null } = entrada;
+  const sessao = sessaoDoAbrir(entrada.sessao, env);
   if (typeof achado !== "boolean") throw new ErroComando("abrir: achado e booleano");
   if (supersedes !== null && !(typeof supersedes === "string" && PERGUNTA_ID.test(supersedes))) throw new ErroComando("abrir: supersedes esperado p-<16 hex>");
   if (ciclo !== null && !(typeof ciclo === "string" && CICLO.test(ciclo))) throw new ErroComando("abrir: ciclo fora da forma ([A-Za-z][A-Za-z0-9._-])");
@@ -443,8 +545,13 @@ export async function abrir(entrada, { registro, destinatarios = carregarDestina
   // Pergunta sobre achado: as opcoes sao os destinos do contrato, e so eles (AC-VEGA19-4).
   if (achado) pecasDe(registro).conferirOpcoesDeAchado(p.itens, ErroComando);
   // A reabertura calada some (D-VEGA19-56): conferida contra o registro antes de gravar.
-  p = await conferirReabertura(registro, { p, bruta, sessao, ciclo, supersedes, opcoes });
-  const ev = eventoDeAbertura(p, { sessao, ciclo, carimbo, achado, supersedes });
+  const reaberta = await conferirReabertura(registro, { p, bruta, sessao, ciclo, supersedes, opcoes });
+  p = reaberta.pergunta;
+  // A reabertura da mesma pergunta mantém o carimbo gravado (T44, D-VEGA20-27 item 3) e não cita a
+  // si mesma como superada: o `aberta_em` que o pareador mede não anda.
+  const existente = reaberta.existente?.pergunta_id === p.id ? reaberta.existente : null;
+  const aberta_em = existente?.carimbo ?? carimbo ?? null;
+  const ev = eventoDeAbertura(p, { sessao, ciclo, ...(aberta_em ? { carimbo: aberta_em } : {}), achado, supersedes: supersedes === p.id ? (existente?.supersedes ?? null) : supersedes });
   const r = await registro.gravar("abrir", [ev]);
   // A sombra do Sistema 1 (T21, AC-VEGA19-6): depois de gravar a abertura, espera a previsão com o
   // teto duro de 5 s na espera do modelo (D-VEGA19-65); a releitura e a gravação da linha têm o
@@ -455,7 +562,7 @@ export async function abrir(entrada, { registro, destinatarios = carregarDestina
   const render = renderizar(p, { ...opcoes, ...(chave ? { chave } : {}), ...(achado ? { achado } : {}) });
   const marca = r.sem_registro ? `<!-- pergunta ${p.id} · sem registro -->` : `<!-- pergunta ${p.id} -->`;
   const texto = r.sem_registro ? `${render.texto}\n\n_sem registro: a pergunta ficou na fila local da estacao_\n${marca}` : `${render.texto}\n${marca}`;
-  return { pergunta_id: p.id, texto, nativo: render.nativo, sem_registro: r.sem_registro, motivo: r.motivo ?? null, gravados: r.gravados, ja_existiam: r.ja_existiam, fila: r.fila ?? null };
+  return { pergunta_id: p.id, aberta_em: ev.carimbo, texto, nativo: render.nativo, sem_registro: r.sem_registro, motivo: r.motivo ?? null, gravados: r.gravados, ja_existiam: r.ja_existiam, fila: r.fila ?? null };
 }
 
 /**
@@ -560,7 +667,42 @@ function conferirReciboEPor(resposta, recibo, por, pergunta_id) {
   if (por !== null && por !== (resposta.rota?.por ?? null)) throw new ErroComando(`pergunta ${pergunta_id} ja respondida ${resposta.rota?.por ? "por outro caminho" : "sem --por"}: o --por nao se grava depois`);
 }
 
-export async function responder({ pergunta_id, literal, origem = "agente", carimbo = agora(), destino: pedido = null, debito = null, recibo = null, por = null } = {}, { registro } = {}) {
+/** As origens que provam a resposta (as mesmas de `ORIGENS_QUE_PROVAM` da lib do projeto): `repasse-hub` não prova. */
+const ORIGENS_QUE_PROVAM = Object.freeze(["digitado", "digitado-no-hub-conferido"]);
+
+/** As escolhas de um literal de letras ecoadas (`D32a D33b`): `[{ numero, letra }]`. */
+function escolhasEcoadas(literal) {
+  return [...String(literal ?? "").matchAll(/(?<![A-Za-z0-9])D(\d{1,4})([a-z])(?![A-Za-z0-9])/g)].map((m) => ({ numero: Number(m[1]), letra: m[2] }));
+}
+
+const mesmasLetras = (a, b) => {
+  const chave = (xs) => [...new Set(xs.map((x) => `${x.numero ?? ""}${x.letra}`))].sort().join(" ");
+  return chave(a) === chave(b);
+};
+
+/**
+ * A resposta já gravada, com outro texto, cede à que chega agora (VEGA-20 T44, D-VEGA20-27 item 4)?
+ * Devolve o motivo curto de não recusar, ou `null` (recusa: uma resposta por pergunta):
+ * - `resposta-sem-prova-cede` — a gravada não se prova (`origemEfetiva` sai `agente` ou `repasse-hub`)
+ *   e não há resposta provada: a provada que chega vale pela `autoria` com as letras, que o gancho grava;
+ * - `resposta-provada-ja-gravada` — a resposta provada com estas escolhas já está no registro.
+ * Entre duas respostas provadas, escolha diferente recusa. `origemFn` injetável para teste. Exportado.
+ */
+export function cedeAProvada(pergunta_id, eventos, escolhas, { origemFn = origemDaProva } = {}) {
+  const daPergunta = (eventos ?? []).filter((e) => e?.pergunta_id === pergunta_id);
+  const provadas = daPergunta.filter((e) => e.evento === "autoria" && ORIGENS_QUE_PROVAM.includes(e.origem_resposta) && escolhasEcoadas(e.resposta_literal).length > 0);
+  if (provadas.length > 0) return provadas.some((e) => mesmasLetras(escolhasEcoadas(e.resposta_literal), escolhas)) ? "resposta-provada-ja-gravada" : null;
+  let o;
+  try {
+    o = origemFn(pergunta_id, { eventos: daPergunta });
+  } catch (e) {
+    // A prova que nao se le nao vira "outro texto": a recusa diz a causa.
+    throw new ErroComando(`pergunta ${pergunta_id} ja respondida com outro texto, e a origem da gravada nao se leu (${String(e?.message ?? e).split("\n")[0].slice(0, 160)}): nada gravado`);
+  }
+  return o && o.origem !== null && !ORIGENS_QUE_PROVAM.includes(o.origem) ? "resposta-sem-prova-cede" : null;
+}
+
+export async function responder({ pergunta_id, literal, origem = "agente", carimbo = agora(), destino: pedido = null, debito = null, recibo = null, por = null } = {}, { registro, origemFn } = {}) {
   if (recibo !== null && !(typeof recibo === "string" && RECIBO.test(recibo.trim()))) throw new ErroComando('--recibo: esperado "<sessao> <evento>"');
   let porDaResposta = null;
   if (por !== null) {
@@ -574,18 +716,27 @@ export async function responder({ pergunta_id, literal, origem = "agente", carim
   if (origem !== "agente") throw new ErroComando(`origem ${JSON.stringify(origem)} recusada: o comando grava agente; o gancho sobe a origem (D-VEGA19-27)`);
   if (typeof literal !== "string" || !literal.trim()) throw new ErroComando("responder exige o texto literal do operador");
   const pecas = pecasDe(registro);
-  const { abertura, resposta } = await estadoDe(registro, pergunta_id);
+  const { abertura, resposta, leitura: doRegistro } = await estadoDe(registro, pergunta_id);
   if (!abertura) throw new ErroComando(`pergunta ${pergunta_id} sem abertura no registro nem na fila: abra antes de responder`);
   const versao = amarrarVersao(abertura);
   const semTexto = restrita(abertura);
   const itens = Array.isArray(abertura.itens) && abertura.itens.length > 0 ? abertura.itens : null;
   const lida = interpretarResposta(literal, itens);
+  if (lida.tipo === A_CONFIRMAR) return voltarAoOperador({ pergunta_id, literal, carimbo, recibo, porDaResposta, abertura, resposta, versao, semTexto, lida }, registro);
   const destino = destinoDaResposta(abertura, lida.escolhas, pedido, pecas);
   if (destino !== "debito" && debito != null) throw new ErroComando(`divida declarada com destino ${destino ?? "nenhum"}: a divida e so do destino debito`);
   // Pergunta com paciente: o comentario do operador nao sai nem na resposta do comando.
   const leitura = semTexto ? { ...lida, comentario: null } : lida;
   // Pergunta com paciente: o literal nao vai ao registro — so as letras ecoadas (D-VEGA19-12).
   const resposta_literal = semTexto ? (leitura.ecoada.join(" ") || "(texto livre retido: pergunta com dado de paciente)") : literal.trim();
+  // T44 (D-VEGA20-27 item 4): a resposta gravada sem prova cede a resposta provada que chega depois.
+  // O comando nao a regrava (uma `resposta` por pergunta) nem sobe a origem: quem grava a provada e o
+  // gancho, pela `autoria` com as letras, e a `origemEfetiva` a le. Aqui so nao se recusa.
+  const difere = resposta && (resposta.resposta_literal !== resposta_literal || (recibo !== null && recibo.trim() !== (resposta.recibo ?? null)) || (porDaResposta !== null && porDaResposta !== (resposta.rota?.por ?? null)));
+  if (difere && !leitura.alternativa_livre && leitura.escolhas.length > 0) {
+    const cede = cedeAProvada(pergunta_id, doRegistro?.eventos ?? [], leitura.escolhas, origemFn ? { origemFn } : {});
+    if (cede) return { pergunta_id, ...leitura, destino, ja_respondida: true, cede, sem_registro: false, gravados: 0, ja_existiam: 0, fila: null };
+  }
   if (resposta && resposta.resposta_literal !== resposta_literal) {
     throw new ErroComando(`pergunta ${pergunta_id} ja respondida com outro texto; uma resposta por pergunta`);
   }
@@ -670,6 +821,53 @@ export async function responder({ pergunta_id, literal, origem = "agente", carim
   };
 }
 
+/**
+ * A resposta que não casa com o bloco (D-VEGA20-6, VEGA-20 T8): grava o evento `a-confirmar` com o
+ * literal e a leitura, não fecha a pergunta e devolve a frase que a sessão mostra ao operador. A
+ * marca de paciente é a da abertura; pergunta restrita grava o literal retido (as letras ecoadas
+ * são nenhuma: nada casou). Pergunta já respondida: o mesmo literal é a resposta gravada; outro
+ * literal recusa, como na resposta (uma resposta por pergunta).
+ */
+async function voltarAoOperador({ pergunta_id, literal, carimbo, recibo, porDaResposta, abertura, resposta, versao, semTexto, lida }, registro) {
+  const resposta_literal = semTexto ? "(texto livre retido: pergunta com dado de paciente)" : literal.trim();
+  if (resposta) {
+    if (resposta.resposta_literal !== resposta_literal) throw new ErroComando(`pergunta ${pergunta_id} ja respondida com outro texto; uma resposta por pergunta`);
+    // A resposta gravada antes da D-VEGA20-6 leu esse literal como texto (o número fora do bloco era
+    // texto; a letra fora das opções recusava e nunca gravou): ela vale como a alternativa livre que é.
+    return { pergunta_id, tipo: "alternativa-livre", escolhas: [], ecoada: [], comentario: null, alternativa_livre: true, destino: resposta.destino ?? null, ja_respondida: true, sem_registro: resposta.na_fila === true, gravados: 0, ja_existiam: 1, fila: null };
+  }
+  const ev = {
+    evento: A_CONFIRMAR,
+    pergunta_id,
+    sessao: abertura.sessao,
+    ciclo: abertura.ciclo ?? null,
+    carimbo,
+    versao_esquema: versao,
+    has_patient_data: semTexto,
+    ...(abertura.ponteiro ? { ponteiro: abertura.ponteiro } : {}),
+    item: abertura.item,
+    titulo: abertura.titulo,
+    resposta_literal,
+    leitura: lida.leitura,
+    origem_resposta: "agente",
+    ...(recibo !== null ? { recibo: recibo.trim() } : {}),
+    ...(porDaResposta ? { rota: { por: porDaResposta } } : {}),
+  };
+  const r = await registro.gravar("responder", [ev]);
+  return {
+    pergunta_id,
+    ...lida,
+    destino: null,
+    confirmar: fraseDeConfirmacao(lida.leitura),
+    ja_respondida: false,
+    sem_registro: r.sem_registro,
+    motivo: r.motivo ?? null,
+    gravados: r.gravados,
+    ja_existiam: r.ja_existiam,
+    fila: r.fila ?? null,
+  };
+}
+
 /** Dispensa a pergunta: grava `dispensa`; ela continua aberta (D-VEGA19-19). */
 export async function dispensar({ pergunta_id, motivo = null, carimbo = agora() } = {}, { registro } = {}) {
   const { abertura, resposta } = await estadoDe(registro, pergunta_id);
@@ -710,7 +908,10 @@ export async function gravarDestino({ pergunta_id, ponteiro, carimbo = agora() }
   let destino = resposta.destino ?? null;
   if (!destino && abertura.achado === true) {
     const itens = Array.isArray(abertura.itens) && abertura.itens.length > 0 ? abertura.itens : null;
-    destino = destinoLegado(abertura, interpretarResposta(resposta.resposta_literal, itens).escolhas, pecasDe(registro), pergunta_id);
+    // A resposta antiga que hoje se lê `a-confirmar` (D-VEGA20-6) não tem escolha: destino nulo,
+    // e a recusa é a de sempre (sem destino, nada a apontar), nunca erro da leitura.
+    const relida = interpretarResposta(resposta.resposta_literal, itens);
+    destino = relida.tipo === A_CONFIRMAR ? null : destinoLegado(abertura, relida.escolhas, pecasDe(registro), pergunta_id);
   }
   if (!destino) throw new ErroComando(`pergunta ${pergunta_id} respondida sem destino; nada a apontar`);
   const ev = {
@@ -855,7 +1056,7 @@ export async function principal(argv, { registro = null, stdout = process.stdout
       const temDivida = ["porque", "porque-livre", "severidade", "gatilho"].some((k) => o[k] !== undefined);
       const debito = temDivida ? { porque: o.porque, porque_texto: o["porque-livre"] ?? null, severidade: o.severidade, gatilho: o.gatilho } : null;
       r = await responder({ pergunta_id: o.pergunta, literal: o.literal, origem: o.origem ?? "agente", destino: o.destino ?? null, debito, recibo: o.recibo ?? null, por: o.por ?? null }, { registro: reg });
-      stdout.write(o.json ? `${JSON.stringify(r, null, 2)}\n` : `${r.pergunta_id} · ${r.tipo}${r.ecoada.length ? ` · ${r.ecoada.join(" ")}` : ""}${r.legada ? ` · destino ${r.destino}${r.proximo ? ` · falta: ${r.proximo}` : ""}` : ""}${r.sem_registro ? " · sem registro" : ""}\n`);
+      stdout.write(o.json ? `${JSON.stringify(r, null, 2)}\n` : `${r.pergunta_id} · ${r.tipo}${r.ecoada.length ? ` · ${r.ecoada.join(" ")}` : ""}${r.legada ? ` · destino ${r.destino}${r.proximo ? ` · falta: ${r.proximo}` : ""}` : ""}${r.sem_registro ? " · sem registro" : ""}${r.confirmar ? `\n${r.confirmar}` : ""}\n`);
     } else if (o.verbo === "dispensar") {
       r = await dispensar({ pergunta_id: o.pergunta, motivo: o.motivo ?? null }, { registro: reg });
       stdout.write(o.json ? `${JSON.stringify(r, null, 2)}\n` : `${r.pergunta_id} · dispensada (segue aberta)${r.sem_registro ? " · sem registro" : ""}\n`);

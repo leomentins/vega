@@ -94,6 +94,22 @@ const CASOS_DA_AUTORIA = [
     { origem: "digitado-no-hub-conferido", quem: "pessoa", mandato: "clinico-regulatorio", em_nome_de: null, recibo: "hub-1 ev-1" },
   ],
   [
+    "3 níveis: a letra sozinha digitada no hub não prova nem na pergunta de um item (o evento do hub não diz a que pergunta responde)",
+    [abertura(), resposta(), autoria({ origem_resposta: "digitado-no-hub-conferido", prova: "get_event:hub-1#u-1", recibo: "hub-1 ev-1" })],
+    getEvent({ role: "user", created_at: DEPOIS, content: "a" }),
+    { origem: "agente", quem: null, mandato: null, em_nome_de: null, recibo: null },
+  ],
+  [
+    "3 níveis: a letra sozinha digitada no hub não prova na pergunta de dois itens",
+    [
+      abertura({ itens: [{ numero: 1, opcoes: [{ letra: "a", texto: "sim" }, { letra: "b", texto: "não" }] }, { numero: 2, opcoes: [{ letra: "a", texto: "x" }, { letra: "b", texto: "y" }] }] }),
+      resposta(),
+      autoria({ origem_resposta: "digitado-no-hub-conferido", prova: "get_event:hub-1#u-1", recibo: "hub-1 ev-1" }),
+    ],
+    getEvent({ role: "user", created_at: DEPOIS, content: "a" }),
+    { origem: "agente", quem: null, mandato: null, em_nome_de: null, recibo: null },
+  ],
+  [
     "repasse-hub sem recibo na autoria herda o da resposta",
     [abertura(), resposta("a", { recibo: "hub-1 ev-1" }), autoria({ origem_resposta: "repasse-hub", prova: "entre-sessoes:hub-1#u-1", quem: "pessoa", mandato: "engenharia" })],
     [humana({ origin: undefined, message: { content: '<cross-session-message from-session="hub-1">D1a\nRecibo: hub-1 ev-1</cross-session-message>' } })],

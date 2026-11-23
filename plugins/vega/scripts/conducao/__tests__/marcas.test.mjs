@@ -46,6 +46,16 @@ const TABELA = [
   ["Conducao: F2 passagem desistida", { "Conducao-Passagem": "F2", "Conducao-Desistida": "s" }, { tipo: "desistida", fase: "F2", desistida: "s" }],
   ["Conducao: F2 em passagem", {}, null],
   ["Conducao: F2 passagem desistida", { "Conducao-Passagem": "F3" }, null],
+  ["Conducao: ciclo niveis 3", { "Conducao-Niveis": "3" }, { tipo: "niveis", niveis: 3 }],
+  ["Conducao: ciclo niveis 2", { "Conducao-Niveis": "2" }, { tipo: "niveis", niveis: 2 }],
+  ["Conducao: ciclo niveis 3", { "Conducao-Niveis": "2" }, null],
+  ["Conducao: ciclo niveis 4", { "Conducao-Niveis": "4" }, null],
+  [
+    "Conducao: T3 aposentada conferencia-do-operador",
+    { "Conducao-Aposentada": "conferencia-do-operador", "Conducao-Nonce": "0123456789abcdef", "Conducao-Resposta": "a", "Conducao-Iguais": "1", "Conducao-Tentativa": "2" },
+    { tipo: "aposentada", task: "T3", motivo: "conferencia-do-operador", nonce: "0123456789abcdef", resposta: "a", iguais: 1, tentativa: 2 },
+  ],
+  ["Conducao: T3 aposentada conferencia-do-operador", { "Conducao-Aposentada": "outro" }, null],
   // Não são marca: subject a mais ou a menos, ou `encerrada` sem o trailer que a confirma.
   ["Conducao: F1 autorizada ", {}, null],
   ["Conducao: F100 autorizada", {}, null],

@@ -28,8 +28,20 @@
  * `perguntar` confere o destinatário contra essa tabela e devolve ao
  * `operador` o que nunca desce (guard, instruções de sessão,
  * `canonico-do-ciclo`, `caminho-clinico-fora-dos-outputs`).
+ *
+ * Desde a T22 do VEGA-20 a `pergunta-da-filha` chega aqui já com destinatário:
+ * a vigia (`regras.mjs`) lê a classe do aviso da operária
+ * (`destinatarioDaPerguntaDaFilha`) — técnica fica na `condutora`; classe que
+ * sobe, ausente ou não reconhecida vai ao `operador` — e o construtor ainda a
+ * confere pelo `destinatarioEfetivo`, então o que nunca desce não desce por
+ * esta porta. O `destinatario` do evento no log mostra para onde ela foi.
+ *
+ * `ponteiroDa` dá o `ponteiro` com que a condutora abre a parada como
+ * pergunta registrada (`../pergunta/comando.mjs abrir`): o CLI o põe na saída
+ * da parada, e a `metrica prova` junta a resposta ao log pelo id da decisão.
  */
 import { createHash } from "node:crypto";
+import { PONTEIRO_DO_AUTORIZAR } from "./consentimento.mjs";
 import * as logEventos from "./log-eventos.mjs";
 import { DESTINATARIOS_PADRAO, ErroForma, conferirDestinatario, conferirNumero, criarPergunta } from "../pergunta/forma.mjs";
 import { carregar as carregarDestinatarios, destinatarioEfetivo } from "../pergunta/destinatarios.mjs";
@@ -139,6 +151,35 @@ export function decisaoDe(saida) {
   };
 }
 
+/** Prefixo do `ponteiro` da parada registrada: `conducao:<motivo>:<id da decisão>`. */
+export const PONTEIRO_DA_PARADA = "conducao:";
+/** As paradas cujo "sim" entra pelo `autorizar-ciclo F<n> --pergunta` (SKILL §3), que confere o ponteiro. */
+export const MOTIVOS_DO_SIM_DO_CICLO = Object.freeze(["autorizar-ciclo", "plano-mudou"]);
+
+/**
+ * O `ponteiro` da pergunta registrada da parada. Nas paradas cujo "sim" entra
+ * pelo `autorizar-ciclo` (`MOTIVOS_DO_SIM_DO_CICLO`), o que ele confere
+ * (`autorizar-ciclo:F<n>`); nas demais, `conducao:<motivo>:<id da decisão>`,
+ * o mesmo id que o evento do log grava.
+ * O `+` que o motivo aceita e a forma do ponteiro recusa vira `.`.
+ */
+export function ponteiroDa(saida) {
+  const d = decisaoDe(saida);
+  if (MOTIVOS_DO_SIM_DO_CICLO.includes(saida.motivo) && /^F\d{1,2}$/.test(saida.fase ?? "")) return `${PONTEIRO_DO_AUTORIZAR}${saida.fase}`;
+  return `${PONTEIRO_DA_PARADA}${saida.motivo.replace(/\+/g, ".")}:${d.id}`;
+}
+
+/**
+ * Os nomes dos motivos que a parada junta (`motivos: [{ motivo, caminhos }]`, o do `trazer`), em
+ * `a+b`, na ordem e sem repetir; null sem nenhum nome legível. Os caminhos nunca vão ao log.
+ */
+function motivosDa(saida) {
+  if (!Array.isArray(saida.motivos)) return null;
+  // Nome fora da forma vira `ilegivel`: a parada que juntava motivos nunca some calada do log.
+  const nomes = [...new Set(saida.motivos.map((m) => (typeof m === "string" ? m : m?.motivo)).map((m) => (typeof m === "string" && /^[a-z0-9][a-z0-9-]{0,63}$/.test(m) ? m : "ilegivel")))];
+  return nomes.length ? nomes.join("+") : null;
+}
+
 /** O evento `pergunta` do log: só tokens, nenhum texto. */
 export function eventoDa(saida) {
   const d = decisaoDe(saida);
@@ -154,6 +195,8 @@ export function eventoDa(saida) {
   if (d.numero !== null) evento.numero = d.numero;
   if (d.opcoes.length) evento.opcoes = d.opcoes.map((o) => o.id).join("+");
   if (d.recomendada !== null) evento.recomendada = d.recomendada;
+  const motivos = motivosDa(saida);
+  if (motivos) evento.motivos = motivos;
   return evento;
 }
 

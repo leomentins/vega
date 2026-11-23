@@ -26,7 +26,7 @@ import { regraAutorizarFase, regraReplano } from "../regras.mjs";
 const DOCUMENTO = /\d{3}\.\d{3}\.\d{3}-\d{2}/;
 const phiDoProjeto = (entrada) => (DOCUMENTO.test(entrada.corpo ?? "") ? { recusar: true, mensagem: "documento no sim" } : { recusar: false });
 
-const CODIGO = { caminhosProtegidos: [], telasProtegidasDosSteps: [], foraDasTelasDosSteps: [], alcanceDosHooks: [] };
+const CODIGO = { caminhosProtegidos: [], telasProtegidasDosSteps: [], foraDasTelasDosSteps: [], alcanceDosHooks: [], definemAParada: ["**/hooks/gate-de-publicacao.js", "**/liberacao-da-publicacao.mjs", "db/scripts/**"] };
 const alcance = (caminhos, globs) => caminhos.filter((x) => casaAlgum(x, globs));
 const MOTOR = ".claude/skills/vega/scripts/conducao";
 const CANONICO = ".agents/ciclo/vega/X-1/canonico.md";
@@ -56,14 +56,14 @@ test("pergunta repetida do mesmo tipo segue sem perguntar e registra", () => {
     assert.equal(lidos.length, 1);
     assert.equal(lidos[0].sha, gravado.sha);
     assert.equal(lidos[0].sim, "sim, pode trazer");
+    // D-VEGA20-26: o trazer não para pelo hook, e não há o que repetir nele; a regra da repetição segue
+    assert.deepEqual(trazer([HOOK_COMUM], [], { codigo: HOOKS, consentimentos: lidos, ciclo: "X-1", fase: "F3" }).motivos, []);
+    const repete = (consentimentos, fase) => c.seguePorRepeticao({ consentimentos, ciclo: "X-1", fase, tipo: "trazer", motivo: "alcance-dos-hooks", caminhos: [HOOK_COMUM] });
     // tipo novo na fase: sobe uma vez
-    const novo = trazer([HOOK_COMUM], [], { codigo: HOOKS, consentimentos: [], ciclo: "X-1", fase: "F3" });
-    assert.deepEqual(novo.motivos.map((m) => m.motivo), ["alcance-dos-hooks"]);
+    assert.equal(repete([], "F3"), null);
     // mesmo tipo e motivo já respondido: segue e registra o caso com o sim de origem
-    const repetida = trazer([HOOK_COMUM], [], { codigo: HOOKS, consentimentos: lidos, ciclo: "X-1", fase: "F3" });
-    assert.deepEqual(repetida.motivos, []);
-    const [caso] = repetida.consentidos;
-    assert.equal(caso.caso, c.CASOS.perguntaRepetida);
+    const origem = repete(lidos, "F3");
+    const caso = { caso: c.CASOS.perguntaRepetida, motivo: "alcance-dos-hooks", origem: origem.sha, sim: origem.sim, quem: origem.quem };
     assert.equal(caso.origem, gravado.sha);
     const reg = c.gravarConsentimento({
       repo: dir,
@@ -76,7 +76,7 @@ test("pergunta repetida do mesmo tipo segue sem perguntar e registra", () => {
     assert.equal(depois.at(-1).caso, c.CASOS.perguntaRepetida);
     assert.equal(depois.at(-1).sim, "sim, pode trazer");
     // em outra fase, o mesmo motivo volta a perguntar
-    assert.equal(trazer([HOOK_COMUM], [], { codigo: HOOKS, consentimentos: lidos, ciclo: "X-1", fase: "F4" }).motivos.length, 1);
+    assert.equal(repete(lidos, "F4"), null);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -103,12 +103,11 @@ test("pergunta repetida com caminho que sempre pergunta segue perguntando", () =
   ]) {
     assert.equal(pergunta([`${MOTOR}/verbos.mjs`, caminho]), null, caminho);
   }
-  // pelo `trazer`: o motivo já respondido volta a subir quando a lista traz settings
+  // pelo `trazer` (D-VEGA20-26): settings que não registra o gate não para, nem por repetição; vai ao relato
   const hooks = { ...CODIGO, alcanceDosHooks: [".claude/**"] };
-  const comum = trazer([".claude/hooks/x.js"], [], { codigo: hooks, consentimentos: [respondida], ciclo: "X-1", fase: "F3" });
-  assert.deepEqual(comum.motivos, []);
   const comSettings = trazer([".claude/hooks/x.js", ".claude/settings.json"], [], { codigo: hooks, consentimentos: [respondida], ciclo: "X-1", fase: "F3" });
-  assert.ok(comSettings.motivos.some((m) => m.motivo === motivo && m.caminhos.includes(".claude/settings.json")));
+  assert.deepEqual(comSettings.motivos, []);
+  assert.deepEqual(comSettings.foraDosOutputs, [".claude/hooks/x.js", ".claude/settings.json"]);
   assert.ok(!comSettings.consentidos.some((x) => x.caso === c.CASOS.perguntaRepetida));
 });
 
@@ -161,37 +160,44 @@ test("publicação do ciclo vale só no ciclo em que foi gravada", () => {
 test("superfície de instrução declarada em Outputs segue sem perguntar", () => {
   const skill = ".claude/skills/vega/skills/conducao/SKILL.md";
   const hook = ".claude/hooks/lib/fase.js";
+  // D-VEGA20-26: declarada, segue sem caso a gravar; fora dos Outputs, também segue, e vai ao relato
   const r = trazer([skill, hook], [skill, hook]);
-  assert.deepEqual(r.motivos, []);
-  assert.deepEqual(r.consentidos.map((x) => [x.caso, x.motivo]), [
-    [c.CASOS.instrucaoDeclaradaEmOutputs, "alcance-dos-hooks"],
-    [c.CASOS.instrucaoDeclaradaEmOutputs, "superficie-de-instrucao"],
-  ]);
-  // fora dos Outputs, segue perguntando
-  assert.deepEqual(motivosParaPerguntar({ caminhos: [skill], canonico: CANONICO, outputs: [], alcance, codigo: CODIGO }).map((m) => m.motivo), ["superficie-de-instrucao"]);
+  assert.deepEqual([r.motivos, r.consentidos, r.foraDosOutputs], [[], [], []]);
+  assert.deepEqual(motivosParaPerguntar({ caminhos: [skill], canonico: CANONICO, outputs: [], codigo: CODIGO }), []);
+  assert.deepEqual(trazer([skill], []).foraDosOutputs, [skill]);
 });
 
 test("settings declarado em Outputs ainda pergunta", () => {
+  // D-VEGA20-26: no trazer, o settings só pergunta quando o diff registra o gate de publicação
+  // (`define-a-parada`); o resto segue sem caso. Na repetição, todos seguem perguntando.
   for (const p of [".claude/settings.json", ".claude/settings.local.json", ".claude/state/vigia-de-fora-mode", "package.json", ".claude/skills/vega/hooks/lib/sessao-operaria.js", ".claude/scripts/estacao/linux/instalar-vigia-de-fora.sh"]) {
     const r = trazer([p], [p]);
-    assert.ok(r.motivos.some((m) => m.caminhos.includes(p)), `${p} devia perguntar`);
-    assert.ok(!r.consentidos.some((x) => x.caminhos.includes(p)), `${p} não devia virar consentimento`);
+    assert.deepEqual([r.motivos, r.consentidos], [[], []], p);
+    const respondida = { ...RESPOSTA, sha: "d".repeat(40) };
+    assert.equal(c.seguePorRepeticao({ consentimentos: [respondida], ciclo: "X-1", fase: "F3", tipo: "trazer", motivo: RESPOSTA.motivo, caminhos: [p] }), null, p);
   }
+  for (const p of [".claude/settings.json", ".claude/settings.local.json"])
+    assert.deepEqual(trazer([p], [p], { registraAParada: () => true }).motivos, [{ motivo: "define-a-parada", caminhos: [p] }], p);
 });
 
-// Declarado em Outputs, o caminho ainda pergunta no `trazer` e na repetição
-// (o mesmo motivo já respondido na fase não o dispensa).
+// O caminho segue nas listas de quem lê fora do trazer e nunca segue por
+// repetição (o mesmo motivo já respondido na fase não o dispensa). No trazer
+// (D-VEGA20-26), declarado ou não, só para o que define a parada de publicação;
+// o resto vai ao relato, sem caso a gravar.
+/** O que define a parada no trazer deste teste, literal: o do motor e o de `CODIGO.definemAParada`. */
+const DEFINEM_NO_TRAZER = [".vega/**", ".altair/**", "**/hooks/gate-de-publicacao.js", "**/liberacao-da-publicacao.mjs", "db/scripts/**"];
 function seguePerguntando(p) {
   assert.ok(casaAlgum(p, c.SEGUEM_PERGUNTANDO), `${p} fora de SEGUEM_PERGUNTANDO`);
   assert.ok(casaAlgum(p, c.NUNCA_REPETEM_POR_CAMINHO), `${p} fora de NUNCA_REPETEM_POR_CAMINHO`);
+  const esperado = casaAlgum(p, DEFINEM_NO_TRAZER) ? [{ motivo: "define-a-parada", caminhos: [p] }] : [];
   const r = trazer([p], [p]);
-  assert.ok(r.motivos.some((m) => m.caminhos.includes(p)), `${p} devia perguntar no trazer`);
-  assert.ok(!r.consentidos.some((x) => x.caminhos.includes(p)), `${p} não devia virar consentimento`);
-  const [m] = r.motivos.filter((x) => x.caminhos.includes(p));
-  const respondida = { ...RESPOSTA, sha: "d".repeat(40), motivo: m.motivo };
-  assert.equal(c.seguePorRepeticao({ consentimentos: [respondida], ciclo: "X-1", fase: "F3", tipo: "trazer", motivo: m.motivo, caminhos: [p] }), null, `${p} não devia repetir`);
+  assert.deepEqual(r.motivos, esperado, `${p} no trazer`);
+  assert.deepEqual(r.consentidos, [], `${p} não devia virar consentimento`);
+  const motivo = esperado[0]?.motivo ?? "alcance-dos-hooks";
+  const respondida = { ...RESPOSTA, sha: "d".repeat(40), motivo };
+  assert.equal(c.seguePorRepeticao({ consentimentos: [respondida], ciclo: "X-1", fase: "F3", tipo: "trazer", motivo, caminhos: [p] }), null, `${p} não devia repetir`);
   const rep = trazer([p], [p], { consentimentos: [respondida], ciclo: "X-1", fase: "F3" });
-  assert.ok(rep.motivos.some((x) => x.caminhos.includes(p)), `${p} devia perguntar de novo`);
+  assert.deepEqual(rep.motivos, esperado, `${p} de novo no trazer`);
   assert.ok(!rep.consentidos.some((x) => x.caso === c.CASOS.perguntaRepetida), `${p} virou pergunta repetida`);
 }
 
@@ -223,9 +229,11 @@ test("corpo de guard segue pela conferência de quem conduz", () => {
   // D-VEGA37-41: o corpo do hook e do guard volta a quem conduz, que confere o diff
   for (const p of [".claude/hooks/x-guard.js", ".claude/skills/vega/hooks/x-gate.js"]) {
     assert.ok(!casaAlgum(p, c.SEGUEM_PERGUNTANDO), `${p} não devia seguir perguntando`);
-    const r = trazer([p], [p]);
-    assert.ok(!r.motivos.some((m) => m.caminhos.includes(p)), `${p} declarado não devia perguntar`);
-    assert.ok(r.consentidos.some((x) => x.caso === c.CASOS.instrucaoDeclaradaEmOutputs && x.caminhos.includes(p)), `${p} devia seguir como declarado em Outputs`);
+    // D-VEGA20-26: declarado ou não, segue sem pergunta e sem caso; fora dos Outputs vai ao relato
+    for (const outputs of [[p], []]) {
+      const r = trazer([p], outputs);
+      assert.deepEqual([r.motivos, r.consentidos, r.foraDosOutputs], [[], [], outputs.length ? [] : [p]], p);
+    }
   }
 });
 
@@ -351,11 +359,11 @@ test("caminhos que desligam gate de segredo, revisão ou dono seguem perguntando
     ".claude/skills/vega/motor/hooks-do-motor.mjs",
     ".agents/ciclo/x/medicao/settings-base.json",
   ]) seguePerguntando(p);
-  // fora do alcance e fora dos Outputs, o `trazer` ainda pergunta (decisão 28 da F3)
+  // fora do alcance e fora dos Outputs, o `trazer` não pergunta mais e põe o caminho no relato (D-VEGA20-26)
   for (const p of [".codex/hooks.json", ".github/runner/entrypoint.sh", ".agents/ciclo/x/medicao/settings-base.json"]) {
     assert.deepEqual(alcance([p], [".husky/**", ".*/hooks/**", ".*/scripts/**", ".*/state/**"]), [], `${p} devia estar fora da base do alcance`);
     const r = trazer([p], []);
-    assert.ok(r.motivos.some((m) => m.motivo === "alcance-dos-hooks" && m.caminhos.includes(p)), `${p} fora do alcance devia perguntar no trazer`);
+    assert.deepEqual([r.motivos, r.foraDosOutputs], [[], [p]], p);
   }
   // controle: o motor de consentimento é corpo e fica com quem conduz (16a)
   for (const p of [`${MOTOR}/consentimento.mjs`, `${MOTOR}/verbos.mjs`, ".github/scripts-x/y.mjs"]) {
@@ -386,11 +394,10 @@ test("caminho que o git põe entre aspas segue casando a lista", () => {
       assert.ok(porLinha.includes('".husky/pre\\"push"'), `leitura por linha devia citar: ${porLinha.join(" | ")}`);
       assert.ok(!casaAlgum('".husky/pre\\"push"', c.SEGUEM_PERGUNTANDO));
     }
-    for (const p of lidos) {
-      seguePerguntando(p);
-      const r = trazer(lidos, lidos);
-      assert.ok(r.motivos.some((m) => m.caminhos.includes(p)), `${p} declarado devia perguntar`);
-    }
+    for (const p of lidos) seguePerguntando(p);
+    // D-VEGA20-26: declarados, seguem no trazer; o nome citado não escapa da lista de fora dos Outputs
+    assert.deepEqual(trazer(lidos, lidos).motivos, []);
+    assert.deepEqual([...trazer(lidos, []).foraDosOutputs].sort(), [...nomes].sort());
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -399,10 +406,10 @@ test("caminho que o git põe entre aspas segue casando a lista", () => {
 test("configuração e registro de hook de cada host seguem perguntando", () => {
   // D-VEGA37-44: declarados em Outputs, perguntam no `decidirNoTrazer` e na repetição
   for (const p of [".codex/config.toml", ".gitleaksignore", ".grok/hooks/sistoli-guards.json", ".cursor/mcp.json", "mcp.json"]) seguePerguntando(p);
-  // fora do alcance e fora dos Outputs, o `trazer` ainda pergunta (decisão 28 da F3)
+  // fora do alcance e fora dos Outputs, o `trazer` não pergunta mais e põe o caminho no relato (D-VEGA20-26)
   for (const p of [".gitleaksignore", ".cursor/mcp.json"]) {
     const r = trazer([p], []);
-    assert.ok(r.motivos.some((m) => m.caminhos.includes(p)), `${p} fora dos Outputs devia perguntar`);
+    assert.deepEqual([r.motivos, r.foraDosOutputs], [[], [p]], p);
   }
   // controle: globs neutros de host — a configuração de produto e o json comum de hooks não entram
   for (const p of ["supabase/config.toml", "app/servico/supabase/config.toml", ".codex/hooks/lib/x.json", "apps/x/hooks/y.json", "x/.codex/config.toml"]) {
@@ -412,45 +419,37 @@ test("configuração e registro de hook de cada host seguem perguntando", () => 
 
 test("instrução de sessão declarada em Outputs segue perguntando", () => {
   // D-VEGA37-45: as instruções de sessão que o adaptador declara (`instrucoes`)
-  // nunca viram `instrucao-declarada-em-outputs` nem seguem por repetição.
+  // nunca seguem por repetição. No trazer (D-VEGA20-26) as `instrucoes` deixam
+  // de ser lidas: declarada ou não, segue sem pergunta e sem caso.
   const instrucoes = ["**/CLAUDE.md"];
   const SKILL = ".claude/skills/x/SKILL.md";
   for (const p of ["CLAUDE.md", "apps/x/CLAUDE.md"]) {
-    const r = trazer([p], [p], { instrucoes });
-    assert.deepEqual(r.motivos, [{ motivo: "superficie-de-instrucao", caminhos: [p] }], `${p} declarado devia perguntar`);
-    assert.ok(!r.consentidos.some((x) => x.caminhos.includes(p)), `${p} não devia virar consentimento`);
+    const r = trazer([p], [p]);
+    assert.deepEqual([r.motivos, r.consentidos], [[], []], p);
     const respondida = { ...RESPOSTA, sha: "c".repeat(40), motivo: "superficie-de-instrucao" };
     assert.equal(
       c.seguePorRepeticao({ consentimentos: [respondida], ciclo: "X-1", fase: "F3", tipo: "trazer", motivo: "superficie-de-instrucao", caminhos: [p], instrucoes }),
       null,
       `${p} não devia repetir`,
     );
-    const rep = trazer([p], [p], { instrucoes, consentimentos: [respondida], ciclo: "X-1", fase: "F3" });
-    assert.deepEqual(rep.motivos, [{ motivo: "superficie-de-instrucao", caminhos: [p] }], `${p} devia perguntar de novo`);
-    assert.ok(!rep.consentidos.some((x) => x.caso === c.CASOS.perguntaRepetida), `${p} virou pergunta repetida`);
+    assert.deepEqual(trazer([p], []).foraDosOutputs, [p]);
   }
-  // controle: arquivo de skill declarado segue consentido pela D-VEGA37-22
-  const skill = trazer([SKILL], [SKILL], { instrucoes });
-  assert.deepEqual(skill.motivos, []);
-  assert.deepEqual(skill.consentidos, [{ caso: c.CASOS.instrucaoDeclaradaEmOutputs, motivo: "superficie-de-instrucao", caminhos: [SKILL] }]);
-  // controle: com o skill junto, só a instrução de sessão pergunta
-  const junto = trazer(["CLAUDE.md", SKILL], ["CLAUDE.md", SKILL], { instrucoes });
-  assert.deepEqual(junto.motivos, [{ motivo: "superficie-de-instrucao", caminhos: ["CLAUDE.md"] }]);
-  assert.deepEqual(junto.consentidos.flatMap((x) => x.caminhos), [SKILL]);
+  // controle: com o skill junto, nenhum dos dois pergunta
+  const junto = trazer(["CLAUDE.md", SKILL], ["CLAUDE.md", SKILL]);
+  assert.deepEqual([junto.motivos, junto.consentidos], [[], []]);
 });
 
 test("pergunta repetida não vale para caminho clínico nem canonico do ciclo", () => {
-  const motivos = ["canonico-do-ciclo", "caminho-clinico-fora-dos-outputs"];
+  const motivos = ["canonico-do-ciclo", "caminho-clinico-fora-dos-outputs", "define-a-parada"];
   assert.deepEqual([...c.MOTIVOS_QUE_NUNCA_REPETEM], motivos);
   for (const motivo of motivos) {
     const respondida = { ...RESPOSTA, sha: "e".repeat(40), motivo };
     assert.equal(c.seguePorRepeticao({ consentimentos: [respondida], ciclo: "X-1", fase: "F3", tipo: "trazer", motivo, caminhos: [] }), null, motivo);
   }
-  // pelo trazer: o canonico já respondido na fase volta a perguntar
+  // pelo trazer (D-VEGA20-26): o canonico não pergunta mais; vai ao relato à parte, sem repetição
   const canonico = { ...RESPOSTA, sha: "f".repeat(40), motivo: "canonico-do-ciclo" };
   const doCanonico = trazer([CANONICO], [], { consentimentos: [canonico], ciclo: "X-1", fase: "F3" });
-  assert.deepEqual(doCanonico.motivos.map((m) => m.motivo), ["canonico-do-ciclo"]);
-  assert.ok(!doCanonico.consentidos.some((x) => x.caso === c.CASOS.perguntaRepetida));
+  assert.deepEqual([doCanonico.motivos, doCanonico.consentidos, doCanonico.foraDosOutputs, doCanonico.canonicoAlterado], [[], [], [], true]);
   // pelo trazer: caminho clínico fora dos Outputs já respondido volta a perguntar
   const CLINICO = "apps/sistoli-os/src/app/laudos/page.tsx";
   const clinico = { ...RESPOSTA, sha: "9".repeat(40), motivo: "caminho-clinico-fora-dos-outputs" };
@@ -467,15 +466,18 @@ test("teste fora dos Outputs que acompanha o código do plano segue sem pergunta
   const codigo = `${MOTOR}/regras.mjs`;
   const teste = `${MOTOR}/__tests__/regras.test.mjs`;
   const contrato = `${MOTOR}/contrato-atual.md`;
+  // D-VEGA20-26: o trazer não pergunta e não grava caso; o teste e o contrato vão ao relato
   const r = trazer([codigo, teste, contrato], [codigo]);
-  assert.deepEqual(r.motivos, []);
-  const acompanha = r.consentidos.filter((x) => x.caso === c.CASOS.testeQueAcompanhaOCodigo).flatMap((x) => x.caminhos);
-  assert.deepEqual([...new Set(acompanha)].sort(), [contrato, teste].sort());
-  // teste de outro módulo, sem código declarado ao lado: pergunta
+  assert.deepEqual([r.motivos, r.consentidos], [[], []]);
+  assert.deepEqual([...r.foraDosOutputs].sort(), [contrato, teste].sort());
+  // a regra do acompanhamento segue para quem a lê fora do trazer
+  assert.equal(c.acompanhaOCodigo(teste, [codigo]), true);
+  assert.equal(c.acompanhaOCodigo(contrato, [codigo]), true);
+  // teste de outro módulo, ou sem código declarado: não acompanha, e o trazer segue sem perguntar
   const alheio = ".claude/hooks/__tests__/outro.test.mjs";
-  assert.ok(trazer([alheio], [codigo]).motivos.some((m) => m.caminhos.includes(alheio)));
-  // teste sem código declarado nenhum: pergunta
-  assert.ok(trazer([teste], []).motivos.length > 0);
+  assert.equal(c.acompanhaOCodigo(alheio, [codigo]), false);
+  assert.deepEqual(trazer([alheio], [codigo]).motivos, []);
+  assert.deepEqual(trazer([teste], []).motivos, []);
 });
 
 const tarefa = (id, fase, classe, extra = {}) => ({ id, fase, classe, publicacao: [], protegida: classe === "sensivel" ? ["x/**"] : [], passos: [], ...extra });

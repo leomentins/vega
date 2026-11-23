@@ -33,12 +33,13 @@ A unidade é o que o papel fecha sem deixar nada aberto. Com o crescimento médi
 | --- | --- | --- | --- |
 | **Condutora de execução** (`F<n>`) e **de fechamento** | o pedido de nascimento (`Conduzir <ciclo> — F<n>, pela skill …`, ou o da herdeira) | task conferida e trazida, nenhuma operária viva, nenhuma pergunta aberta | não compacta nem pede `/clear`: passa o comando à herdeira (`proximo` até a ação `passar`, nota no molde de `nota-de-passagem.md`) |
 | **Condutora de shaping e de planejamento** | o pedido de nascimento da fase | fim de etapa do desenho ou do plano | compacta na fronteira (`/compact`, `write-plan/references/checkpoints.md`); nela, cria a seguinte (a de shaping cria a de planejamento) |
+| **Maestra** (só em 3 níveis) | rodou `conducao.mjs maestra` | uma condutora criada; fronteira limpa é um `PASSAR` recebido, com a condutora que pediu parada | não compacta nem pede `/clear`: no `PASSAR` seguinte ao corte, o verbo `maestra` sai `passar-maestra`, e ela cria a própria herdeira e para ([`maestra.md`](maestra.md)) |
 | **Operária** | o contrato no pedido de nascimento | a própria task fechada (commit; carimbo só em gatilho crítico ou publicação; aviso) | fecha a task pelo menor caminho, sem varredura nova; se a projeção passa o teto antes de fechar, para no próximo commit limpo e avisa `T<k>-FALHA janela <nonce>` |
 | **Comum** | o resto | fim de task ou de etapa do pedido | **não recebe aviso** (ruling do operador, 16/11/2026): a sessão fora de condução não é mandada cortar, e quem decide `/compact` ou `/clear` é o operador. No config, `papeis.comum.enabled: false`; apagar a chave volta a avisar |
 
 ## A régua da condutora
 
-Desde a D17a a régua é a da tabela acima, em fração da janela (`regua: null` no config do projeto). A partir de 400k, a condutora de execução fecha as operárias abertas e passa o comando na fronteira limpa seguinte; não há nível acima vigiando a janela dela. "Maestra", o nível que vigiava a janela das condutoras, é termo aposentado.
+Desde a D17a a régua é a da tabela acima, em fração da janela (`regua: null` no config do projeto). A partir de 400k, a condutora de execução fecha as operárias abertas e passa o comando na fronteira limpa seguinte; não há nível acima vigiando a janela dela. A maestra antiga, que vigiava a janela das condutoras, está aposentada; a maestra de 3 níveis só cria condutoras e vigia a própria janela.
 
 O sensor guarda a régua anterior como mecanismo: preencher `regua` (`faixasAcima`, `tetoAcima`, `cargaPadrao`) no config volta a contar faixas e teto em tokens **acima da carga inicial** da sessão (o contexto da primeira resposta, relido do começo do transcript a cada leitura).
 

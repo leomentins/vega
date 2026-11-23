@@ -11,11 +11,10 @@
  * operador (§ conferência do operador).
  */
 import { MARCA_DA_CONFERENCIA, PAPEL_DA_DISPENSA, TRAILER_DA_DISPENSA, codigoDoNucleo } from "./adaptador.mjs";
-import { BOTOES } from "./botoes.mjs";
-import { alcanca } from "./hooks-alcance.mjs";
 import { ErroPlano, casaAlgum } from "./ler-plano.mjs";
 import { perguntar as construirPergunta } from "./pergunta.mjs";
-import { CASOS, SEGUEM_PERGUNTANDO, consentidoNoTrazer, pedidoDeCaso, seguePorRepeticao } from "./consentimento.mjs";
+import { CASOS, SETTINGS_DO_HOST, definemAParadaDe, pedidoDeCaso, seguePorRepeticao } from "./consentimento.mjs";
+import { ACAO_DA_VOLTA as VOLTA_DA_CALIBRACAO } from "./calibracao.mjs";
 import { createRequire } from "node:module";
 
 const { parsePhaseCommit, sameCycle } = createRequire(import.meta.url)("../../hooks/lib/phase-commit-regex.js");
@@ -39,6 +38,13 @@ export function rulingDoReplano(subject, ciclo, reconhecer = parsePhaseCommit) {
 
 /** O trailer do commit do `/intra-plan` com o motivo do re-plano: `<tipo>:<chave>`. */
 export const TRAILER_REPLANO_MOTIVO = "Replano-Motivo";
+/**
+ * O trailer do commit do re-plano que nasceu de uma resposta do operador: o id da pergunta
+ * registrada (`p-…`) cuja resposta pediu o re-plano. Com ele, a mesma resposta vale como o sim da
+ * fase sob o plano novo (`autorizar-pela-resposta`), sem a segunda pergunta `plano-mudou`
+ * (hotfix conducao-corta-paradas-de-regra; memória `replano-pede-o-sim-da-fase-na-mesma-pergunta`).
+ */
+export const TRAILER_REPLANO_PERGUNTA = "Replano-Pergunta";
 /** Os tipos de motivo que o re-plano sozinho aceita. */
 export const TIPOS_DE_MOTIVO = Object.freeze(["ci", "revisao", "operaria", "escopo"]);
 const MOTIVO_RE = new RegExp(`^(${TIPOS_DE_MOTIVO.join("|")}):([a-z0-9][a-z0-9._-]{0,63})$`);
@@ -154,17 +160,15 @@ export function segmentosDosSteps(passos = [], codigo = codigoDoNucleo()) {
 }
 
 /**
- * O que, no diff da filha, pede pergunta antes de trazer: o que os hooks de
- * commit da maestra executam (T8) e caminho clínico, os dois só fora dos
- * `**Outputs:**` da task, e o canonico do ciclo conduzido. Output declarado
- * que os hooks alcançam não pergunta (ruling 18.5a do operador, T18): o plano e o
- * "sim" da fase já o aprovaram, e a Verificação roda o mesmo código logo
- * depois de trazer (D-VEGA22-17). `alcance` é o leitor dos hooks
- * (`hooks-alcance.mjs`); injetável para o teste não depender da árvore.
- * O alcance é a base do núcleo somada ao `alcanceDosHooks` do código do
- * adaptador (D-HN29-24a): o leitor recebe os dois como segundo argumento.
- * Caminho clínico e tela dos Steps vêm do código do adaptador (`codigo`, T20);
- * os arquivos de instrução do host, da declaração (`instrucoes`, T30).
+ * O que, no diff da filha, para o trazer (D-VEGA20-26): só o caminho clínico
+ * fora dos `**Outputs:**` da task (`caminho-clinico-fora-dos-outputs`) e o
+ * que define as paradas que ficam (`define-a-parada`, mesmo declarado). Hook,
+ * superfície de instrução, `settings*.json` e o canonico do ciclo deixam de
+ * parar, dentro ou fora dos Outputs: o que vem de fora vai ao relato
+ * (`foraDosOutputs`) e o canonico à parte (`canonicoAlterado`). O dado de
+ * paciente no conteúdo fica com o gate PHI do commit da operária, no escopo
+ * que o projeto dá a ele, e com a conferência do relato.
+ * Caminho clínico e tela dos Steps vêm do código do adaptador (`codigo`, T20).
  */
 export function motivosParaPerguntar(args) {
   return decidirNoTrazer(args).motivos;
@@ -193,46 +197,40 @@ export function ehDadoDeFixture(caminho) {
 
 /**
  * `motivosParaPerguntar` com o que deixou de perguntar por consentimento
- * (VEGA-37 T19): `{ motivos, consentidos }`, cada consentido
- * `{ caso, motivo, caminhos }` de `consentimento.mjs` — a casca de I/O grava
- * o registro por `gravarConsentimento`. Seguem sem pergunta: tela dos Steps
- * (já coberta, agora registrada), superfície de instrução ou hook que é
- * arquivo declarado em Outputs (D-VEGA37-22; `SEGUEM_PERGUNTANDO` segue
- * perguntando, inclusive declarado; as instruções de sessão do adaptador,
- * `instrucoes`, também, e nunca por repetição: D-VEGA37-45), teste ou contrato do motor que acompanha
- * o código declarado (D-VEGA37-27), motivo já respondido na fase
- * (`consentimentos` + `fase`, pergunta repetida) e, com `carimbo` da
- * tentativa que cobre a ponta, o resto do alcance dos hooks e das superfícies
- * de instrução (`coberto-pelo-carimbo`, D-VEGA19-58).
+ * (VEGA-37 T19) e o que vai ao relato (D-VEGA20-26):
+ * `{ motivos, consentidos, foraDosOutputs, canonicoAlterado }`. Cada
+ * consentido é `{ caso, motivo, caminhos }` de `consentimento.mjs` — a casca
+ * de I/O grava o registro por `gravarConsentimento`. Segue sem pergunta a tela
+ * dos Steps (caminho clínico que os Steps nomeiam, registrada) e o motivo já
+ * respondido na fase (`consentimentos` + `fase`, pergunta repetida), nunca o
+ * que define a parada nem o caminho clínico (`MOTIVOS_QUE_NUNCA_REPETEM`).
+ * `foraDosOutputs` são os caminhos da faixa fora dos Outputs, sem o canonico;
+ * `registraAParada(caminho)` diz se o diff de um `settings*.json` registra o
+ * gate de publicação (a casca lê o diff; sem ela, nenhum registra). O que
+ * define a parada é a união do motor com o `definemAParada` do `codigo`;
+ * `codigo` sem a lista para a faixa inteira, com o porquê no stderr.
  */
-export function decidirNoTrazer({ caminhos, canonico, outputs, passos = [], alcance = alcanca, codigo = codigoDoNucleo(), instrucoes = [], consentimentos = [], ciclo = null, fase = null, carimbo = null }) {
+export function decidirNoTrazer({ caminhos, canonico, outputs, passos = [], codigo = codigoDoNucleo(), consentimentos = [], ciclo = null, fase = null, registraAParada = () => false }) {
   const motivos = [];
   const consentidos = [];
-  // D-VEGA19-58: o carimbo da tentativa segue até a regra, que decide se ele cobre a ponta.
-  const pelaRegra = (motivo, lista) => {
-    const { restantes, consentidos: c } = consentidoNoTrazer({ motivo, caminhos: lista, outputs, instrucoes, carimbo });
-    consentidos.push(...c);
-    return restantes;
-  };
-  // Só Output declarado como ARQUIVO libera: diretório declarado (a pasta do host,
-  // `.husky/`) liberaria todo hook embaixo dele sem pergunta.
-  // O alcance efetivo: a base do núcleo somada ao que o adaptador declara (`alcanceDosHooks`, HN-29 T39).
-  // D-VEGA37-42 (decisão 28 da condução da F3): o que segue perguntando
-  // pergunta mesmo fora do alcance e das superfícies de instrução — registro de
-  // hook de outro host, runner do CI, `settings*.json` fora da pasta do host.
-  const noAlcance = alcance(caminhos, [...BOTOES.baseAlcance, ...(codigo.alcanceDosHooks ?? [])]);
-  const superficies = [...BOTOES.superficiesDeInstrucao, ...instrucoes];
-  const foraDoAlcance = caminhos.filter((c) => !noAlcance.includes(c) && !casaAlgum(c, superficies) && casaAlgum(c, SEGUEM_PERGUNTANDO));
-  const hooks = pelaRegra("alcance-dos-hooks", [...noAlcance, ...foraDoAlcance]);
-  if (hooks.length) motivos.push({ motivo: "alcance-dos-hooks", caminhos: hooks });
-  // D-VEGA19-42: arquivo de dado de teste (`*.json`, `*.md` sob `__tests__/fixtures/`) não é
-  // instrução; o dublê executável segue perguntando, e as instruções de sessão do adaptador também.
-  const instrucao = pelaRegra(
-    "superficie-de-instrucao",
-    caminhos.filter((c) => (casaAlgum(c, BOTOES.superficiesDeInstrucao) && !ehDadoDeFixture(c)) || casaAlgum(c, instrucoes)),
-  );
-  if (instrucao.length) motivos.push({ motivo: "superficie-de-instrucao", caminhos: instrucao });
-  if (caminhos.includes(canonico)) motivos.push({ motivo: "canonico-do-ciclo", caminhos: [canonico] });
+  // D-VEGA20-26: o que define as paradas que ficam conta como publicação, mesmo declarado nos Outputs.
+  // A lista é a do motor somada à do adaptador (`definemAParadaDe`); adaptador sem ela ⇒ toda a faixa
+  // para por `define-a-parada` (falha fechada), nunca a lista vazia.
+  let definem = null;
+  let semLista = null;
+  try {
+    definem = definemAParadaDe(codigo);
+  } catch (e) {
+    semLista = e.message;
+  }
+  if (definem === null) {
+    process.stderr.write(`conducao: ${semLista} — o trazer para a faixa inteira por define-a-parada\n`);
+    motivos.push({ motivo: "define-a-parada", caminhos: [...caminhos] });
+  }
+  else {
+    const daParada = caminhos.filter((c) => casaAlgum(c, definem) || (casaAlgum(c, SETTINGS_DO_HOST) && registraAParada(c)));
+    if (daParada.length) motivos.push({ motivo: "define-a-parada", caminhos: daParada });
+  }
   const segmentos = segmentosDosSteps(passos, codigo);
   const foraDeclarados = foraDosOutputs(caminhos.filter((c) => casaAlgum(c, codigo.caminhosProtegidos)), outputs);
   const daTela = (c) =>
@@ -242,14 +240,19 @@ export function decidirNoTrazer({ caminhos, canonico, outputs, passos = [], alca
   if (pelaTela.length) consentidos.push({ caso: CASOS.telaDosSteps, motivo: "caminho-clinico-fora-dos-outputs", caminhos: pelaTela });
   if (clinicos.length) motivos.push({ motivo: "caminho-clinico-fora-dos-outputs", caminhos: clinicos });
   // Pergunta repetida: o mesmo motivo do `trazer` já respondido pelo operador nesta fase.
-  // As instruções de sessão do adaptador (`instrucoes`) nunca seguem por repetição (D-VEGA37-45).
+  // `define-a-parada` e o caminho clínico nunca seguem por repetição (`MOTIVOS_QUE_NUNCA_REPETEM`).
   const ficam = [];
   for (const m of motivos) {
-    const origem = fase ? seguePorRepeticao({ consentimentos, ciclo, fase, tipo: "trazer", motivo: m.motivo, caminhos: m.caminhos, instrucoes }) : null;
+    const origem = fase ? seguePorRepeticao({ consentimentos, ciclo, fase, tipo: "trazer", motivo: m.motivo, caminhos: m.caminhos }) : null;
     if (origem) consentidos.push({ caso: CASOS.perguntaRepetida, motivo: m.motivo, caminhos: m.caminhos, origem: origem.sha ?? null, sim: origem.sim, quem: origem.quem });
     else ficam.push(m);
   }
-  return { motivos: ficam, consentidos };
+  return {
+    motivos: ficam,
+    consentidos,
+    foraDosOutputs: foraDosOutputs(caminhos, outputs).filter((c) => c !== canonico),
+    canonicoAlterado: caminhos.includes(canonico),
+  };
 }
 
 export const SHA_PREFIXO_RE = /^[0-9a-f]{7,40}$/;
@@ -591,6 +594,8 @@ export function trailersDaFilha({ task, r, sessaoFilha, verificacao, publicacao,
     "Conducao-Verificacao": verificacao,
     "Conducao-Publicacao": publicacao,
     ...dispensa,
+    // D-VEGA20-26: o relato da trazida vai à marca, porque a conferência apaga o registro `trazida`.
+    ...(r.relato ?? {}),
   };
 }
 
@@ -856,4 +861,120 @@ export function exigirCarimboDoConserto({ carimbos, conserto, cobre }) {
     "rodada-carimbo-nao-cobre-o-conserto",
     `nenhum carimbo trazido (${carimbos.join(", ")}) cobre o último commit de código do HEAD (${conserto ?? "nenhum"})`,
   );
+}
+
+// ── a volta da parada aposentada (VEGA-20 T20, AC-VEGA20-2, D5a) ────────────
+
+/** O evento do log que devolve o motivo ao degrau `observacao` e zera o histórico dele (`calibracao.mjs`). */
+export const ACAO_DA_VOLTA = VOLTA_DA_CALIBRACAO;
+/**
+ * A linha que o `git revert` escreve no corpo; o commit à mão do revert da marca vazia a repete.
+ * Toda linha conta (o commit que reverte várias), e o sha vale abreviado (7+, `revert.reference`).
+ */
+const REVERTE_RE = /^This reverts commit ([0-9a-f]{7,40})\b/gm;
+/** O corpo da marca `rodada` por pergunta (`git-conducao.mjs`, `PREFIXO_DO_NAO`). */
+const PREFIXO_DO_NAO = "Não, pelo operador: ";
+const RODADA_RE = /^Conducao: (T\d{1,3}) tentativa (\d+) rodada$/;
+/** O motivo da volta tem a forma do motivo da marca `aposentada` (`marcas.mjs`). */
+const MOTIVO_DA_VOLTA_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+/** Cada parte do recibo (`<sessao> <evento>`): token sem espaço, como o atributo do log o aceita. */
+const PARTE_DO_RECIBO_RE = /^[A-Za-z0-9._:-]{1,99}$/;
+
+/**
+ * O que desfez cada aposentadoria do ramo (VEGA-20 T20), puro. `aposentadas`: as marcas
+ * `aposentada` (`{ sha, task, motivo, tentativa }`); `commits`: os commits do ramo, do mais velho ao
+ * mais novo, `{ sha, subject, corpo, quando }`, com as próprias marcas entre eles (a ordem é o que
+ * diz "depois"). Desfaz a aposentadoria, no primeiro commit depois dela:
+ *  - `revert` — o corpo traz `This reverts commit <sha da marca>`;
+ *  - `rejeicao` — a marca `rodada` da mesma task (e tentativa, quando a marca a tem): o não da
+ *    conferência do que ela trouxe. A rodada cujo corpo abre com `Não, pelo operador: <textoDaCalibracao>:` é a própria
+ *    aposentadoria aplicando o não, e não conta.
+ * Devolve `[{ motivo, task, tentativa, desfecho, sha, desfeita, quando }]`, uma por aposentadoria
+ * desfeita; `sha` é o commit que desfez, `desfeita` a marca.
+ */
+export function voltasDoRamo({ aposentadas = [], commits = [], textoDaCalibracao }) {
+  exigir(typeof textoDaCalibracao === "string" && textoDaCalibracao.length > 0, "uso", "voltasDoRamo exige o texto da calibração");
+  const ordem = new Map(commits.map((c, i) => [c.sha, i]));
+  const daCalibracao = `${PREFIXO_DO_NAO}${textoDaCalibracao}:`;
+  const reverte = (corpo, sha) => [...corpo.matchAll(REVERTE_RE)].some((m) => sha.startsWith(m[1]));
+  const voltas = [];
+  for (const a of aposentadas) {
+    const ia = ordem.get(a.sha);
+    if (ia === undefined) continue;
+    let volta = null;
+    for (const c of commits.slice(ia + 1)) {
+      const corpo = String(c.corpo ?? "");
+      if (reverte(corpo, a.sha)) volta = { desfecho: "revert", c };
+      else {
+        const m = RODADA_RE.exec(String(c.subject ?? ""));
+        const mesma = m && m[1] === a.task && (!Number.isInteger(a.tentativa) || Number(m[2]) === a.tentativa);
+        if (mesma && !corpo.trimStart().startsWith(daCalibracao)) volta = { desfecho: "rejeicao", c };
+      }
+      if (volta) break;
+    }
+    if (!volta) continue;
+    voltas.push({
+      motivo: a.motivo,
+      task: a.task,
+      tentativa: Number.isInteger(a.tentativa) ? a.tentativa : null,
+      desfecho: volta.desfecho,
+      sha: volta.c.sha,
+      desfeita: a.sha,
+      // Nunca antes da marca: relógio atrasado de quem desfez não deixa a volta antes das perguntas que aposentaram.
+      quando: maisTarde(volta.c.quando, commits[ia].quando),
+    });
+  }
+  return voltas;
+}
+
+/** O mais tarde de dois horários ISO legíveis (o ilegível não conta; os dois ilegíveis ⇒ null). */
+function maisTarde(a, b) {
+  const t = [a, b].map((x) => Date.parse(x ?? "")).filter(Number.isFinite);
+  return t.length ? new Date(Math.max(...t)).toISOString() : null;
+}
+
+/**
+ * O uso de `voltar-a-perguntar --motivo <m> --recibo "<sessao> <evento>"` (VEGA-20 T20): o motivo
+ * na forma do da marca `aposentada`, e o recibo da frase do operador na conversa — a sessão e o
+ * evento em que ele disse que quer voltar a ser perguntado. Devolve `{ motivo, recibo }`, o recibo
+ * como token (`<sessao>/<evento>`), que o log aceita.
+ */
+export function exigirVoltaAMando({ motivo, recibo }) {
+  exigir(MOTIVO_DA_VOLTA_RE.test(motivo ?? ""), "uso", `voltar-a-perguntar exige --motivo <motivo da parada>, veio ${JSON.stringify(motivo ?? null)}`);
+  const partes = String(recibo ?? "").trim().split(/\s+/).filter(Boolean);
+  exigir(
+    partes.length === 2 && partes.every((p) => PARTE_DO_RECIBO_RE.test(p)),
+    "recibo-ausente",
+    `voltar-a-perguntar exige --recibo "<sessao> <evento>" — a sessão e o evento em que o operador disse que quer voltar a ser perguntado; veio ${JSON.stringify(recibo ?? null)}`,
+  );
+  return { motivo, recibo: partes.join("/") };
+}
+
+
+/**
+ * Os eventos `volta` das aposentadorias desfeitas (`voltasDoRamo`): um por desfazer, com o
+ * motivo que volta a parar, a task e a tentativa da aposentadoria, o `desfecho` (`revert` ou
+ * `rejeicao`) e o `sha` do commit que desfez. A calibração (`calibracao.mjs`, T6) lê o evento como
+ * recomeço do histórico do motivo e o devolve ao degrau `observacao`. `quando` é o do commit que
+ * desfez: o evento repetido tem a mesma chave e não duplica.
+ */
+export function eventosDaVolta({ ciclo, voltas = [] }) {
+  return voltas.map((v) => ({
+    acao: ACAO_DA_VOLTA,
+    ciclo,
+    task: v.task,
+    ...(Number.isInteger(v.tentativa) ? { tentativa: v.tentativa } : {}),
+    motivo: v.motivo,
+    desfecho: v.desfecho,
+    sha: v.sha,
+    quando: v.quando,
+  }));
+}
+
+/**
+ * O evento `volta` a mando do operador (`voltar-a-perguntar`): a sessão grava a frase dele com o
+ * recibo (`<sessao>/<evento>`, de `exigirVoltaAMando`); o operador não ganha comando.
+ */
+export function eventoDaVoltaAMando({ ciclo, motivo, recibo }) {
+  return { acao: ACAO_DA_VOLTA, ciclo, motivo, desfecho: "a-mando", recibo };
 }

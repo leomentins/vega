@@ -151,6 +151,11 @@ const PUBLICACAO_QUE_ALTERA_DECLARADA = /destrutiv|\bapag|\baltera|\bsubstitu|\b
 const PUBLICACAO_QUE_ALTERA_NO_TEXTO =
   /\bDROP\b|\bRENAME\b|\bTRUNCATE\b|\bDELETE\s+FROM\b|\bUPDATE\s+\S+\s+SET\b|\bALTER\s+COLUMN\b|\bALTER\s+POLICY\b|\bREVOKE\b|destrutiv/i;
 
+/** A linha `**Publicação:**` da task começa por `não`: a task declara que não publica. */
+export function declaraQueNaoPublica(declarada) {
+  return typeof declarada === "string" && /^\s*n[ãa]o\b/i.test(declarada);
+}
+
 /**
  * Por que a task pede o sim de novo, mesmo coberta pelo sim do ciclo:
  * `caminho-clinico` · `publicacao-que-altera` · null (o sim do ciclo a cobre).
@@ -163,7 +168,7 @@ export function simProprio({ clinica, publicacao, protegida = [], declarada, tex
   const d = typeof declarada === "string" ? declarada : "";
   // `**Publicação:** não` diz que a task não publica, ainda que o texto cite o verbo ("não rodar db
   // push"): só o caminho protegido segue pelo texto.
-  if (/^\s*n[ãa]o\b/i.test(d)) return protegida.length && PUBLICACAO_QUE_ALTERA_NO_TEXTO.test(texto) ? "publicacao-que-altera" : null;
+  if (declaraQueNaoPublica(d)) return protegida.length && PUBLICACAO_QUE_ALTERA_NO_TEXTO.test(texto) ? "publicacao-que-altera" : null;
   // Alteração declarada vence: "aditiva; remove a coluna antiga" altera.
   if (PUBLICACAO_QUE_ALTERA_DECLARADA.test(d)) return "publicacao-que-altera";
   // "não aditiva" não é aditiva.
@@ -202,6 +207,9 @@ export function lerPlano(texto, codigo = codigoDoNucleo()) {
         : [tasks[i - 1].id];
     const texto = [t.title, ...t.bullets.values()].join("\n");
     const outputs = pathsEntreCrases(t.bullets.get("Outputs") ?? "");
+    // `**Publicação:** não` (T40, AC-VEGA20-20): a task que só cita o verbo não publica — a citação
+    // não a marca sensível nem para a conferência; sem a linha, ou com `sim`, os verbos do texto.
+    const publicacao = declaraQueNaoPublica(t.bullets.get("Publicação")) ? [] : codigo.publicacao.filter((p) => texto.includes(p));
     const task = {
       id: t.id,
       titulo: t.title,
@@ -220,11 +228,11 @@ export function lerPlano(texto, codigo = codigoDoNucleo()) {
       rodadas: deRodadas(t.satisfiesRaw, codigo.marcasDeRodadas),
       // Marcas do `satisfies`: a conferência do operador (T14) casa por elas com o adaptador.
       marcas: marcasDo(t.satisfiesRaw),
-      publicacao: codigo.publicacao.filter((p) => texto.includes(p)),
+      publicacao,
       protegida: outputs.filter((o) => casaAlgum(o, codigo.caminhosProtegidos)),
       simProprio: simProprio({
         clinica: outputs.filter((o) => casaAlgum(o, codigo.caminhosQuePerguntam ?? codigo.caminhosProtegidos)),
-        publicacao: codigo.publicacao.filter((p) => texto.includes(p)),
+        publicacao,
         protegida: outputs.filter((o) => casaAlgum(o, codigo.caminhosProtegidos)),
         declarada: t.bullets.get("Publicação"),
         texto,

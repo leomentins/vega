@@ -22,6 +22,9 @@
  */
 
 import { CASOS, RESTRICAO_PERGUNTA, linhaDeConsentimentos, pedidoDeCaso, sensivelAditivaNaOrdem, simDaPublicacaoDoCiclo } from "./consentimento.mjs";
+import { casaAlgum } from "./ler-plano.mjs";
+import { TABELA_DE_DESTINATARIOS } from "./pergunta.mjs";
+import { camposDaPergunta, destinatarioDaPerguntaDaFilha } from "../pergunta/destinatarios.mjs";
 import { blocoDaTask } from "./verbos.mjs";
 
 /**
@@ -199,18 +202,7 @@ export function regraAbrir(ctx) {
   const pendente = cobertaPelaFase
     ? null
     : tarefas.find((x) => x.classe === "sensivel" && pedeSimDeNovo(plano.porId.get(x.task), aprovacoes));
-  if (pendente) {
-    const t = plano.porId.get(pendente.task);
-    return acao("perguntar", t.id, pendente.tentativa, {
-      motivo: "task-sensivel",
-      fase: fase.id,
-      task: t.id,
-      tentativa: pendente.tentativa,
-      porque: t.simProprio,
-      publicacao: t.publicacao,
-      caminhosProtegidos: t.protegida,
-    });
-  }
+  if (pendente) return perguntaSensivelDaFase(ctx, plano.porId.get(pendente.task), pendente.tentativa);
   const alvo = tarefas.map((x) => x.task).join("+");
   const sensiveis = tarefas.filter((x) => x.classe === "sensivel").map((x) => x.task);
   return acao("abrir", alvo, tarefas.map((x) => x.tentativa).join("+"), {
@@ -221,6 +213,39 @@ export function regraAbrir(ctx) {
     largura: { prontas: servidor.length, ciclo: plano.largura, teto, vivas, emVoo: vooAtivo.length, abertas: tarefas.length },
     ...(avisoOperador.length ? { avisoOperador } : {}),
   });
+}
+
+/**
+ * A pergunta `task-sensivel`, uma por fase (hotfix conducao-corta-paradas-de-regra, D3b do brainstorm
+ * do VEGA-20): lista pelo nome toda task da fase que ainda pede o sim próprio (`tasks`), a que puxou a
+ * pergunta primeiro, e o sim dado nela vale para todas — a condutora grava uma aprovação por task
+ * listada. `task`, `porque`, `publicacao` e `caminhosProtegidos` seguem os da primeira, como antes.
+ */
+function perguntaSensivelDaFase(ctx, t, tentativa) {
+  const { acao, plano, fase, aprovacoes, feita } = ctx;
+  const outras = (fase.tasks ?? [])
+    .map((id) => plano.porId.get(id))
+    .filter((x) => x && x.id !== t.id && !(typeof feita === "function" && feita(x.id)) && pedeSimDeNovo(x, aprovacoes));
+  const tasks = [t, ...outras].map((x) => ({ task: x.id, porque: x.simProprio, publicacao: x.publicacao, caminhosProtegidos: x.protegida }));
+  // O nonce é o da tentativa da primeira (o `abrir` sai com ele); o sim dado nele vale para as listadas.
+  return acao("perguntar", t.id, tentativa, {
+    motivo: "task-sensivel",
+    fase: fase.id,
+    task: t.id,
+    tentativa,
+    porque: t.simProprio,
+    publicacao: t.publicacao,
+    caminhosProtegidos: t.protegida,
+    tasks,
+  });
+}
+
+/**
+ * As tasks da fase `f` (do plano `p`) que pedem o sim próprio ao entrar por herança (`simProprio`):
+ * vão pelo nome no sim e no aviso da fase, nunca caladas.
+ */
+function sensiveisDaFase(p, f) {
+  return (p?.fases.find((x) => x.id === f.id)?.tasks ?? []).filter((id) => p.porId.get(id)?.simProprio);
 }
 
 /**
@@ -400,6 +425,32 @@ function emCurso(ctx) {
  */
 function perguntaDoPlano(ctx, faseId, ids, tasksMudadas, campos = {}) {
   const { acao, plano, planoHead, planoHeadBlob, planoBlob, diffPlano, trazidas, tasksQueMudaramDeClasse } = ctx;
+  // A resposta foi sobre uma parada desta fase: re-plano que mexe em task de outra fase segue perguntando.
+  // Nas duas versões do plano: task que veio de outra fase também mexe naquela fase.
+  const soDestaFase = tasksMudadas.every((d) => {
+    const versoes = [planoHead?.porId.get(d.task), plano.porId.get(d.task)].filter(Boolean);
+    return versoes.length > 0 && versoes.every((x) => x.fase === faseId);
+  });
+  const pelaResposta = campos.motivo || !soDestaFase ? null : respostaQueReplanejou(ctx);
+  if (pelaResposta) {
+    const sensiveis = sensiveisDaFase(planoHead, { id: faseId });
+    const mudaram = tasksQueMudaramDeClasse(plano, planoHead);
+    return acao("autorizar-pela-resposta", `plano:${faseId}`, 0, {
+      fase: faseId,
+      pergunta: pelaResposta,
+      planoNovo: planoHeadBlob,
+      planoAnterior: planoBlob,
+      tasksMudadas,
+      mudaramDeClasse: mudaram,
+      ...(sensiveis.length ? { sensiveis } : {}),
+      trazidas: ids.filter((id) => trazidas.has(id)).map((id) => ({ task: id, tentativa: trazidas.get(id).tentativa })),
+      comando: `autorizar-ciclo ${faseId} --pergunta ${pelaResposta} --sim "<texto da opção que o operador escolheu>"`,
+      aviso: `${faseId} reautorizada pela resposta de ${pelaResposta}, que pediu o re-plano (${tasksMudadas.length} task(s) mudada(s)${
+        mudaram.length ? `, ${mudaram.length} de classe` : ""
+      }${sensiveis.length ? `; sensíveis cobertas: ${sensiveis.join(", ")}` : ""}): sem segunda pergunta`,
+      ...campos,
+    });
+  }
   return acao("perguntar", `plano:${faseId}`, 0, {
     motivo: "plano-mudou",
     fase: faseId,
@@ -418,6 +469,21 @@ function perguntaDoPlano(ctx, faseId, ids, tasksMudadas, campos = {}) {
       }),
     ...campos,
   });
+}
+
+/**
+ * A pergunta registrada cuja resposta pediu o re-plano (trailer `Replano-Pergunta`), quando todo
+ * commit do re-plano desde a autorização a cita e todos citam a mesma; senão null (a pergunta
+ * `plano-mudou` de sempre). O verbo `autorizar-ciclo` confere o resto: resposta humana, mesmo ciclo,
+ * a opção escolhida e o uso único (`exigirPerguntaDoAutorizar`).
+ */
+function respostaQueReplanejou(ctx) {
+  const { replanos } = ctx;
+  if (!Array.isArray(replanos) || !replanos.length) return null;
+  const ids = new Set(replanos.map((c) => c.pergunta ?? null));
+  if (ids.size !== 1) return null;
+  const [id] = ids;
+  return typeof id === "string" && /^p-[0-9a-f]{16}$/.test(id) ? id : null;
 }
 
 /**
@@ -637,7 +703,9 @@ export function regraEncerrarSessao(ctx) {
 //   4. `passar-posse` — a herdeira toma a posse com o `lock_id` e a época da
 //      nota; a época sobe nessa escrita e a anterior para de gravar;
 //   5. `soltar-inscricao` (anterior) · `inscrever-na-proposta` e
-//      `confirmar-passagem` (herdeira);
+//      `confirmar-passagem` (herdeira); em 3 níveis (VEGA-20 T37, D10a) a
+//      inscrição é da maestra o ciclo inteiro, e o passo 5 é só o
+//      `confirmar-passagem`, sem `inscrita`;
 //   6. `arquivar-anterior` (herdeira, logo depois da confirmação: a anterior
 //      não espera a confirmação, para depois de soltar a inscrição) e, com
 //      ela arquivada e a árvore limpa, `desmontar-anterior` (herdeira).
@@ -716,11 +784,14 @@ function minutosDaHerdeira(ctx, herdeira) {
  * nada da fase anda. Sem passagem aberta, só o desmonte da anterior fala.
  *
  * Lê: `passagem`, `plano`, `encerradas`, `entrada` (`herdeira`, `anterior`,
- * `inscrita`, `ci`, `sessaoMaestra`), `agora`, `temCi`,
- * `prazoConfirmacaoMin`, `textoDaHerdeira`.
+ * `inscrita`, `ci`, `sessaoMaestra`), `agora`, `temCi`, `niveis`,
+ * `prazoConfirmacaoMin`, `textoDaHerdeira`. Em 3 níveis (`niveis === 3`) a
+ * condutora nunca se inscreve nem solta: quem segura a inscrição é a maestra.
  */
 export function regraPassagem(ctx) {
   const { ciclo, acao, nonce, passagem: p, entrada, plano, encerradas, temCi, prazoConfirmacaoMin, textoDaHerdeira } = ctx;
+  // Em 3 níveis a inscrição na proposta é da maestra do começo ao fim (T37): a condutora não a toca.
+  const inscreveSe = temCi && ctx.niveis !== 3;
   if (!p) return null;
   const a = p.aberta;
   if (!a) return regraDesmonte(ctx);
@@ -749,7 +820,7 @@ export function regraPassagem(ctx) {
         return acao("perguntar", `passagem:${a.sha}`, 0, { ...campos, motivo: "passagem-sem-fase-seguinte", detalhe: `${a.fase} é a última fase do plano: a fronteira dela é o fechamento do ciclo, não uma passagem` });
       const tentativa = falhas + 1;
       const trazer = { ramo: a.ramo ?? null, passagem: a.sha, tentativa, nonce: nonce(ciclo, `herdeira:${a.sha}`, tentativa, a.sha) };
-      const texto = textoDaHerdeira({ ciclo, fase: h.fase, sessao: entrada.sessaoMaestra ?? null, nota: a.nota ?? null, trazer });
+      const texto = textoDaHerdeira({ ciclo, fase: h.fase, sessao: entrada.sessaoMaestra ?? null, nota: a.nota ?? null, trazer, niveis: ctx.niveis ?? 2 });
       return acao("criar-condutora", `herdeira:${a.sha}`, tentativa, { ...campos, fase: h.fase, faseDaPassagem: a.fase, nome: h.nome, ordinal: h.ordinal, modelo: h.modelo, tentativa, texto, trazer, prazoMin: prazoConfirmacaoMin });
     }
     if (!vencido) return acao("esperar", `passagem:${a.sha}`, 0, { ...espera, motivo: "passagem-em-curso" });
@@ -763,7 +834,7 @@ export function regraPassagem(ctx) {
     // A época subiu: a dona é a herdeira. A anterior solta a inscrição e para; quem a arquiva é a
     // herdeira, logo depois de confirmar (`arquivar-anterior`). Sem esperar a confirmação: a espera
     // que cada condutora improvisava deixava a anterior ociosa (D19a do operador, 16/11/2026).
-    if (entrada.inscrita === true) return acao("soltar-inscricao", `soltar:${a.sha}`, 0, { ...campos, ferramenta: "unsubscribe_pr_activity", proposta: entrada.proposta?.numero ?? null });
+    if (ctx.niveis !== 3 && entrada.inscrita === true) return acao("soltar-inscricao", `soltar:${a.sha}`, 0, { ...campos, ferramenta: "unsubscribe_pr_activity", proposta: entrada.proposta?.numero ?? null });
     if (vencido && !p.confirmadaNoRamo) return acao("parar", `passagem:${a.sha}`, 0, { ...campos, motivo: "passagem-epoca-subiu", herdeira: herdeira?.sessao ?? null, prazoMin: prazoConfirmacaoMin });
     // Sem confirmação ainda, o motivo é outro: quem lê a parada leva ao operador o prazo da
     // herdeira, porque a anterior não fica de olho (se a herdeira cair antes de confirmar, é ele).
@@ -778,8 +849,8 @@ export function regraPassagem(ctx) {
     return acao("passar-posse", `posse:${a.sha}`, 0, { ...campos, lock_id: a.lock, verbo: "passar-posse" });
   }
 
-  // Herdeira dona: se inscreve, relê o CI e confirma.
-  if (temCi && entrada.inscrita !== true)
+  // Herdeira dona: se inscreve (em 2 níveis), relê o CI e confirma.
+  if (inscreveSe && entrada.inscrita !== true)
     return acao("inscrever-na-proposta", `inscricao:${a.sha}`, 0, { ...campos, ferramenta: "subscribe_pr_activity", proposta: entrada.proposta?.numero ?? null, depois: "confirmar-passagem" });
   return acao("confirmar-passagem", `confirmar:${a.sha}`, 0, {
     ...campos,
@@ -862,6 +933,7 @@ export function nomeDaCondutora(ciclo, fase, ordinal = 1) {
 export function regraAutorizarFase(ctx) {
   const { acao, plano, planoHead, planoHeadBlob, planoBlob, diffPlano, entrada, autorizadas, fase, cicloCobre, replanoSoDeRuling, semMudarAlcance, autorizacaoDoCiclo, tasksQueMudaramDeClasse } = ctx;
   if (!fase || autorizadas.has(fase.id)) return null;
+  const sensiveis = sensiveisDaFase(planoHead ?? plano, fase);
   if (cicloCobre && (replanoSoDeRuling || semMudarAlcance))
     return acao("herdar-autorizacao", `herdar:${fase.id}`, 0, {
       fase: fase.id,
@@ -871,7 +943,10 @@ export function regraAutorizarFase(ctx) {
       planoAnterior: planoBlob,
       tasksMudadas: [],
       replanos: [],
-      aviso: `${fase.id} autorizada pelo sim do ciclo de ${autorizacaoDoCiclo.sha.slice(0, 8)} (ruling de 27/10/2026)`,
+      aviso: `${fase.id} autorizada pelo sim do ciclo de ${autorizacaoDoCiclo.sha.slice(0, 8)} (ruling de 27/10/2026)${
+        sensiveis.length ? `; tasks sensíveis desta fase, que pedem um sim só, na primeira: ${sensiveis.join(", ")}` : ""
+      }`,
+      ...(sensiveis.length ? { sensiveis } : {}),
       // VEGA-37 T19: o caso já coberto passa a ficar registrado (`consentimento.mjs`).
       consentimento: pedidoDeCaso({ caso: CASOS.herancaEntreFases, fase: fase.id, origem: autorizacaoDoCiclo.sha }),
     });
@@ -883,6 +958,8 @@ export function regraAutorizarFase(ctx) {
     planoAnterior: planoBlob,
     ...(diffPlano ? { diffPlano } : {}),
     mudaramDeClasse: mudaram,
+    // O sim desta fase cobre as tasks sensíveis dela: vão pelo nome na pergunta.
+    ...(sensiveis.length ? { sensiveis } : {}),
     ci: entrada.ci ?? null,
   });
 }
@@ -1066,6 +1143,8 @@ export function regraVigia(ctx) {
   const cobertaPorReinicio = (r) => reinicioEm !== null && r.abertaEm != null && r.abertaEm <= reinicioEm;
   const perguntasDaVigia = [];
   const cutucar = [];
+  const reentregar = [];
+  const dentroDoPrazo = (t, r) => agora !== null && r.abertaEm != null && agora - r.abertaEm <= t.prazoMin * 60;
   const registrar = (t, r) => ({ registrarFalha: { task: t.id, tentativa: r.tentativa, coberta: "nao" } });
   for (const { t, r } of voo) {
     if (!r.nonce) {
@@ -1074,12 +1153,19 @@ export function regraVigia(ctx) {
     }
     const delas = filhas.filter((f) => f.nonce === r.nonce);
     const avisos = delas.map((f) => ({ f, a: lerAviso(f.aviso) })).filter(({ a }) => a && a.task === t.id && a.nonce === r.nonce);
-    // Pergunta da filha (P22 do ATRM-51): não é falha de trabalho. Vai ao operador
-    // sem `registrarFalha` nem `abrir`; a tentativa segue aberta e a maestra
-    // responde à filha por mensagem na mesma sessão (skill §3).
+    // Pergunta da filha (P22 do ATRM-51): não é falha de trabalho. Sai sem
+    // `registrarFalha` nem `abrir`; a tentativa segue aberta e a condutora
+    // responde à filha por mensagem na mesma sessão (skill §3). Desde a T22 do
+    // VEGA-20 vai primeiro à condutora: a classe técnica fica nela, e só o que
+    // a tabela de destinatários não deixa descer — ou classe ausente ou não
+    // reconhecida — sobe ao operador. O aviso diz se o trabalho parou ou está
+    // pronto (`trabalho`; sem o campo, `parado`).
     const pergunta = avisos.find(({ a }) => a.tipo === "FALHA" && a.arg === "pergunta");
     if (pergunta) {
-      perguntasDaVigia.push(["pergunta-da-filha", t, r, { sessao: pergunta.f.sessao ?? null, nonceTentativa: r.nonce, aviso: String(pergunta.f.aviso).trim() }]);
+      const aviso = String(pergunta.f.aviso).trim();
+      const { classe, trabalho } = camposDaPergunta(aviso);
+      const destinatario = destinatarioDaPerguntaDaFilha({ classe }, TABELA_DE_DESTINATARIOS);
+      perguntasDaVigia.push(["pergunta-da-filha", t, r, { sessao: pergunta.f.sessao ?? null, nonceTentativa: r.nonce, aviso, classe, trabalho, destinatario }]);
       continue;
     }
     if (avisos.some(({ a }) => a.tipo === "FALHA")) {
@@ -1089,6 +1175,10 @@ export function regraVigia(ctx) {
     }
     if (!delas.length || delas.every((f) => f.estado === "ARCHIVED")) {
       if (cobertaPorReinicio(r)) reabrir.set(t.id, { tentativa: r.tentativa, coberta: "sim", motivo: "reinicio-da-ponte" });
+      // Tentativa aberta e nenhuma operária na entrada, dentro do prazo da task: a sessão não nasceu
+      // (ou ficou fora da entrada). O `abrir` com o mesmo nonce devolve a mesma partida, então a
+      // condução reentrega em vez de parar (hotfix conducao-corta-paradas-de-regra); passado o prazo, a pergunta.
+      else if (!delas.length && dentroDoPrazo(t, r)) reentregar.push({ t, r });
       else perguntasDaVigia.push([delas.length ? "filha-sumiu" : "tentativa-sem-filha", t, r, registrar(t, r)]);
       continue;
     }
@@ -1132,6 +1222,19 @@ export function regraVigia(ctx) {
     if (!feita(t.id) && !estado.emVoo.has(t.id) && amb >= tetoFalhasAmbiente)
       perguntasDaVigia.push(["teto-de-falhas-ambiente", t, { tentativa: estado.maxTent.get(t.id) ?? 0 }, { falhasAmbiente: amb }]);
   }
+  if (!perguntasDaVigia.length && !cutucar.length && reentregar.length) {
+    const { t, r } = reentregar[0];
+    return acao("reentregar", t.id, r.tentativa, {
+      motivo: "operaria-nao-nasceu",
+      fase: fase.id,
+      task: t.id,
+      tentativa: r.tentativa,
+      nonceTentativa: r.nonce,
+      ref: r.ref ?? null,
+      comando: `abrir ${t.id} --tentativa ${r.tentativa} --nonce ${r.nonce}`,
+      aviso: `${t.id} tentativa ${r.tentativa} está aberta sem operária na entrada: o abrir com o mesmo nonce devolve a mesma partida (jaAberta). Antes de criar, list_sessions: se a operária desta tentativa existe, só pô-la na entrada.`,
+    });
+  }
   if (!perguntasDaVigia.length) {
     if (!cutucar.length) return null;
     const { t, r, f } = cutucar[0];
@@ -1165,16 +1268,7 @@ export function regraFazerCondutora(ctx) {
   if (!emCurso(ctx) || !daCondutora.length) return null;
   const t = daCondutora[0];
   const sensivel = t.publicacao.length > 0 || t.protegida.length > 0;
-  if (sensivel && !cobertaPelaFase && pedeSimDeNovo(t, aprovacoes))
-    return acao("perguntar", t.id, 0, {
-      motivo: "task-sensivel",
-      fase: fase.id,
-      task: t.id,
-      tentativa: 0,
-      porque: t.simProprio,
-      publicacao: t.publicacao,
-      caminhosProtegidos: t.protegida,
-    });
+  if (sensivel && !cobertaPelaFase && pedeSimDeNovo(t, aprovacoes)) return perguntaSensivelDaFase(ctx, t, 0);
   return acao("fazer-condutora", t.id, 0, {
     fase: fase.id,
     task: t.id,
@@ -1263,4 +1357,96 @@ export function maestraCriarFechamento(ctx) {
     conduzidas,
     texto: textoDoFechamento({ ciclo, repo, sessao: anterior, conduzidas, exigirEncerramentos, anterior: "condutora anterior" }),
   });
+}
+
+// ── aposentadoria da parada de resposta constante (VEGA-20 T19) ─────────────
+
+/** O trailer do commit que a aposentadoria produz (`aposentar --nonce`). */
+export const TRAILER_DA_APOSENTADA = "Conducao-Aposentada";
+/**
+ * O texto de quem responde quando a opção aplicada pede o do operador: diz que foi a calibração.
+ * A volta (T20) o reconhece no corpo da marca `rodada`: o não que a própria aposentadoria aplicou
+ * não é rejeição do operador.
+ */
+export const TEXTO_DA_CALIBRACAO = "seguiu sozinha pela calibração";
+/** Quantos ids das respostas que calibraram vão no evento: o atributo do log é um token de até 200 caracteres. */
+export const DECISOES_NO_EVENTO = 10;
+const LETRAS = "abcdefghijklmnopqrstuvwxyz";
+
+/**
+ * A instância da parada que `aposentado()` (calibracao.mjs, T6) julga, com os campos da task do
+ * plano que a parada nomeia: `publicacao`, `simProprio`, `estacao`, `tipo` = o motivo, e
+ * `caminhos` = os Outputs, os caminhos dos Steps (`passos`: a tela clínica que o trazer libera
+ * pelos Steps) e os `extras` (o que a trazida trouxe de fora dos Outputs). `protegida` junta a do
+ * plano aos caminhos que casam os `protegidos` do adaptador. Parada sem task do plano, ou task sem
+ * Outputs legíveis ⇒ null: sem a lista de caminhos não há o que conferir, e ela segue parando. O
+ * `proximo` não veta motivo nenhum aqui — nem `canonico-do-ciclo` (D-VEGA20-18): os vetos são
+ * todos de `aposentado()`.
+ */
+export function instanciaDaParada(parada, plano, { extras = [], protegidos = [] } = {}) {
+  if (!parada || typeof parada.task !== "string") return null;
+  const t = (plano?.tasks ?? []).find((x) => x.id === parada.task);
+  if (!t || !Array.isArray(t.outputs) || !t.outputs.length) return null;
+  const caminhos = [...new Set([...t.outputs, ...(t.passos ?? []), ...extras].filter((c) => typeof c === "string"))];
+  const protegida = [...new Set([...(t.protegida ?? []), ...caminhos.filter((c) => casaAlgum(c, protegidos))])];
+  return {
+    publicacao: [...(t.publicacao ?? [])],
+    protegida,
+    simProprio: t.simProprio ?? null,
+    caminhos,
+    tipo: parada.motivo,
+    estacao: t.estacao ?? null,
+  };
+}
+
+/**
+ * A opção da parada que a resposta constante escolhe: a letra `a`, `b`, … é a posição da opção,
+ * como a pergunta registrada as mostra (`pergunta.formaDe`). Resposta que não é uma letra só
+ * (`a+b`, alternativa livre, sem letra) ou letra sem opção ⇒ null: a parada segue parando.
+ */
+export function opcaoDaResposta(parada, resposta) {
+  if (typeof resposta !== "string" || resposta.length !== 1) return null;
+  const i = LETRAS.indexOf(resposta);
+  const opcoes = Array.isArray(parada?.opcoes) ? parada.opcoes : [];
+  if (i < 0 || i >= opcoes.length || typeof opcoes[i]?.id !== "string") return null;
+  return { id: opcoes[i].id, ...(opcoes[i].texto ? { texto: opcoes[i].texto } : {}) };
+}
+
+/**
+ * A ação que substitui a parada aposentada (D-VEGA20-1, D5a): segue com a resposta constante,
+ * leva o que o evento `aposentada` grava — `motivo`, `task`, `resposta`, `n`, `sequencias`,
+ * `decisoes` (os ids das respostas que calibraram, as mais recentes), `por: calibracao` — e a linha
+ * do relato da condutora, `seguiu sozinha: <motivo> (<n> iguais)`. Nunca mensagem própria: a linha
+ * vai no relato que a condutora já entrega. `consulta` é a saída de `calibracao.consulta`; sem
+ * veredito `aposentado`, ou sem opção para a resposta, devolve null e a parada segue.
+ */
+export function acaoDaAposentadoria(parada, consulta, { decisoes = [] } = {}) {
+  if (!parada || parada.acao !== "perguntar" || consulta?.veredito !== "aposentado") return null;
+  const opcao = opcaoDaResposta(parada, consulta.resposta);
+  if (!opcao) return null;
+  const ids = decisoes.filter((d) => /^d-[0-9a-f]{16}$/.test(d)).slice(-DECISOES_NO_EVENTO);
+  const resto = Object.fromEntries(Object.entries(parada).filter(([k]) => k !== "acao" && k !== "ponteiro"));
+  return {
+    acao: "aposentada",
+    nonce: parada.nonce,
+    ciclo: parada.ciclo,
+    head: parada.head,
+    ...(parada.plano !== undefined ? { plano: parada.plano } : {}),
+    ...(parada.fase !== undefined ? { fase: parada.fase } : {}),
+    task: parada.task,
+    ...(parada.tentativa !== undefined ? { tentativa: parada.tentativa } : {}),
+    motivo: parada.motivo,
+    resposta: consulta.resposta,
+    opcao,
+    n: consulta.n,
+    sequencias: consulta.sequencias,
+    ...(ids.length ? { decisoes: ids.join("+") } : {}),
+    por: "calibracao",
+    relato: `seguiu sozinha: ${parada.motivo} (${consulta.n} iguais)`,
+    // O texto que a opção pede de quem responde (`--operador`): diz que foi a calibração, nunca o operador.
+    textoDeQuemResponde: `${TEXTO_DA_CALIBRACAO}: ${parada.motivo} (${consulta.n} iguais)`,
+    trailer: `${TRAILER_DA_APOSENTADA}: ${parada.motivo}`,
+    comando: `aposentar --nonce ${parada.nonce}`,
+    parada: resto,
+  };
 }

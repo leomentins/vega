@@ -129,6 +129,22 @@ export const DESPACHANTES_DE_GUARD = Object.freeze([
   ".*/hooks/run-post-hook.mjs",
 ]);
 
+/** Dependência, lockfile e instalação: o que roda na máquina de quem instala (D-VEGA37-29, D-VEGA37-40). */
+export const DEPENDENCIA_E_INSTALACAO = Object.freeze([
+  "**/package.json",
+  "**/pnpm-lock.yaml",
+  "**/package-lock.json",
+  "**/yarn.lock",
+  "**/pnpm-workspace.yaml",
+  "**/instalar-*.sh",
+  "**/install*.sh",
+  "**/.npmrc",
+  "**/.pnpmfile.cjs",
+  // Ferramenta, no mesmo grupo da D-VEGA37-40.
+  "**/.mcp.json",
+  "**/mcp.json",
+]);
+
 export const SEGUEM_PERGUNTANDO = Object.freeze([
   "**/settings*.json",
   "**/package.json",
@@ -206,7 +222,87 @@ export const NUNCA_REPETEM_POR_CAMINHO = Object.freeze([...SEGUEM_PERGUNTANDO]);
  * maestra grava, e caminho clínico nunca segue por repetição. Separado de
  * `MOTIVOS_DE_INTEGRIDADE` para não mudar quem o lê por outro critério.
  */
-export const MOTIVOS_QUE_NUNCA_REPETEM = Object.freeze(["canonico-do-ciclo", "caminho-clinico-fora-dos-outputs"]);
+export const MOTIVOS_QUE_NUNCA_REPETEM = Object.freeze(["canonico-do-ciclo", "caminho-clinico-fora-dos-outputs", "define-a-parada"]);
+
+/**
+ * O que define as paradas que ficam no `trazer` (D-VEGA20-26): conta como
+ * publicação e para mesmo declarado nos Outputs (`define-a-parada`). O motor
+ * guarda só o que é de todo projeto — a declaração e o código do adaptador
+ * (`.vega/**`, `.altair/**`); o resto (o gate de publicação, a liberação da
+ * publicação do ciclo, os scripts de publicação do banco, o `db push` do
+ * estado) o projeto declara em `definemAParada` no `codigo` do adaptador, e
+ * quem lê usa a união (`definemAParadaDe`). Sem ela, a operária que esvazia
+ * `caminhosProtegidos` ou os verbos de publicação seria trazida calada e
+ * desligaria o freio do trazer seguinte.
+ * O registro do gate num `settings*.json` também conta, pelo conteúdo dos
+ * dois lados (`settingsMudaAParada`), nunca pelo caminho: o `settings*.json`
+ * que não mexe no gate segue sem pergunta.
+ */
+export const DEFINEM_A_PARADA = Object.freeze([".vega/**", ".altair/**"]);
+
+/**
+ * A lista efetiva do que define a parada: a do motor e a que o `codigo` do
+ * adaptador declara em `definemAParada`. Campo ausente nunca vale lista
+ * vazia: sem a lista do projeto, lança, e quem lê veta `define-a-parada`
+ * (falha fechada).
+ */
+export function definemAParadaDe(codigo) {
+  const doProjeto = codigo?.definemAParada;
+  if (!Array.isArray(doProjeto) || !doProjeto.every((g) => typeof g === "string" && g.trim()))
+    throw new Error("o código do adaptador não declara `definemAParada` — o que define a parada fica sem a lista do projeto");
+  return Object.freeze([...new Set([...DEFINEM_A_PARADA, ...doProjeto])]);
+}
+
+/** O `settings*.json` que mexe no registro do gate de publicação define a parada (D-VEGA20-26). */
+export const SETTINGS_DO_HOST = Object.freeze(["**/settings*.json"]);
+const GATE_DE_PUBLICACAO_RE = /publicacao-gate/;
+
+/**
+ * O que, num `settings*.json`, liga o gate de publicação: `disableAllHooks` e
+ * cada objeto que tem um texto que cita o gate, em qualquer profundidade,
+ * inteiro (chaves em ordem: `timeout`, `async`, `type` contam), com o caminho
+ * dele no JSON e o `matcher` mais próximo acima — trocar o matcher, mexer no
+ * objeto do gate, apagar o registro ou repetir a chave `hooks` (o JSON fica com
+ * a última) mudam essa leitura sem citar o gate na linha. `undefined` =
+ * arquivo ausente; `null` = ilegível.
+ */
+function registroDaParada(texto) {
+  if (texto === null || texto === undefined) return undefined;
+  let json;
+  try {
+    json = JSON.parse(texto);
+  } catch {
+    return null;
+  }
+  if (!json || typeof json !== "object" || Array.isArray(json)) return null;
+  const registros = new Set();
+  const ordenado = (v) =>
+    Array.isArray(v) ? v.map(ordenado) : v && typeof v === "object" ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, ordenado(v[k])])) : v;
+  (function andar(v, caminho, matcher, pai) {
+    if (typeof v === "string") {
+      if (GATE_DE_PUBLICACAO_RE.test(v)) registros.add(JSON.stringify([caminho.slice(0, -1), matcher, ordenado(pai ?? v)]));
+    } else if (Array.isArray(v)) v.forEach((x, i) => andar(x, [...caminho, i], matcher, v));
+    else if (v && typeof v === "object") {
+      const m = Object.hasOwn(v, "matcher") ? v.matcher : matcher;
+      for (const [k, x] of Object.entries(v)) andar(x, [...caminho, k], m, v);
+    }
+  })(json, [], null, null);
+  return JSON.stringify({ desligado: json.disableAllHooks ?? null, registros: [...registros].sort() });
+}
+
+/**
+ * O `settings*.json` muda a parada de publicação entre `antes` e `depois` (o
+ * texto do arquivo em cada lado; `null`/`undefined` = ausente): o registro do
+ * gate ou o `disableAllHooks` mudam, ou um dos lados é ilegível. Fail-closed:
+ * o ilegível para (D-VEGA20-26).
+ */
+export function settingsMudaAParada(antes, depois) {
+  const a = registroDaParada(antes);
+  const d = registroDaParada(depois);
+  if (a === null || d === null) return true;
+  const vazio = JSON.stringify({ desligado: null, registros: [] });
+  return (a ?? vazio) !== (d ?? vazio);
+}
 
 /**
  * Teste e contrato do motor (D-VEGA37-27): `__tests__/*.test.mjs` do motor e
@@ -333,7 +429,11 @@ const VERSAO_DO_ESQUEMA = 1;
  */
 export function eventosDoConsentimento(r, { pergunta_id, origem_resposta, ponteiro }) {
   const titulo = `${TITULO_DO_CONSENTIMENTO}: ${r.caso}`;
-  const comum = { pergunta_id, sessao: SESSAO_DO_CONSENTIMENTO, ciclo: r.ciclo, versao_esquema: VERSAO_DO_ESQUEMA, has_patient_data: false, item: "D1", titulo, ponteiro };
+  // D-VEGA20-29 (VEGA-20 T44): o re-plano sozinho herda com o ponteiro da pergunta citada, e o registro
+  // só reconhece a resposta de Vega ao `replano-sozinho` (e a delegação D58 dela) pelo ponteiro do
+  // consentimento. A citada segue no ponteiro, depois do prefixo, e no trailer `Conducao-Pergunta-Citada`.
+  const doReplano = r.caso === CASOS.replanoSozinho && typeof ponteiro === "string" && !ponteiro.startsWith(PONTEIRO_DO_CONSENTIMENTO);
+  const comum = { pergunta_id, sessao: SESSAO_DO_CONSENTIMENTO, ciclo: r.ciclo, versao_esquema: VERSAO_DO_ESQUEMA, has_patient_data: false, item: "D1", titulo, ponteiro: doReplano ? `${PONTEIRO_DO_CONSENTIMENTO}${ponteiro}` : ponteiro };
   return [
     {
       ...comum,
@@ -351,7 +451,9 @@ export function eventosDoConsentimento(r, { pergunta_id, origem_resposta, pontei
       origem_resposta,
       // T43 (D-VEGA19-53): o re-plano que segue sozinho é decisão de Vega por delegação — o registro
       // do projeto grava a delegação que o operador digitou e confere a autoria humana dela.
-      ...(r.caso === CASOS.replanoSozinho ? { quem: "vega" } : {}),
+      // D-VEGA20-29 (VEGA-20 T44): a delegação de Vega é sempre do mandato engenharia (D-VEGA19-55);
+      // sem ele o registro recusava a resposta (`mandato: esperado …`) e o re-plano sozinho parava.
+      ...(r.caso === CASOS.replanoSozinho ? { quem: "vega", mandato: "engenharia" } : {}),
     },
   ];
 }
@@ -662,8 +764,52 @@ function origemHumanaOuRecusa(o, pergunta_id) {
   if (o?.sem_registro === true)
     throw new ErroPlano("registro-fora", `o registro de perguntas está fora do ar: a origem de ${pergunta_id} não se confere agora (nada gravado; repita com o registro de pé)`);
   if (!ORIGENS_HUMANAS.includes(o?.origem))
-    throw new ErroPlano("origem-sem-prova", `a resposta de ${pergunta_id} não tem prova de origem humana (${o?.origem ?? "sem resposta"}${o?.motivo ? `, ${o.motivo}` : ""}): o sim herdado não vale`);
+    throw new ErroPlano("origem-sem-prova", `a resposta de ${pergunta_id} não tem prova de origem humana (${o?.origem ?? "sem resposta"}${o?.motivo ? `, ${o.motivo}` : ""}): o sim herdado não vale${typeof o?.conserto === "string" && o.conserto ? ` — ${o.conserto}` : ""}`);
   return o.origem;
+}
+
+/** O id de uma sessão (a forma do `session_id` do host). */
+const SESSAO_RE = /^[A-Za-z0-9_-]{1,128}$/;
+
+/**
+ * Em 3 níveis o operador responde à pergunta da condutora na sessão da maestra
+ * (hotfix vega-maestra-leva-pergunta). A condutora só aplica a decisão depois
+ * de conferir, pela `origemEfetiva()` do registro, que a resposta é um turno
+ * do operador nesta sessão (`digitado`) ou na sessão da SUA maestra
+ * (`digitado-no-hub-conferido`, com o recibo nessa sessão e o `get_event`
+ * dela já conferido pelo gancho). O texto da mensagem da maestra nunca conta:
+ * a prova é o evento do operador, relido pela plataforma.
+ *   — sem resposta ⇒ `resposta-ausente` (a pergunta segue aberta: esperar);
+ *   — registro fora ⇒ `registro-fora`; sem registro ⇒ `registro-nao-declarado`;
+ *   — `digitado-no-hub-conferido` de outra sessão ⇒ `resposta-de-outra-sessao`;
+ *   — `repasse-hub` (recibo não conferido) ⇒ `recibo-nao-conferido`;
+ *   — `agente` ou prova que não resolve ⇒ `origem-sem-prova`.
+ * Devolve `{ origem, recibo }`.
+ */
+export function exigirRespostaDaMaestra({ perguntas, pergunta_id, maestra }) {
+  if (!PERGUNTA_ID_RE.test(pergunta_id ?? "")) throw new ErroPlano("pergunta-ausente", `exige --pergunta <p-…>, veio ${JSON.stringify(pergunta_id ?? null)}`);
+  if (!SESSAO_RE.test(maestra ?? "")) throw new ErroPlano("maestra-ausente", `exige --maestra <id da maestra da entrada>, veio ${JSON.stringify(maestra ?? null)}`);
+  if (!perguntas || typeof perguntas.origemEfetiva !== "function")
+    throw new ErroPlano("registro-nao-declarado", `sem registro de perguntas para conferir quem respondeu ${pergunta_id}: nada aplicado (fail-closed)`);
+  let o;
+  try {
+    o = perguntas.origemEfetiva(pergunta_id);
+  } catch (e) {
+    throw new ErroPlano("origem-sem-prova", `a origem de ${pergunta_id} não se lê (${String(e?.message ?? e).split("\n")[0]}): nada aplicado`);
+  }
+  if (o?.sem_registro === true)
+    throw new ErroPlano("registro-fora", `o registro de perguntas está fora do ar: quem respondeu ${pergunta_id} não se confere agora (repita com o registro de pé)`);
+  if (o?.origem == null) throw new ErroPlano("resposta-ausente", `${pergunta_id} ainda não tem resposta no registro: rodar comando.mjs responder com o texto do evento do recibo, ou esperar`);
+  if (o.origem === "digitado") return { origem: o.origem, recibo: null };
+  const sessaoDoRecibo = String(o.recibo ?? "").trim().split(/\s+/)[0] || null;
+  if (o.origem === "digitado-no-hub-conferido") {
+    if (sessaoDoRecibo !== maestra)
+      throw new ErroPlano("resposta-de-outra-sessao", `a resposta de ${pergunta_id} veio da sessão ${JSON.stringify(sessaoDoRecibo)}, não da maestra ${maestra}: em 3 níveis só a maestra do ciclo leva a resposta do operador`);
+    return { origem: o.origem, recibo: o.recibo };
+  }
+  if (o.origem === "repasse-hub")
+    throw new ErroPlano("recibo-nao-conferido", `a resposta de ${pergunta_id} chegou por repasse sem o get_event do recibo conferido (${o.motivo ?? "sem motivo"}): chamar get_event com a sessão e o evento do Recibo no mesmo turno, e conferir de novo`);
+  throw new ErroPlano("origem-sem-prova", `a resposta de ${pergunta_id} não tem prova de origem humana (${o.origem}${o.motivo ? `, ${o.motivo}` : ""}): nada aplicado`);
 }
 
 /**
@@ -672,6 +818,27 @@ function origemHumanaOuRecusa(o, pergunta_id) {
  * um item só; a opção que autoriza é a de texto byte a byte igual ao `--sim`.
  */
 export const PONTEIRO_DO_AUTORIZAR = "autorizar-ciclo:";
+
+/**
+ * As paradas da condução cuja resposta pode pedir re-plano da fase (a vigia, o CI, a pergunta da
+ * operária, o trazer que pede aprovação): só a pergunta delas, citada em `Replano-Pergunta`, vale como o sim da fase
+ * (hotfix conducao-corta-paradas-de-regra). Ponteiro `conducao:<motivo>:<id>` de outro motivo recusa.
+ */
+export const PARADAS_QUE_REPLANEJAM = Object.freeze([
+  "ci-vermelho",
+  "pergunta-da-filha",
+  "segunda-falha",
+  "teto-de-falhas",
+  "teto-de-falhas-ambiente",
+  "filha-sumiu",
+  "tentativa-sem-filha",
+  "prazo-vencido",
+  "replano-repetido",
+  "trazer-exige-aprovacao",
+]);
+
+/** Trailer da marca autorizada pela resposta de uma parada: as conferências da herança o releem. */
+export const TRAILER_PERGUNTA_DA_PARADA = "Conducao-Pergunta-Parada";
 
 /**
  * Confere que a pergunta citada pelo `autorizar-ciclo --pergunta` (ou pela
@@ -684,7 +851,10 @@ export const PONTEIRO_DO_AUTORIZAR = "autorizar-ciclo:";
  *   — registro fora ⇒ `registro-fora`; origem não humana ⇒ `origem-sem-prova`;
  *   — sem abertura ⇒ `pergunta-sem-abertura`; abertura de outro ciclo ⇒
  *     `pergunta-de-outro-ciclo`; ponteiro diferente de `autorizar-ciclo:<fase>`
- *     ⇒ `pergunta-de-outra-fase`; mais de um item ⇒ `pergunta-fora-da-convencao`;
+ *     ⇒ `pergunta-de-outra-fase` — salvo, com `aceitaParada`, o `conducao:<motivo>:<id>` da
+ *     parada cuja resposta pediu o re-plano desta fase (trailer `Replano-Pergunta`), ou a pergunta
+ *     registrada deste ciclo de ponteiro livre (nem `autorizar-ciclo:` nem `conducao:`), aberta fora de task;
+ *     mais de um item ⇒ `pergunta-fora-da-convencao`;
  *   — nenhuma opção (ou mais de uma) com o texto do `sim` ⇒ `sim-diferente-da-pergunta`
  *     (os dois lados no mesmo aparo, `trim()`: o `--sim` cru e a opção, como o `simDoCorpo` da
  *     marca relida; D-VEGA19-48);
@@ -695,7 +865,7 @@ export const PONTEIRO_DO_AUTORIZAR = "autorizar-ciclo:";
  *   — outra marca `autorizada` não herdada já cita a pergunta ⇒ `pergunta-reusada`
  *     (`marca`: a própria marca de origem, na herança, não conta).
  */
-export function exigirPerguntaDoAutorizar({ repo, perguntas, pergunta_id, ciclo, fase, sim, marca = null, rodar = rodarGit }) {
+export function exigirPerguntaDoAutorizar({ repo, perguntas, pergunta_id, ciclo, fase, sim, marca = null, aceitaParada = false, paradaAbertaDesde = null, aoAceitarParada = null, rodar = rodarGit }) {
   if (!perguntas || typeof perguntas.perguntaDoAutorizar !== "function")
     throw new ErroPlano("registro-nao-declarado", `o registro de perguntas não lê a pergunta do autorizar (perguntaDoAutorizar): ${pergunta_id} não se confere, nada gravado (fail-closed)`);
   let r;
@@ -708,7 +878,20 @@ export function exigirPerguntaDoAutorizar({ repo, perguntas, pergunta_id, ciclo,
   const ab = r?.abertura ?? null;
   if (!ab || ab.pergunta_id !== pergunta_id) throw new ErroPlano("pergunta-sem-abertura", `a pergunta ${pergunta_id} não tem abertura no registro: o sim não se confere`);
   if (ab.ciclo !== ciclo) throw new ErroPlano("pergunta-de-outro-ciclo", `a pergunta ${pergunta_id} é do ciclo ${JSON.stringify(ab.ciclo ?? null)}, não de ${ciclo}: não autoriza este ciclo`);
-  if (ab.ponteiro !== `${PONTEIRO_DO_AUTORIZAR}${fase}`)
+  // A pergunta de uma parada da condução (`conducao:<motivo>:<id>`) cuja resposta pediu o re-plano
+  // desta fase vale como o sim dela, quando quem chama provou a ligação pelo trailer
+  // `Replano-Pergunta` (`aceitaParada`; hotfix conducao-corta-paradas-de-regra). O resto da conferência é o mesmo.
+  // A parada é desta fase: aberta depois da autorização que o re-plano mudou (`paradaAbertaDesde`, epoch s).
+  // Sem carimbo na abertura, ou sem a hora, não liga: recusa (a releitura da herança não passa a hora:
+  // a ligação foi conferida ao gravar a marca).
+  const abertaEm = Date.parse(ab.carimbo ?? "") / 1000;
+  const nestaFase = paradaAbertaDesde === null ? marca !== null : Number.isFinite(abertaEm) && abertaEm >= paradaAbertaDesde;
+  // A pergunta registrada deste ciclo aberta fora de task (ponteiro livre: nem `autorizar-ciclo:` nem
+  // `conducao:`) também liga, pelas mesmas conferências (T38 do VEGA-20, AC-VEGA20-17).
+  const ponteiroLivre = ab.ponteiro == null || (typeof ab.ponteiro === "string" && !ab.ponteiro.startsWith(PONTEIRO_DO_AUTORIZAR) && !ab.ponteiro.startsWith("conducao:"));
+  const daParadaDaConducao = typeof ab.ponteiro === "string" && ab.ponteiro.startsWith("conducao:") && PARADAS_QUE_REPLANEJAM.includes(ab.ponteiro.split(":")[1] ?? "");
+  const daParada = aceitaParada === true && nestaFase && (daParadaDaConducao || ponteiroLivre);
+  if (ab.ponteiro !== `${PONTEIRO_DO_AUTORIZAR}${fase}` && !daParada)
     throw new ErroPlano("pergunta-de-outra-fase", `a pergunta ${pergunta_id} aponta ${JSON.stringify(ab.ponteiro ?? null)}, não ${PONTEIRO_DO_AUTORIZAR}${fase}: não autoriza esta fase`);
   const itens = Array.isArray(ab.itens) ? ab.itens : [];
   if (itens.length !== 1) throw new ErroPlano("pergunta-fora-da-convencao", `a pergunta ${pergunta_id} tem ${itens.length} itens: a do autorizar tem um só (D-VEGA19-44)`);
@@ -729,6 +912,8 @@ export function exigirPerguntaDoAutorizar({ repo, perguntas, pergunta_id, ciclo,
   const usos = marcasQueCitamAPergunta(repo, pergunta_id, { rodar }).filter((sha) => !marca || !sha.startsWith(marca));
   if (usos.length > 0)
     throw new ErroPlano("pergunta-reusada", `a pergunta ${pergunta_id} já autorizou ${usos[0].slice(0, 8)}: uma pergunta autoriza uma marca só`);
+  // O sim veio da pergunta de uma parada: quem grava a marca é avisado (`Conducao-Pergunta-Parada`).
+  if (daParada && ab.ponteiro !== `${PONTEIRO_DO_AUTORIZAR}${fase}` && typeof aoAceitarParada === "function") aoAceitarParada();
   return origem;
 }
 
@@ -759,7 +944,9 @@ export function exigirPerguntaCitadaDaMarca({ repo, perguntas, pergunta_id, cicl
   if (tr[TRAILER.pergunta] !== pergunta_id)
     throw new ErroPlano("pergunta-ilegivel", `${String(sha).slice(0, 8)} cita ${pergunta_id}, a marca do sim ${raiz.slice(0, 8)} não`);
   const sim = simDoCorpo(rodar(repo, ["log", "-1", "--format=%b", raiz]));
-  return exigirPerguntaDoAutorizar({ repo, perguntas, pergunta_id, ciclo, fase, sim, marca: raiz, rodar });
+  // A marca autorizada pela resposta de uma parada (a citação foi conferida ao gravá-la) relê igual.
+  const aceitaParada = tr[TRAILER_PERGUNTA_DA_PARADA] === "sim";
+  return exigirPerguntaDoAutorizar({ repo, perguntas, pergunta_id, ciclo, fase, sim, marca: raiz, aceitaParada, rodar });
 }
 
 /**
@@ -926,8 +1113,8 @@ export function acompanhaOCodigo(caminho, outputs) {
  *   — teste ou contrato do motor que acompanha o código declarado ⇒
  *     `teste-que-acompanha-o-codigo` (D-VEGA37-27).
  * Caminho que casa as instruções de sessão que o adaptador declara
- * (`instrucoes`, `sessao.instrucoes`) nunca é consentido: fica em `restantes`,
- * mesmo declarado (D-VEGA37-45). A regra lê o campo, nunca uma lista de nomes.
+ * (`instrucoes`, `sessao.instrucoes`) nunca é consentido por declaração nem por repetição,
+ * mesmo declarado (D-VEGA37-45) — só pelo carimbo que aprova a ponta (D1a, hotfix conducao-corta-paradas-de-regra). A regra lê o campo, nunca uma lista de nomes.
  * Com `carimbo` que cobre a ponta (`carimboCobreAPonta`), o que sobrou — fora
  * dos Outputs, ou declarado e em `SEGUEM_PERGUNTANDO_DECLARADO` — vira
  * `coberto-pelo-carimbo`, menos `NUNCA_PELO_CARIMBO` (D-VEGA19-58).
@@ -945,13 +1132,14 @@ export function consentidoNoTrazer({ motivo, caminhos, outputs, instrucoes = [],
     else restantes.push(c);
   }
   // D-VEGA19-58: o que sobrou, a revisão aprovada da tentativa cobre — menos o que muda a regra que ela seguiu.
+  // D1a (hotfix conducao-corta-paradas-de-regra): as instruções de sessão do adaptador também.
   const cobre = carimboCobreAPonta(carimbo);
-  const pelaRevisao = cobre ? restantes.filter((c) => !casaAlgum(c, NUNCA_PELO_CARIMBO)) : [];
+  const pelaRevisao = cobre ? [...sessao, ...restantes].filter((c) => !casaAlgum(c, NUNCA_PELO_CARIMBO)) : [];
   const consentidos = [];
   if (declarados.length) consentidos.push({ caso: CASOS.instrucaoDeclaradaEmOutputs, motivo, caminhos: declarados });
   if (acompanham.length) consentidos.push({ caso: CASOS.testeQueAcompanhaOCodigo, motivo, caminhos: acompanham });
   if (pelaRevisao.length) consentidos.push({ caso: CASOS.cobertoPeloCarimbo, motivo, caminhos: pelaRevisao, carimbo: carimbo.caminho ?? null });
-  const ficam = new Set([...sessao, ...restantes.filter((c) => !pelaRevisao.includes(c))]);
+  const ficam = new Set([...sessao, ...restantes].filter((c) => !pelaRevisao.includes(c)));
   return { restantes: caminhos.filter((c) => ficam.has(c)), consentidos };
 }
 
@@ -967,11 +1155,19 @@ export function consentidoNoTrazer({ motivo, caminhos, outputs, instrucoes = [],
  * limiar (`*-threshold`), o registro de modos (`guard-mode-registry.json`), a
  * lista de liberação do git-guard (`git-guard-allow*`) e os esquemas que um
  * guard valida (`*-schema.json`); o resto de `state/` — `operators.json`, os
- * carimbos, os contratos — o carimbo cobre. As instruções de sessão do
- * adaptador, o canonico do ciclo e o caminho clínico ficam fora por construção
- * (outra lista ou outro motivo).
+ * carimbos, os contratos — o carimbo cobre. Desde a D1a do hotfix
+ * conducao-corta-paradas-de-regra (20/11/2026), também dependência e instalação
+ * seguem parando, e as instruções de sessão do adaptador e o canonico do ciclo
+ * passam a seguir pelo carimbo, com aviso; o caminho clínico fora dos Outputs
+ * segue parando (outro motivo).
  */
 export const NUNCA_PELO_CARIMBO = Object.freeze([
+  // D1a do hotfix conducao-corta-paradas-de-regra (20/11/2026): dependência e instalação seguem
+  // parando com carimbo — decidem o que roda na máquina (D-VEGA37-29, D-VEGA37-40) —, e o hook do git
+  // e o passo do CI que cobra o carimbo: são registro de hook e guard, e mudam a regra da revisão.
+  ...DEPENDENCIA_E_INSTALACAO,
+  ".husky/**",
+  ".*/scripts/review-carimbo-ci.mjs",
   "**/settings*.json",
   "**/hooks.json",
   ".*/hooks/*.json",

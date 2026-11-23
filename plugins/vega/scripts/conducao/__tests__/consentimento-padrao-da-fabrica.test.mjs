@@ -8,7 +8,10 @@
  * `consentidoPorDecisaoDaTask`, `registrosDoTrazer` (com o canonico e o
  * contrato do HEAD) e o gate de cada registro. O contrato usado aqui é o
  * `contrato.md` real da condução, lido do disco, e o do HEAD de um repositório
- * temporário, pelo `contratoDoHead`.
+ * temporário, pelo `contratoDoHead`. Desde a VEGA-20 T43 (D-VEGA20-26) o
+ * trazer só gera, dos três, a tela dos Steps; os outros dois chegam à cadeia
+ * do registro explícitos, e hook, `settings*.json`, `.vega/` fora da parada e
+ * workflow deixam de ser motivo.
  * NOMES DE TESTE SAO CONTRATO: conferidos por `assert-test-names.mjs --file/--name`.
  */
 import { test } from "node:test";
@@ -31,13 +34,12 @@ const HOOK = ".claude/hooks/um-hook.js";
 const TESTE = ".claude/hooks/__tests__/um-hook.test.mjs";
 const TELA = "apps/app/src/labs/exames/page.tsx";
 const CODIGO = {
+  definemAParada: ["**/hooks/gate-de-publicacao.js", "**/liberacao-da-publicacao.mjs", "db/scripts/**"],
   caminhosProtegidos: ["apps/app/src/labs/**"],
   telasProtegidasDosSteps: ["apps/app/src/labs/**"],
   foraDasTelasDosSteps: [],
   alcanceDosHooks: [],
 };
-// Os hooks alcançam todo caminho do harness; a tela do app fica fora do alcance (é o caso da tela dos Steps).
-const alcance = (caminhos) => caminhos.filter((x) => !x.startsWith("apps/"));
 
 function canonico({ linha = null, decisoes = [] } = {}) {
   return [
@@ -57,16 +59,29 @@ function canonico({ linha = null, decisoes = [] } = {}) {
   ].join("\n");
 }
 
-/** Os três casos de uma vez: hook declarado, teste que o acompanha e a tela dos Steps. */
+/**
+ * Os três casos de uma vez: hook declarado, teste que o acompanha e a tela dos
+ * Steps. O trazer gera só a tela (D-VEGA20-26); os outros dois chegam à cadeia
+ * do registro como o caso que outro leitor grava.
+ */
 function decidirTres() {
-  return decidirNoTrazer({
+  const d = decidirNoTrazer({
     caminhos: [HOOK, TESTE, TELA],
     canonico: CANONICO,
     outputs: [HOOK],
     passos: ["apps/app/src/labs/exames"],
-    alcance,
     codigo: CODIGO,
   });
+  assert.deepEqual(d.consentidos.map((x) => x.caso), [c.CASOS.telaDosSteps]);
+  assert.deepEqual(d.foraDosOutputs, [TESTE, TELA]);
+  return {
+    ...d,
+    consentidos: [
+      { caso: c.CASOS.instrucaoDeclaradaEmOutputs, motivo: "alcance-dos-hooks", caminhos: [HOOK] },
+      { caso: c.CASOS.testeQueAcompanhaOCodigo, motivo: "alcance-dos-hooks", caminhos: [TESTE] },
+      ...d.consentidos,
+    ],
+  };
 }
 
 function registros({ consentidos, texto, contrato = CONTRATO }) {
@@ -75,7 +90,8 @@ function registros({ consentidos, texto, contrato = CONTRATO }) {
 
 test("canonico sem a linha consente os três casos pelo padrão da fábrica, sem pergunta", () => {
   const corpo = c.padraoDaFabrica(CONTRATO);
-  assert.ok(corpo && c.CASOS_DO_PADRAO.every((x) => corpo.includes(`\`${x}\``)), "o contrato da condução tem a seção do padrão com os três casos");
+  // D-VEGA20-26: dos três, o trazer só gera a tela dos Steps, que é o caso que o padrão nomeia.
+  assert.ok(corpo && corpo.includes(`\`${c.CASOS.telaDosSteps}\``), "o contrato da condução tem a seção do padrão com a tela dos Steps");
   const d = decidirTres();
   assert.deepEqual(new Set(d.consentidos.map((x) => x.caso)), new Set(c.CASOS_DO_PADRAO));
   const r = registros({ consentidos: d.consentidos, texto: canonico() });
@@ -101,11 +117,15 @@ test("caso devolvido à pergunta pela linha pergunta", () => {
   assert.deepEqual(motivos, [{ motivo: "caminho-clinico-fora-dos-outputs", caminhos: [TELA] }]);
 });
 
-test("settings declarado nos Outputs segue perguntando", () => {
+test("settings declarado nos Outputs segue perguntando só quando registra o gate de publicação", () => {
+  // D-VEGA20-26: o `settings.json` deixa de parar; só o diff que toca o registro do gate define a parada.
   const p = ".claude/settings.json";
-  const d = decidirNoTrazer({ caminhos: [p], canonico: CANONICO, outputs: [p], alcance, codigo: CODIGO });
-  assert.equal(d.consentidos.length, 0);
-  assert.ok(d.motivos.some((m) => m.caminhos.includes(p)), "settings pergunta mesmo declarado");
+  for (const outputs of [[p], []]) {
+    const d = decidirNoTrazer({ caminhos: [p], canonico: CANONICO, outputs, codigo: CODIGO });
+    assert.deepEqual([d.consentidos, d.motivos], [[], []], JSON.stringify(outputs));
+    const gate = decidirNoTrazer({ caminhos: [p], canonico: CANONICO, outputs, codigo: CODIGO, registraAParada: () => true });
+    assert.deepEqual(gate.motivos, [{ motivo: "define-a-parada", caminhos: [p] }]);
+  }
 });
 
 test("contrato sem a seção do padrão, ou com ela duplicada, pergunta", () => {
@@ -148,26 +168,31 @@ test("canonico ilegível pergunta", () => {
   assert.equal(registros({ consentidos: decidirTres().consentidos, texto: "" }).voltam.length, 3);
 });
 
-test("vega declarado nos Outputs não pergunta e fora deles pergunta", () => {
-  const p = ".vega/declaracao.json";
-  const dentro = decidirNoTrazer({ caminhos: [p], canonico: CANONICO, outputs: [p], alcance, codigo: CODIGO });
-  assert.ok(!dentro.motivos.some((m) => m.caminhos.includes(p)), "declarado não pergunta");
-  assert.ok(dentro.consentidos.some((x) => x.caso === c.CASOS.instrucaoDeclaradaEmOutputs && x.caminhos.includes(p)));
-  const fora = decidirNoTrazer({ caminhos: [p], canonico: CANONICO, outputs: [], alcance, codigo: CODIGO });
-  assert.ok(fora.motivos.some((m) => m.caminhos.includes(p)), "fora dos Outputs pergunta");
-  // o resto de SEGUEM_PERGUNTANDO fica, mesmo sob `.vega/`
-  const modo = ".vega/vigia-mode";
-  const m = decidirNoTrazer({ caminhos: [modo], canonico: CANONICO, outputs: [modo], alcance, codigo: CODIGO });
-  assert.ok(m.motivos.some((x) => x.caminhos.includes(modo)), "arquivo de modo segue perguntando");
+test("vega declarado nos Outputs pergunta por definir a parada, dentro e fora deles", () => {
+  // D-VEGA20-26: a declaração e o código do adaptador definem as paradas que ficam; contam como publicação.
+  for (const p of [".vega/declaracao.json", ".vega/vigia-mode"])
+    for (const outputs of [[p], []]) {
+      const d = decidirNoTrazer({ caminhos: [p], canonico: CANONICO, outputs, codigo: CODIGO });
+      assert.deepEqual(d.motivos, [{ motivo: "define-a-parada", caminhos: [p] }], `${p} ${JSON.stringify(outputs)}`);
+      assert.deepEqual(d.consentidos, []);
+    }
   assert.ok(c.SEGUEM_PERGUNTANDO.includes(".vega/**"), "a lista de quem lê fora do trazer não muda");
+  assert.ok(c.DEFINEM_A_PARADA.includes(".vega/**"));
 });
 
 const CI = ".github/workflows/ci.yml";
 const D30 = "- **D-X1-30:** A T27 põe o passo novo no `.github/workflows/ci.yml`.";
 
+/**
+ * A decisão registrada da task sobre motivos que já não nascem no trazer
+ * (D-VEGA20-26): o workflow chega como motivo explícito, e o trazer de
+ * verdade confere que não o pergunta mais.
+ */
 function porDecisao(caminhos, texto) {
-  const d = decidirNoTrazer({ caminhos, canonico: CANONICO, outputs: caminhos, alcance, codigo: CODIGO });
-  const p = c.consentidoPorDecisaoDaTask({ motivos: d.motivos, canonico: texto, task: TASK });
+  const d = decidirNoTrazer({ caminhos, canonico: CANONICO, outputs: caminhos, codigo: CODIGO });
+  assert.deepEqual(d.motivos, [], "o workflow não pergunta mais no trazer");
+  const motivos = [{ motivo: "superficie-de-instrucao", caminhos }];
+  const p = c.consentidoPorDecisaoDaTask({ motivos, canonico: texto, task: TASK });
   const r = registros({ consentidos: [...d.consentidos, ...p.consentidos], texto });
   return { motivos: c.devolverAosMotivos(p.motivos, r.voltam), registros: r.registros };
 }

@@ -21,12 +21,12 @@ import * as c from "../consentimento.mjs";
 import { ErroPlano } from "../ler-plano.mjs";
 import { decidirNoTrazer } from "../verbos.mjs";
 import { trazer } from "../git-conducao.mjs";
+import { foiConstruida, ponteiroDa } from "../pergunta.mjs";
 
 const CICLO = "X-1";
 const CANONICO = ".agents/ciclo/vega/X-1/canonico.md";
-const CODIGO = { caminhosProtegidos: [], telasProtegidasDosSteps: [], foraDasTelasDosSteps: [], alcanceDosHooks: [] };
+const CODIGO = { caminhosProtegidos: [], telasProtegidasDosSteps: [], foraDasTelasDosSteps: [], alcanceDosHooks: [], definemAParada: ["**/hooks/gate-de-publicacao.js", "**/liberacao-da-publicacao.mjs", "db/scripts/**"] };
 // Todo caminho do diff conta como alcançado pelos hooks: o caso sai do Output declarado.
-const alcance = (caminhos) => caminhos;
 const HOOK = ".claude/hooks/um-hook.js";
 const TESTE = ".claude/hooks/__tests__/um-hook.test.mjs";
 
@@ -63,18 +63,23 @@ function repo() {
 }
 
 const decidir = (caminhos, outputs, extra = {}) =>
-  decidirNoTrazer({ caminhos, canonico: CANONICO, outputs, alcance, codigo: CODIGO, ciclo: CICLO, fase: "F3", ...extra });
+  decidirNoTrazer({ caminhos, canonico: CANONICO, outputs, codigo: CODIGO, ciclo: CICLO, fase: "F3", ...extra });
+/** Os dois casos do mapa, como a cadeia do registro os recebe (D-VEGA20-26: o trazer não os gera mais). */
+const CONSENTIDOS = [
+  { caso: c.CASOS.instrucaoDeclaradaEmOutputs, motivo: "alcance-dos-hooks", caminhos: [HOOK] },
+  { caso: c.CASOS.testeQueAcompanhaOCodigo, motivo: "alcance-dos-hooks", caminhos: [TESTE] },
+];
 const doTrazer = (consentidos, texto) =>
   c.registrosDoTrazer({ consentidos, canonico: texto, ciclo: CICLO, fase: "F3", task: "T33", quem: "operador", quando: "2026-11-14T12:00:00Z" });
 
 test("trazer consentido grava o registro do caso", () => {
   const { dir, g } = repo();
   try {
-    // o hook é Output declarado e o teste o acompanha: os dois seguem sem pergunta
+    // D-VEGA20-26: o hook declarado e o teste de fora seguem sem pergunta e sem caso; o teste vai ao relato
     const decidido = decidir([HOOK, TESTE], [HOOK]);
-    assert.deepEqual(decidido.motivos, []);
-    assert.deepEqual(decidido.consentidos.map((x) => x.caso), [c.CASOS.instrucaoDeclaradaEmOutputs, c.CASOS.testeQueAcompanhaOCodigo]);
-    const { registros, voltam } = doTrazer(decidido.consentidos, canonico());
+    assert.deepEqual([decidido.motivos, decidido.consentidos, decidido.foraDosOutputs], [[], [], [TESTE]]);
+    // a cadeia do registro segue a mesma para os casos que chegam a ela
+    const { registros, voltam } = doTrazer(CONSENTIDOS, canonico());
     assert.deepEqual(voltam, []);
     assert.deepEqual(registros.map((r) => r.decisao), ["D-X1-22", "D-X1-27"]);
     const gravados = c.gravarRegistrosDoTrazer({ repo: dir, registros, cerca: () => {} });
@@ -94,10 +99,11 @@ test("trazer consentido grava o registro do caso", () => {
       phi: () => ({ recusar: false }),
       cerca: () => {},
     });
-    // canonico do ciclo nunca repete (D-VEGA37-40): a repetição exerce o alcance dos hooks
-    const repetida = decidir([".claude/hooks/outro-hook.js"], [], { consentimentos: c.lerConsentimentos(dir, { ciclo: CICLO }) });
-    assert.deepEqual(repetida.motivos, []);
-    const r2 = doTrazer(repetida.consentidos, canonico());
+    // D-VEGA20-26: o trazer não repete mais motivo nenhum; a cadeia da repetição segue para quem a chama
+    const outro = [".claude/hooks/outro-hook.js"];
+    const origem = c.seguePorRepeticao({ consentimentos: c.lerConsentimentos(dir, { ciclo: CICLO }), ciclo: CICLO, fase: "F3", tipo: "trazer", motivo: "alcance-dos-hooks", caminhos: outro });
+    assert.ok(origem?.sha, "a resposta do operador é a origem da repetição");
+    const r2 = doTrazer([{ caso: c.CASOS.perguntaRepetida, motivo: "alcance-dos-hooks", caminhos: outro, origem: origem.sha, sim: origem.sim, quem: origem.quem }], canonico());
     assert.deepEqual(r2.voltam, []);
     const [rep] = c.gravarRegistrosDoTrazer({ repo: dir, registros: r2.registros, cerca: () => {} });
     assert.equal(rep.registro.caso, c.CASOS.perguntaRepetida);
@@ -142,13 +148,12 @@ test("texto fora do plano é recusado", () => {
 });
 
 test("caso sem linha no mapa pergunta", () => {
-  const decidido = decidir([HOOK, TESTE], [HOOK]);
   // sem a linha `**Consentimentos:**`: os dois voltam a perguntar, nunca linha padrão
-  const semMapa = doTrazer(decidido.consentidos, canonico({ mapa: false }));
+  const semMapa = doTrazer(CONSENTIDOS, canonico({ mapa: false }));
   assert.deepEqual(semMapa.registros, []);
-  assert.deepEqual(c.devolverAosMotivos(decidido.motivos, semMapa.voltam), [{ motivo: "alcance-dos-hooks", caminhos: [HOOK, TESTE] }]);
+  assert.deepEqual(c.devolverAosMotivos([], semMapa.voltam), [{ motivo: "alcance-dos-hooks", caminhos: [HOOK, TESTE] }]);
   // mapa aponta decisão ausente do canonico: só esse caso volta
-  const semDecisao = doTrazer(decidido.consentidos, canonico({ comD27: false }));
+  const semDecisao = doTrazer(CONSENTIDOS, canonico({ comD27: false }));
   assert.deepEqual(semDecisao.registros.map((r) => r.registro.caso), [c.CASOS.instrucaoDeclaradaEmOutputs]);
   assert.deepEqual(c.devolverAosMotivos([], semDecisao.voltam), [{ motivo: "alcance-dos-hooks", caminhos: [TESTE] }]);
   // caso que o mapa não nomeia (tela dos Steps): pergunta
@@ -170,7 +175,9 @@ test("caso sem linha no mapa pergunta", () => {
 const CICLO_GIT = "TESTE-34-conducao";
 const CAMINHO_GIT = `.agents/ciclo/teste/${CICLO_GIT}/canonico.md`;
 const SCRIPT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "conducao.mjs");
-const D1 = "instrução declarada em Outputs segue sem pergunta.";
+const D1 = "tela que os Steps nomeiam segue sem pergunta.";
+/** A tela clínica que os Steps da T1 nomeiam: fora dos Outputs, o trazer a grava como `tela-dos-steps` (D-VEGA20-26). */
+const TELA = "app/telas/agenda/agenda/page.tsx";
 
 function canonicoGit() {
   return [
@@ -187,7 +194,7 @@ function canonicoGit() {
     "",
     "### 1.5 Modo de Execução",
     "",
-    "**Consentimentos:** `instrucao-declarada-em-outputs` → D-TESTE-1",
+    "**Consentimentos:** `tela-dos-steps` → D-TESTE-1",
     "",
     "**Largura do ciclo:** 3",
     "",
@@ -203,7 +210,7 @@ function canonicoGit() {
     `- **Outputs:** \`${HOOK}\` (create)`,
     "- **Estação:** servidor",
     "- **Independente:** sim",
-    "- **Steps:** faz",
+    `- **Steps:** muda a tela \`${TELA}\``,
     "- **Verificação:** `echo verificacao-T1`.",
     "- **Esperado:** exit 0.",
     "- **Falha-se:** exit 1.",
@@ -256,7 +263,7 @@ function ambienteGit(t) {
     const ref = `refs/conducao/${CICLO_GIT}/T1/1`;
     f("fetch", "-q", "origin", `+${ref}:refs/remotes/tentativa`);
     f("checkout", "-q", "--detach", "refs/remotes/tentativa");
-    escrever(filha, { [HOOK]: "export const um = 1;\n" });
+    escrever(filha, { [HOOK]: "export const um = 1;\n", [TELA]: "export default 1;\n" });
     f("add", "-A");
     f("commit", "-q", "-m", `${CICLO_GIT}-F1/T1 — trabalho`);
     f("push", "-q", "origin", `HEAD:${ref}`);
@@ -283,6 +290,9 @@ test("registro não gravado no trazer pergunta e mantém o trabalho", (t) => {
   });
   assert.equal(s.acao, "perguntar", JSON.stringify(s));
   assert.equal(s.motivo, "consentimento-nao-gravado");
+  // A cópia empurrada não tira a parada do construtor: ela sai com ponteiro e grava o evento tipado.
+  assert.ok(foiConstruida(s), "a parada da cópia passa pelo construtor");
+  assert.ok(ponteiroDa(s).startsWith("conducao:consentimento-nao-gravado:d-"));
   assert.equal(s.remedio, "regravar-consentimentos");
   assert.equal(s.erro, "disco cheio");
   assert.equal(s.trazido, true);
@@ -303,7 +313,7 @@ test("registro não gravado no trazer pergunta e mantém o trabalho", (t) => {
   assert.equal(r.saida.consentimentos.length, 1);
   const lidos = c.lerConsentimentos(a.maestra, { ciclo: CICLO_GIT });
   assert.deepEqual(lidos.map((l) => [l.sha, l.caso, l.sim, l.caminhos, l.task]), [
-    [r.saida.consentimentos[0].sha, c.CASOS.instrucaoDeclaradaEmOutputs, D1, [HOOK], "T1"],
+    [r.saida.consentimentos[0].sha, c.CASOS.telaDosSteps, D1, [TELA], "T1"],
   ]);
 
   // idempotente: a segunda vez não grava nada

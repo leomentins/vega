@@ -80,29 +80,44 @@ test("caminhosDoDiff: sem merge é o diff cru; com merge sai só o que é mudan�
   assert.deepEqual(v.comCanonico({ cru: ["a"], caminhos: ["b"], canonico: "can.md" }), ["b"]);
 });
 
-test("motivosParaPerguntar: hooks fora dos Outputs, instrução, canonico e caminho clínico", () => {
-  const alcance = (cs) => cs.filter((c) => c.startsWith(".husky/"));
-  const m = v.motivosParaPerguntar({
-    caminhos: [".husky/pre-commit", "x/canonico.md", "src/ok.mjs"],
+test("decidirNoTrazer: hook, instrução e canonico vão ao relato sem pergunta; caminho clínico fora dos Outputs e o que define a parada param (D-VEGA20-26)", () => {
+  const codigo = { caminhosProtegidos: ["db/migrations/**"], telasProtegidasDosSteps: [], foraDasTelasDosSteps: [], definemAParada: ["**/hooks/gate-de-publicacao.js"] };
+  const d = v.decidirNoTrazer({
+    caminhos: [".husky/pre-commit", "x/canonico.md", "src/ok.mjs", ".claude/hooks/x.js", "CLAUDE.md"],
     canonico: "x/canonico.md",
     outputs: ["src/ok.mjs"],
-    alcance,
+    codigo,
   });
-  assert.deepEqual(m.map((x) => x.motivo), ["alcance-dos-hooks", "canonico-do-ciclo"]);
-  // hook declarado como arquivo nos Outputs não pergunta; diretório declarado não libera
-  // (`.husky/**` segue perguntando mesmo declarado, D-VEGA37-41 — o exemplo é um hook comum)
-  const deHook = (cs) => cs.filter((c) => c.startsWith(".claude/hooks/"));
-  assert.deepEqual(v.motivosParaPerguntar({ caminhos: [".claude/hooks/x.js"], canonico: "c", outputs: [".claude/hooks/x.js"], alcance: deHook }), []);
-  assert.equal(v.motivosParaPerguntar({ caminhos: [".claude/hooks/x.js"], canonico: "c", outputs: [".claude/hooks/"], alcance: deHook }).length, 1);
-  assert.equal(v.motivosParaPerguntar({ caminhos: [".husky/pre-commit"], canonico: "c", outputs: [".husky/pre-commit"], alcance }).length, 1);
+  assert.deepEqual(d.motivos, []);
+  assert.deepEqual(d.foraDosOutputs, [".husky/pre-commit", ".claude/hooks/x.js", "CLAUDE.md"]);
+  assert.equal(d.canonicoAlterado, true);
+  // Diretório declarado cobre o que está embaixo dele: nada fora, nada para.
+  const dir = v.decidirNoTrazer({ caminhos: [".claude/hooks/x.js"], canonico: "c", outputs: [".claude/hooks/"], codigo });
+  assert.deepEqual([dir.motivos, dir.foraDosOutputs, dir.canonicoAlterado], [[], [], false]);
+  // Caminho clínico fora dos Outputs para; declarado, segue (o sim da fase cobre a task sensível).
+  assert.deepEqual(v.motivosParaPerguntar({ caminhos: ["db/migrations/1.sql"], canonico: "c", outputs: [], codigo }), [
+    { motivo: "caminho-clinico-fora-dos-outputs", caminhos: ["db/migrations/1.sql"] },
+  ]);
+  assert.deepEqual(v.motivosParaPerguntar({ caminhos: ["db/migrations/1.sql"], canonico: "c", outputs: ["db/migrations/1.sql"], codigo }), []);
   assert.deepEqual(v.foraDosOutputs(["d/a.ts", "e/b.ts", "f.ts"], ["d", "f.ts"]), ["e/b.ts"]);
 });
 
-test("motivosParaPerguntar: o alcance soma o alcanceDosHooks do adaptador à base do núcleo (D-HN29-24a)", () => {
-  const codigo = (alcanceDosHooks) => ({ caminhosProtegidos: [], telasProtegidasDosSteps: [], foraDasTelasDosSteps: [], alcanceDosHooks });
-  const motivos = (c) => v.motivosParaPerguntar({ caminhos: ["ferramentas/publicar/x.mjs", ".husky/pre-commit"], canonico: "c", outputs: [], codigo: c });
-  assert.deepEqual(motivos(codigo([])), [{ motivo: "alcance-dos-hooks", caminhos: [".husky/pre-commit"] }]);
-  assert.deepEqual(motivos(codigo(["ferramentas/publicar/**"])), [{ motivo: "alcance-dos-hooks", caminhos: ["ferramentas/publicar/x.mjs", ".husky/pre-commit"] }]);
+test("decidirNoTrazer: o que define a parada de publicação para mesmo declarado; settings só quando o diff toca o gate (D-VEGA20-26)", () => {
+  const codigo = { caminhosProtegidos: [], telasProtegidasDosSteps: [], foraDasTelasDosSteps: [], definemAParada: ["**/hooks/gate-de-publicacao.js", "**/liberacao-da-publicacao.mjs", "db/scripts/**"] };
+  const daParada = [".vega/projeto.mjs", ".altair/adaptador.json", ".claude/hooks/gate-de-publicacao.js", ".claude/hooks/lib/liberacao-da-publicacao.mjs", "db/scripts/publicar.mjs"];
+  const d = v.decidirNoTrazer({ caminhos: daParada, canonico: "c", outputs: daParada, codigo });
+  assert.deepEqual(d.motivos, [{ motivo: "define-a-parada", caminhos: daParada }]);
+  assert.deepEqual(d.foraDosOutputs, []);
+  // `settings.json` que não toca o gate segue e vai ao relato; o que o registra para.
+  const settings = ".claude/settings.json";
+  const calado = v.decidirNoTrazer({ caminhos: [settings], canonico: "c", outputs: [], codigo, registraAParada: () => false });
+  assert.deepEqual([calado.motivos, calado.foraDosOutputs], [[], [settings]]);
+  const gate = v.decidirNoTrazer({ caminhos: [settings], canonico: "c", outputs: [settings], codigo, registraAParada: (c) => c === settings });
+  assert.deepEqual(gate.motivos, [{ motivo: "define-a-parada", caminhos: [settings] }]);
+  // O que define a parada nunca segue por repetição: o sim de antes não vale para o trazer de hoje.
+  const consentimentos = [{ ciclo: "X-1", fase: "F1", tipo: "trazer", motivo: "define-a-parada", caminhos: [".vega/projeto.mjs"], sha: "a".repeat(40), sim: "sim", quem: "op" }];
+  const rep = v.decidirNoTrazer({ caminhos: [".vega/projeto.mjs"], canonico: "c", outputs: [], codigo, consentimentos, ciclo: "X-1", fase: "F1" });
+  assert.deepEqual(rep.motivos.map((m) => m.motivo), ["define-a-parada"]);
 });
 
 test("aprovadoConfere e exigirAprovacao: SHA inteiro, prefixo resolvido, e o porquê da recusa", () => {

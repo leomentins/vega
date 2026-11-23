@@ -259,7 +259,9 @@ test("task com publicacao ou caminho clinico: o sim da fase cobre; fora da fase 
   assert.equal(p1.motivo, "task-sensivel");
   assert.equal(p1.task, "T1");
   assert.deepEqual(p1.publicacao, ["db push", "db-publish"]);
-  // O sim de Rita vale só para aquela task e aquele nonce.
+  // Uma pergunta por fase: as duas sensíveis pendentes vão pelo nome (hotfix conducao-corta-paradas-de-regra).
+  assert.deepEqual(p1.tasks.map((x) => x.task), ["T1", "T2"]);
+  // Formato antigo, só a primeira aprovada: a seguinte ainda pergunta, só ela.
   const p2 = proximo(r.dir, { aprovacoes: [{ task: "T1", nonce: p1.nonce }] });
   assert.equal(p2.acao, "perguntar");
   assert.equal(p2.task, "T2");

@@ -226,7 +226,16 @@ test("abrir grava o marcador fora do ramo, a referencia no origin e o espelho lo
   assert.equal(a.g("rev-parse", `${s.marcador}^`), head);
   assert.equal(a.noOrigin(a.refTentativa("T1", 1)), s.marcador);
   assert.equal(a.g("rev-parse", `refs/conducao-local/${CICLO}/T1/1`), s.marcador);
-  // A mesma tentativa não abre duas vezes, nem com o espelho local apagado.
+  // O mesmo abrir repetido (mesmo nonce: saída perdida, sessão que não nasceu) devolve a mesma
+  // partida, sem parar e sem mexer no origin (hotfix conducao-corta-paradas-de-regra).
+  const repetido = a.abrir("T1");
+  assert.equal(repetido.acao, "aberta");
+  assert.equal(repetido.jaAberta, true);
+  assert.equal(repetido.marcador, s.marcador);
+  assert.equal(repetido.partida, s.partida);
+  assert.equal(repetido.brief.commit, s.brief.commit);
+  assert.equal(a.noOrigin(a.refTentativa("T1", 1)), s.marcador);
+  // A mesma tentativa não abre duas vezes com outro nonce, nem com o espelho local apagado.
   a.pergunta("tentativa-ja-existe", "abrir", "T1", "--tentativa", "1", "--nonce", "outro0", "--modo-maestra", "auto");
   a.g("update-ref", "-d", `refs/conducao-local/${CICLO}/T1/1`);
   a.pergunta("tentativa-recusada-no-origin", "abrir", "T1", "--tentativa", "1", "--nonce", "outro0", "--modo-maestra", "auto");
@@ -467,20 +476,25 @@ test("trazer em conflito aborta o cherry-pick e pergunta", (t) => {
   assert.ok(a.noOrigin(a.refTentativa("T2", 1)), "tentativa em conflito segue de pé");
 });
 
-test("trazer pergunta quando a filha mexe no que os hooks de commit executam e traz so com aprovacao para aquele sha", (t) => {
+test("trazer traz sem pergunta o que os hooks de commit executam, com a lista de fora; caminho clinico so com aprovacao para aquele sha", (t) => {
   const a = ambiente(t);
   a.autorizar();
   a.abrir("T1");
-  const ponta = a.filhaTrabalha("T1", 1, [{ "src/t1.mjs": "x\n", ".claude/hooks/novo-guard.js": "process.exit(0);\n" }]);
+  // D-VEGA20-26: o hook fora dos Outputs não para; só o caminho clínico pede a aprovação.
+  a.filhaTrabalha("T1", 1, [{ "src/t1.mjs": "x\n", ".claude/hooks/novo-guard.js": "process.exit(0);\n" }]);
+  const clinico = "db/migrations/20261015000000_x.sql";
+  const ponta = a.filhaTrabalha("T1", 1, [{ [clinico]: "select 1;\n" }]);
   const p = a.pergunta("trazer-exige-aprovacao", "trazer", "T1", "--tentativa", "1");
   assert.equal(p.sha, ponta);
-  assert.deepEqual(p.motivos, [{ motivo: "alcance-dos-hooks", caminhos: [".claude/hooks/novo-guard.js"] }]);
+  assert.deepEqual(p.motivos, [{ motivo: "caminho-clinico-fora-dos-outputs", caminhos: [clinico] }]);
   // `--aprovado` que veio e não confere diz por quê (P24 do ATRM-51).
   a.pergunta("aprovado-nao-confere", "trazer", "T1", "--tentativa", "1", "--aprovado", "0".repeat(40));
   // A filha empurra mais depois da aprovação: a aprovação era para o sha antigo.
   const nova = a.filhaTrabalha("T1", 1, [{ "src/t1.mjs": "y\n" }]);
   a.pergunta("aprovado-nao-confere", "trazer", "T1", "--tentativa", "1", "--aprovado", ponta);
-  assert.equal(a.ok("trazer", "T1", "--tentativa", "1", "--aprovado", nova, "--sessao", "s1").acao, "trazida");
+  const s = a.ok("trazer", "T1", "--tentativa", "1", "--aprovado", nova, "--sessao", "s1");
+  assert.equal(s.acao, "trazida");
+  assert.deepEqual(s.foraDosOutputs, [".claude/hooks/novo-guard.js", clinico].sort());
 });
 
 test("trazer nao pergunta quando o que os hooks alcancam e Output declarado da task", (t) => {
@@ -491,13 +505,15 @@ test("trazer nao pergunta quando o que os hooks alcancam e Output declarado da t
   assert.equal(a.ok("trazer", "T1", "--tentativa", "1", "--sessao", "s1").acao, "trazida");
 });
 
-test("Output declarado como diretorio nao libera o alcance dos hooks embaixo dele", (t) => {
+test("Output declarado como diretorio cobre o alcance dos hooks embaixo dele: traz sem pergunta e nada fica fora", (t) => {
   const a = ambiente(t, { tasks: [task("T1", { outputs: "`.claude/scripts/` (create)" }), task("T2")] });
   a.autorizar();
   a.abrir("T1");
   a.filhaTrabalha("T1", 1, [{ ".claude/scripts/pre-commit-x.mjs": "export const x = 1;\n" }]);
-  const p = a.pergunta("trazer-exige-aprovacao", "trazer", "T1", "--tentativa", "1");
-  assert.deepEqual(p.motivos, [{ motivo: "alcance-dos-hooks", caminhos: [".claude/scripts/pre-commit-x.mjs"] }]);
+  const s = a.ok("trazer", "T1", "--tentativa", "1", "--sessao", "s1");
+  assert.equal(s.acao, "trazida");
+  assert.deepEqual(s.foraDosOutputs, []);
+  assert.equal(s.canonicoAlterado, false);
 });
 
 test("esperar-filha recusa --max-min malformado e sai rede-falhou sem origin", (t) => {
@@ -514,13 +530,14 @@ test("esperar-filha recusa --max-min malformado e sai rede-falhou sem origin", (
   assert.equal(r.falhas, 3);
 });
 
-test("trazer pergunta pelo alcance dos hooks so o que esta fora dos Outputs", (t) => {
+test("trazer lista no relato so o que os hooks alcancam fora dos Outputs, sem perguntar", (t) => {
   const a = ambiente(t, { tasks: [task("T1", { outputs: "`.claude/scripts/mapa/leitor.mjs` (create)" }), task("T2")] });
   a.autorizar();
   a.abrir("T1");
   a.filhaTrabalha("T1", 1, [{ ".claude/scripts/mapa/leitor.mjs": "export const x = 1;\n", ".claude/hooks/novo-guard.js": "process.exit(0);\n" }]);
-  const p = a.pergunta("trazer-exige-aprovacao", "trazer", "T1", "--tentativa", "1");
-  assert.deepEqual(p.motivos, [{ motivo: "alcance-dos-hooks", caminhos: [".claude/hooks/novo-guard.js"] }]);
+  const s = a.ok("trazer", "T1", "--tentativa", "1", "--sessao", "s1");
+  assert.deepEqual(s.foraDosOutputs, [".claude/hooks/novo-guard.js"]);
+  assert.ok(s.avisoOperador.some((l) => l.includes(".claude/hooks/novo-guard.js")), JSON.stringify(s.avisoOperador));
 });
 
 test("esperar-filha sai no prazo sem push e com a ponta quando a filha empurra", (t) => {
@@ -555,7 +572,7 @@ test("esperar-filha sem teto do chamador ou com prazo acima dele sai com exit 2"
   assert.equal(a.ok("esperar-filha", "T1", "--tentativa", "1", "--teto-chamador-min", "30", "--max-min", "30").desfecho, "andou");
 });
 
-test("trazer pergunta quando a filha mexe em superficie de instrucao da maestra", (t) => {
+test("trazer traz sem pergunta a superficie de instrucao da maestra e a lista no relato", (t) => {
   const a = ambiente(t);
   a.autorizar();
   a.abrir("T1");
@@ -574,20 +591,25 @@ test("trazer pergunta quando a filha mexe em superficie de instrucao da maestra"
     ".claude/launch.json",
     "AGENTS.md",
   ];
-  a.filhaTrabalha("T1", 1, [{ "src/t1.mjs": "x\n", ...Object.fromEntries(instrucao.map((c) => [c, "veneno\n"])) }]);
-  const p = a.pergunta("trazer-exige-aprovacao", "trazer", "T1", "--tentativa", "1");
-  assert.deepEqual(p.motivos, [{ motivo: "superficie-de-instrucao", caminhos: [...instrucao].sort() }]);
+  // O `settings*.json` leva JSON legível: ilegível, ele define a parada (D-VEGA20-26, fail-closed).
+  a.filhaTrabalha("T1", 1, [{ "src/t1.mjs": "x\n", ...Object.fromEntries(instrucao.map((c) => [c, /settings[^/]*\.json$/.test(c) ? "{}\n" : "veneno\n"])) }]);
+  const s = a.ok("trazer", "T1", "--tentativa", "1", "--sessao", "s1");
+  assert.deepEqual([...s.foraDosOutputs].sort(), [...instrucao].sort());
 });
 
-test("trazer pergunta quando a filha toca o canonico do ciclo ou caminho clinico fora dos Outputs", (t) => {
+test("trazer pergunta so pelo caminho clinico fora dos Outputs; o canonico do ciclo vai ao relato a parte", (t) => {
   const clinico = "db/migrations/20261015000000_x.sql";
   const a = ambiente(t, { tasks: [task("T1"), task("T2", { outputs: `\`${clinico}\` (create)` })] });
   a.autorizar();
   a.abrir("T1");
   a.abrir("T2");
-  a.filhaTrabalha("T1", 1, [{ [CAMINHO]: canonico([task("T1")], 9), [clinico]: "select 1;\n" }]);
+  const outroClinico = "db/migrations/20261015000001_y.sql";
+  a.filhaTrabalha("T1", 1, [{ [CAMINHO]: canonico([task("T1")], 9), [outroClinico]: "select 1;\n" }]);
   const p = a.pergunta("trazer-exige-aprovacao", "trazer", "T1", "--tentativa", "1");
-  assert.deepEqual(p.motivos.map((m) => m.motivo), ["canonico-do-ciclo", "caminho-clinico-fora-dos-outputs"]);
+  assert.deepEqual(p.motivos, [{ motivo: "caminho-clinico-fora-dos-outputs", caminhos: [outroClinico] }]);
+  const s = a.ok("trazer", "T1", "--tentativa", "1", "--aprovado", p.sha, "--sessao", "s1");
+  assert.equal(s.canonicoAlterado, true);
+  assert.deepEqual(s.foraDosOutputs, [outroClinico], "o canonico fica fora da lista de fora dos Outputs");
   // Na T2 o mesmo caminho clínico é Output declarado: traz sem perguntar.
   a.filhaTrabalha("T2", 1, [{ [clinico]: "select 1;\n" }]);
   assert.equal(a.ok("trazer", "T2", "--tentativa", "1", "--sessao", "s2").acao, "trazida");
@@ -902,7 +924,7 @@ test("trazer aceita --aprovado com prefixo de 7+ da ponta e diz aprovado-nao-con
   const a = ambiente(t);
   a.autorizar();
   a.abrir("T1");
-  const ponta = a.filhaTrabalha("T1", 1, [{ "src/t1.mjs": "x\n", ".claude/hooks/novo-guard.js": "process.exit(0);\n" }]);
+  const ponta = a.filhaTrabalha("T1", 1, [{ "src/t1.mjs": "x\n", "db/migrations/20261015000000_x.sql": "select 1;\n" }]);
   a.pergunta("trazer-exige-aprovacao", "trazer", "T1", "--tentativa", "1");
   const curto = a.pergunta("aprovado-nao-confere", "trazer", "T1", "--tentativa", "1", "--aprovado", ponta.slice(0, 6));
   assert.equal(curto.aprovado, ponta.slice(0, 6));
