@@ -480,6 +480,8 @@ export function eventosDeLinha(linha) {
     motivo_recomendacao: linha.motivo_recomendacao ?? null,
     recomendado_por: linha.recomendado_por ?? null,
     dominio: linha.dominio ?? null,
+    // A chave escondida do item (ciclo/fase/task/codigo e origem), so quando o bloco trouxe uma.
+    ...(linha.chave_tipada ? { chave_tipada: linha.chave_tipada } : {}),
   };
   const eventos = [abertura];
   if (linha.resposta_literal !== null && linha.resposta_literal !== undefined) {

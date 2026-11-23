@@ -210,6 +210,35 @@ function opcaoDeTabela(linha) {
   const [pro, contra] = resto;
   return { letra: m[1], texto, ...(pro ? { pro } : {}), ...(contra ? { contra } : {}) };
 }
+// Chave escondida do item (contrato `decisao/output-format`): `<!-- decisao D3 = <ciclo>/<fase>/<task>/<codigo> · origem <papel> -->`.
+// Copia da forma de `chavesTipadas` em `estado/lib/bloco-de-decisao.mjs` (este extrator viaja sozinho).
+// Aceita tambem a forma escapada (`&lt;!-- … --&gt;`), que chega quando o bloco passa por mensagem
+// entre sessoes. Regra: chave de quatro posicoes com origem do vocabulario vence a deducao do ciclo;
+// `-` na posicao do ciclo cai na deducao; chave fora da forma nao vence nada e e contada no resumo.
+const RE_CHAVE = /<!--\s*decis(?:ão|ao)\s+D?(\d{1,4})\s*=\s*([^·\s][^·]*?)\s*(?:·\s*origem\s+([A-Za-z][\w-]{0,39})\s*)?-->/gi;
+const ORIGENS = Object.freeze(["maestra", "condutora", "filha", "neta", "hotfix", "docs", "shaping", "planejamento", "fechamento", "avulsa"]);
+const desescaparComentario = (t) => t.replace(/&lt;!--/g, "<!--").replace(/--&gt;/g, "-->");
+function chavesDoTexto(texto) {
+  const out = new Map();
+  for (const m of desescaparComentario(texto).matchAll(RE_CHAVE)) {
+    const chave = m[2].trim().slice(0, 200);
+    if (!chave) continue;
+    const origem = m[3] ? m[3].toLowerCase() : null;
+    const seg = chave.split("/");
+    const fixa = seg.length === 4 && seg.every((x) => x.trim() !== "") && ORIGENS.includes(origem ?? "");
+    const vazio = (x) => (x.trim() === "-" ? null : x.trim());
+    const visivel = String(Number(m[1]));
+    out.set(visivel, {
+      visivel,
+      chave,
+      origem,
+      forma: fixa ? "fixa" : "livre",
+      ...(fixa ? { ciclo: vazio(seg[0]), fase: vazio(seg[1]), task: vazio(seg[2]), codigo: vazio(seg[3]) } : {}),
+    });
+  }
+  return out;
+}
+
 const RE_RECO = /^\s*(?:[-*]\s*)?(?:→|->)\s*(?:\*\*)?\s*(?:(?:A|O)\s+[a-zà-ú]+\s+)?Recomend[oa]\b(.*)$/i;
 
 function limpaMd(s) {
@@ -227,7 +256,12 @@ function parseReco(resto) {
 }
 
 function parseBloco(texto) {
-  const linhas = texto.split("\n");
+  // A chave se le do texto cru; o parse le o texto sem comentario HTML (cru ou escapado, de uma ou
+  // varias linhas), com as quebras preservadas para os indices das duas leituras casarem. O
+  // comentario nao atravessa outro `<!--`: um marcador solto no contexto (sessao que discute o
+  // formato da chave) apagaria tudo ate o `-->` da chave, fecho incluso, e o bloco sumiria.
+  const cru = texto.split("\n");
+  const linhas = desescaparComentario(texto).replace(/<!--(?:(?!<!--)[\s\S])*?-->/g, (c) => c.replace(/[^\n]/g, "")).split("\n");
   let fim = -1;
   for (let i = linhas.length - 1; i >= 0; i--) if (RE_FECHO.test(linhas[i])) { fim = i; break; }
   if (fim < 0) return null;
@@ -288,8 +322,13 @@ function parseBloco(texto) {
   const ultimoIdx = new Map();
   filtrados.forEach((it, i) => ultimoIdx.set(it.item ?? `#${i}`, i));
   const validos = filtrados.filter((it, i) => ultimoIdx.get(it.item ?? `#${i}`) === i);
+  // A chave fica no fim do bloco, depois do fecho: le do cabecalho ao fim do texto. So item de
+  // numero inteiro (`D3`, `3`) leva chave; `13.1`/`F0.2` sao a forma antiga.
+  const chaves = chavesDoTexto(cru.slice(ini >= 0 ? ini : 0).join("\n"));
   for (const it of validos) {
     if (it.item === null) it.item = "sem-numero";
+    const vis = /^D?\d+$/.test(it.item) ? String(Number(it.item.replace(/^D/, ""))) : null;
+    it.chave_tipada = (vis !== null && chaves.get(vis)) || null;
     const ctx = it.ctx.join("\n").trim();
     it.contexto = ctx ? ctx.slice(0, 1000) : null;
     delete it.ctx;
@@ -413,6 +452,14 @@ function inferirCiclo(o, texto) {
   return null;
 }
 
+// A chave escondida preenchida vence a deducao; `-` cai na deducao; fora da forma, conta e cai.
+// A contagem (`chaves_malformadas`, `ciclo_pela_chave`) sobe so na linha emitida, depois dos filtros.
+function cicloDoItem(it, deduzido) {
+  const ct = it.chave_tipada;
+  if (!ct || ct.forma !== "fixa" || ct.ciclo === null) return deduzido;
+  return ct.ciclo;
+}
+
 // ---------- principal ----------
 const resumo = {
   sessoes_lidas: 0,
@@ -501,7 +548,7 @@ for (const arq of sessoes) {
         fonte,
         chave: crypto.createHash("sha256").update(fonte + "|" + it.item).digest("hex"),
         sessao: bl.sessao,
-        ciclo: bl.ciclo,
+        ciclo: cicloDoItem(it, bl.ciclo),
         perguntado_em: bl.ts,
         respondido_em: resp ? resp.o.timestamp : null,
         item: it.item,
@@ -518,13 +565,16 @@ for (const arq of sessoes) {
         recomendado_por: `${bl.modelo || "?"} · ${papel}`,
         dominio: it.dominio,
         confianca: conf,
+        ...(it.chave_tipada ? { chave_tipada: it.chave_tipada } : {}),
       };
-      const textoTodo = [linha.titulo, linha.contexto, linha.resposta_literal, linha.comentario, linha.motivo_recomendacao, linha.ciclo, ...linha.opcoes.map((x) => x.texto)].join("\n");
+      const textoTodo = [linha.titulo, linha.contexto, linha.resposta_literal, linha.comentario, linha.motivo_recomendacao, linha.ciclo, linha.chave_tipada?.chave, ...linha.opcoes.map((x) => x.texto)].join("\n");
       let hits;
       try { hits = varrerPhi(textoTodo); } catch { hits = [1]; }
       if (hits.length) { resumo.descartadas_phi++; continue; }
       if (chavesEmitidas.has(linha.chave)) { resumo.duplicadas_por_chave = (resumo.duplicadas_por_chave || 0) + 1; continue; }
       chavesEmitidas.add(linha.chave);
+      if (it.chave_tipada?.forma === "livre") resumo.chaves_malformadas = (resumo.chaves_malformadas || 0) + 1;
+      else if (it.chave_tipada?.ciclo) resumo.ciclo_pela_chave = (resumo.ciclo_pela_chave || 0) + 1;
       if (destino.destino === "git") {
         if (!paraGit.has(destino.arquivo)) paraGit.set(destino.arquivo, []);
         paraGit.get(destino.arquivo).push(...eventosDeLinha(linha));
@@ -629,6 +679,7 @@ if (principalIndeterminada) {
   resumo.arvores_com_principal_indeterminada = principalIndeterminada;
   console.error(`aviso: ${principalIndeterminada} arvore(s) em que o git nao disse a arvore principal — decidido pelo caminho (dentro de ${PRINCIPAL_DO_REPO ?? ARVORE} = mesmo projeto)`);
 }
+if (resumo.chaves_malformadas) console.error(`aviso: ${resumo.chaves_malformadas} chave(s) escondida(s) fora da forma <ciclo>/<fase>/<task>/<codigo> · origem <${ORIGENS.join("|")}> — ciclo pela deducao`);
 fs.writeFileSync(path.join(SAIDA, "resumo.json"), JSON.stringify(resumo, null, 2) + "\n");
 console.log(JSON.stringify(resumo, null, 2));
 if (falhou) process.exitCode = 1;
