@@ -27,6 +27,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { lerAdaptador, modoSemClique, validar } from "../adaptador.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 /** O projeto de teste das suítes: a declaração e o código de um projeto de mentira. */
@@ -94,7 +95,7 @@ function declaracao(extra) {
 
 /** Origin bare + árvore da maestra no ramo do ciclo, com o plano e a declaração do adaptador commitados. */
 function ambiente(t, decl) {
-  const raiz = mkdtempSync(path.join(tmpdir(), "conducao-sem-ci-"));
+  const raiz = pastaTemporaria("conducao-sem-ci-");
   t.after(() => rmSync(raiz, { recursive: true, force: true }));
   const origin = path.join(raiz, "origin.git");
   execFileSync("git", ["init", "-q", "--bare", origin]);
@@ -213,7 +214,7 @@ test("sem CI: o fechamento ainda nao conferido nao fecha a fase", (t) => {
 // ── modos sem clique ────────────────────────────────────────────────────────
 
 test("declaracao do projeto de teste: ci true e so auto como modo sem clique", () => {
-  const d = lerAdaptador(RAIZ, { env: { XDG_STATE_HOME: mkdtempSync(path.join(tmpdir(), "sem-ci-estado-")) } });
+  const d = lerAdaptador(RAIZ, { env: { XDG_STATE_HOME: pastaTemporaria("sem-ci-estado-") } });
   assert.equal(d.ci, true);
   assert.deepEqual([...d.sessao.modosSemClique], ["auto"]);
   assert.equal(modoSemClique(d, "auto"), true);

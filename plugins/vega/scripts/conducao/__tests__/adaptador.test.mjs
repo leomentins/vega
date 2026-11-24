@@ -7,6 +7,7 @@ import path from "node:path";
 import { after, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { ErroAdaptador, caminhoDeCodigo, caminhoDeEscrita, caminhoDoEmbutido, codigoDoAdaptador, codigoDoNucleo, embutidos, lerAdaptador, validar } from "../adaptador.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 /** O projeto de teste das suítes: a declaração e o código de um projeto de mentira. */
@@ -15,7 +16,7 @@ const CLI = path.resolve(AQUI, "..", "conducao.mjs");
 
 const tmps = [];
 function tmp(prefixo) {
-  const d = mkdtempSync(path.join(tmpdir(), prefixo));
+  const d = pastaTemporaria(prefixo);
   tmps.push(d);
   return d;
 }

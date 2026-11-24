@@ -10,12 +10,13 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { formatar, medir, parsear, principal } from "../medir-replano.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const CICLO = "TESTE-1-medida";
 const CAMINHO = `.agents/ciclo/teste/${CICLO}/canonico.md`;
 
 function repoTemp() {
-  const dir = mkdtempSync(path.join(tmpdir(), "medir-replano-"));
+  const dir = pastaTemporaria("medir-replano-");
   const g = (...a) => execFileSync("git", ["-C", dir, "-c", "core.hooksPath=/dev/null", "-c", "user.name=t", "-c", "user.email=t@t", ...a], { encoding: "utf8" }).trim();
   g("init", "-q", "-b", "ciclo");
   mkdirSync(path.join(dir, path.dirname(CAMINHO)), { recursive: true });

@@ -20,6 +20,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { executaveisDaVerificacao } from "../conducao.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.resolve(AQUI, "..", "conducao.mjs");
@@ -79,7 +80,7 @@ const PADRAO = ({ t4 = "faz" } = {}) =>
   ]);
 
 function novoRepo(t, texto = PADRAO()) {
-  const raiz = mkdtempSync(path.join(tmpdir(), "conducao-consertos-"));
+  const raiz = pastaTemporaria("conducao-consertos-");
   t.after(() => rmSync(raiz, { recursive: true, force: true }));
   const origin = path.join(raiz, "origin.git");
   execFileSync("git", ["init", "-q", "--bare", origin]);
@@ -195,7 +196,7 @@ test("C24 contraprova: merge que traz mudanca do canonico de fora segue pergunta
   assert.equal(p.motivo, "plano-mudou");
 });
 
-test("C24: re-plano de ruling com task nova comum herda; task nova sensivel pergunta", (t) => {
+test("C24: re-plano de ruling com task nova comum herda pelo ruling; task nova sensivel herda pela pré-autorização", (t) => {
   const nova = (id, steps) => `${task(id, { steps })}### F2 — fase F2`;
   const r = novoRepo(t);
   r.autorizar("F1");
@@ -206,9 +207,11 @@ test("C24: re-plano de ruling com task nova comum herda; task nova sensivel perg
   const s = novoRepo(t);
   s.autorizar("F1");
   s.replanejar("### F2 — fase F2", nova("T6", PUBLICA), `${CICLO}-F1/D-TESTE1-8 — re-plano de F1: T6 nova`);
+  // Ruling de 23/11/2026: o re-plano commitado reautoriza sozinho; a T6 que publica pede o sim dela depois.
   const p = s.proximo();
-  assert.equal(p.acao, "perguntar", JSON.stringify(p));
-  assert.equal(p.motivo, "plano-mudou");
+  assert.equal(p.acao, "herdar-autorizacao", JSON.stringify(p));
+  assert.equal(p.origem, "preautorizado");
+  assert.equal(h.origem, "replano");
 });
 
 // ── 4. autorizar-ciclo ────────────────────────────────────────────────────────
@@ -278,18 +281,19 @@ test("autorizar-ciclo: task de fase herdada que publica alterando o existente se
   assert.equal(ab.cobertasPelaFase, undefined, "a fase herdada pelo ciclo não cobre a task sensível");
 });
 
-test("autorizar-ciclo: task que muda de classe depois do sim do ciclo pede o sim do ciclo de novo", (t) => {
+test("autorizar-ciclo: task que muda de classe depois do sim do ciclo herda pela pré-autorização, sem pedir o sim do ciclo de novo", (t) => {
   const r = novoRepo(t);
   ok(r, "autorizar-ciclo", "F1", "--sim", "sim, pode tocar o ciclo inteiro", "--pergunta", "p-00000000000000a1");
   fecharF1(r);
   r.replanejar("#### T4 — tarefa T4\n\n- **Objetivo:** tarefa T4", "#### T4 — tarefa T4\n\n- **Objetivo:** tarefa T4 com `vercel --prod`", `${CICLO}-F2/D-TESTE1-9 — re-plano de T4: publica`);
   const p = r.proximo();
-  assert.equal(p.acao, "perguntar", JSON.stringify(p));
-  assert.equal(p.motivo, "autorizar-ciclo");
+  assert.equal(p.acao, "herdar-autorizacao", JSON.stringify(p));
+  assert.equal(p.origem, "preautorizado");
   assert.equal(p.fase, "F2");
+  assert.deepEqual(p.mudaramDeClasse, [{ task: "T4", de: "comum", para: "sensivel" }]);
 });
 
-test("autorizar-ciclo: re-plano sem ruling e sem mudanca de classe herda sob o sim do ciclo; sem ele pergunta", (t) => {
+test("autorizar-ciclo: re-plano sem ruling e sem mudanca de classe herda sob o sim do ciclo; sob o sim legado da fase, pela pré-autorização", (t) => {
   const r = novoRepo(t);
   ok(r, "autorizar-ciclo", "F1", "--sim", "sim, pode tocar o ciclo inteiro", "--pergunta", "p-00000000000000a1");
   r.replanejar(...DEP_T3, `${CICLO}-F1/T3 — ajusta a T3`);
@@ -300,7 +304,9 @@ test("autorizar-ciclo: re-plano sem ruling e sem mudanca de classe herda sob o s
   const s = novoRepo(t);
   s.autorizar("F1");
   s.replanejar(...DEP_T3, `${CICLO}-F1/T3 — ajusta a T3`);
-  assert.equal(s.proximo().motivo, "plano-mudou");
+  const sp = s.proximo();
+  assert.equal(sp.acao, "herdar-autorizacao", JSON.stringify(sp));
+  assert.equal(sp.origem, "preautorizado");
 });
 
 test("autorizar-ciclo exige a fase de partida e o texto do sim", (t) => {
@@ -310,36 +316,44 @@ test("autorizar-ciclo exige a fase de partida e o texto do sim", (t) => {
   assert.equal(r.g("log", "-1", "--format=%s"), "plano", "nada gravado");
 });
 
-test("autorizar-ciclo: re-plano sem ruling que troca Outputs ou Verificacao pergunta, mesmo sob o sim do ciclo", (t) => {
+test("autorizar-ciclo: re-plano sem ruling que troca Outputs ou Verificacao herda pela pré-autorização, e a fase nova pelo sim do ciclo", (t) => {
   const r = novoRepo(t);
   ok(r, "autorizar-ciclo", "F1", "--sim", "sim, pode tocar o ciclo inteiro", "--pergunta", "p-00000000000000a1");
   r.replanejar("- **Outputs:** `src/t3.mjs` (create)", "- **Outputs:** `src/t3.mjs` (create) · `.husky/pre-commit` (modify)", `${CICLO}-F1/T3 — ajusta a T3`);
-  assert.equal(r.proximo().motivo, "plano-mudou");
+  // Ruling de 23/11/2026: o re-plano commitado reautoriza sozinho; o hook trazido segue parando no trazer.
+  const ro = r.proximo();
+  assert.equal(ro.acao, "herdar-autorizacao", JSON.stringify(ro));
+  assert.equal(ro.origem, "preautorizado");
 
   const s = novoRepo(t);
   ok(s, "autorizar-ciclo", "F1", "--sim", "sim, pode tocar o ciclo inteiro", "--pergunta", "p-00000000000000a1");
-  // Verificação trocada no meio da fase não é adotada: a condução segue no plano congelado.
+  // Verificação trocada no meio da fase: a pré-autorização a adota, gravando a herança sob o plano novo.
   s.replanejar("`echo verificacao-T3`", "`echo outra-coisa`", `${CICLO}-F1/T3 — ajusta a T3`);
-  assert.notEqual(s.proximo().acao, "herdar-autorizacao");
-  // E na fase nova o sim do ciclo não a adota sem ruling: pede o sim do ciclo de novo.
+  const sv = s.proximo();
+  assert.equal(sv.acao, "herdar-autorizacao", JSON.stringify(sv));
+  assert.equal(sv.origem, "preautorizado");
+  ok(s, "herdar-autorizacao", "F1", "--nonce", sv.nonce);
+  // E a fase nova segue pelo sim do ciclo, sem pergunta.
   fecharF1(s);
   const p = s.proximo();
-  assert.equal(p.acao, "perguntar", JSON.stringify(p));
-  assert.equal(p.motivo, "autorizar-ciclo");
+  assert.equal(p.acao, "herdar-autorizacao", JSON.stringify(p));
+  assert.equal(p.fase, "F2");
 });
 
 test("C24: braco de case em varias linhas confere o comando do braco, nao o padrao", () => {
   assert.deepEqual(executaveisDaVerificacao("case $x in\na) node a.mjs ;;\n*) nao-existe-xyz ;;\nesac"), ["node", "nao-existe-xyz"]);
 });
 
-test("autorizar-ciclo: re-plano sem ruling que acrescenta segmento de tela protegida aos Steps pergunta", (t) => {
+test("autorizar-ciclo: re-plano sem ruling que acrescenta segmento de tela protegida aos Steps segue calado na fase e herda na seguinte pela pré-autorização", (t) => {
   const r = novoRepo(t);
   ok(r, "autorizar-ciclo", "F1", "--sim", "sim, pode tocar o ciclo inteiro", "--pergunta", "p-00000000000000a1");
   r.replanejar("- **Steps:** faz\n- **Verificação:** `echo verificacao-T3`", "- **Steps:** muda `app/telas/agenda/agenda/page.tsx`\n- **Verificação:** `echo verificacao-T3`", `${CICLO}-F1/T3 — ajusta a T3`);
   // Steps não estão em CAMPOS_DO_PLANO: o re-plano não é adotado no meio da fase; na fase nova, o sim do ciclo não o cobre.
   assert.notEqual(r.proximo().acao, "herdar-autorizacao");
   fecharF1(r);
-  assert.equal(r.proximo().motivo, "autorizar-ciclo");
+  const f2 = r.proximo();
+  assert.equal(f2.acao, "herdar-autorizacao", JSON.stringify(f2));
+  assert.equal(f2.origem, "preautorizado");
 });
 
 test("C24: braco de case sozinho na linha nao vira binario", () => {

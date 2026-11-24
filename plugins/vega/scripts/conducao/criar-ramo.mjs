@@ -15,9 +15,10 @@
  * (`ciclo-<id>`, que nasce de `main` depois). Outro ramo do mesmo ciclo vivo
  * (local ou no origin) recusa: a maestra apaga o anterior depois de mesclá-lo.
  *
- * O assunto do commit é neutro: não abre com `Conducao:` (não vira marca) nem
- * traz `-F<n>` (não vira commit de fase); o Step 7 do `/close-cycle` o projeta
- * como `nao reconhecido`, causa conhecida.
+ * O assunto do commit que abre é neutro: não abre com `Conducao:` (não vira marca)
+ * nem traz `-F<n>` (não vira commit de fase); o Step 7 do `/close-cycle` o projeta
+ * como `nao reconhecido`, causa conhecida. O ramo de execução leva, por cima dele,
+ * um segundo commit vazio: a marca `Conducao: ciclo niveis 3` (`MARCA_DE_NIVEIS`).
  */
 import { tentarGit } from "./git-exec.mjs";
 import { ErroPlano } from "./ler-plano.mjs";
@@ -37,6 +38,19 @@ export function assuntoDoRamo(ramo) {
     throw new ErroPlano("assunto-ambiguo", `o assunto ${JSON.stringify(assunto)} casaria marca ou commit de fase: o id do ciclo não pode ter -F<n>`);
   return assunto;
 }
+
+/**
+ * A marca `Conducao: ciclo niveis 3` que o ramo de execução leva desde o nascimento (hotfix
+ * conducao-niveis-e-replano, 23/11/2026). Desde a D10c do L4 (p-2fe3674c014f0735) a condução é
+ * sempre em 3 níveis; a leitura (`niveisDasMarcas`) segue inferindo 2 de um ramo autorizado sem
+ * marca, que é o ciclo legado de verdade, e por isso quem marca é o nascimento, não a leitura.
+ * O corpo é prosa da máquina, não resposta do operador: `Conducao-Origem: criar-ramo` o diz.
+ */
+export const MARCA_DE_NIVEIS = Object.freeze([
+  "Conducao: ciclo niveis 3",
+  "Ramo de execução criado pelo criar-ramo: a condução é em 3 níveis (D10c do L4, p-2fe3674c014f0735).",
+  "Conducao-Niveis: 3\nConducao-Origem: criar-ramo",
+]);
 
 const ehDoCiclo = (ramo, ciclo) => ramo === `ciclo-${ciclo}` || ramo.startsWith(`ciclo-${ciclo}-`);
 
@@ -71,7 +85,12 @@ export function criarRamo({ repo, ciclo, tipo, git = tentarGit }) {
       `o ciclo ${ciclo} já tem ramo: ${vivos.join(", ")} — um ramo por vez; mesclar e apagar o anterior (local e no origin) antes de criar ${ramo}`,
     );
   const arvoreDoMain = exigirGit(git(repo, ["rev-parse", "origin/main^{tree}"]), "árvore de origin/main");
-  const sha = exigirGit(git(repo, ["commit-tree", arvoreDoMain, "-p", "origin/main", "-m", assunto]), "commit-tree").trim();
+  const abre = exigirGit(git(repo, ["commit-tree", arvoreDoMain, "-p", "origin/main", "-m", assunto]), "commit-tree").trim();
+  // O de execução ganha por cima a marca de 3 níveis (`marcaDeNiveis`): sem ela, a `Conducao: F0
+  // autorizada` faria `niveisDasMarcas` ler o ramo como legado de 2 (percalço do L4, D13).
+  const sha = tipo === "execucao"
+    ? exigirGit(git(repo, ["commit-tree", arvoreDoMain, "-p", abre, ...MARCA_DE_NIVEIS.flatMap((m) => ["-m", m])]), "commit-tree da marca de níveis").trim()
+    : abre;
   exigirGit(git(repo, ["update-ref", `refs/heads/${ramo}`, sha, ""]), `referência ${ramo}`);
   const push = git(repo, ["push", "--quiet", "origin", `${sha}:refs/heads/${ramo}`], { rede: true });
   if (push.status !== 0) {

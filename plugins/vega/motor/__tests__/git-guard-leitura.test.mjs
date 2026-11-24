@@ -22,6 +22,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { pastaTemporaria } from "../../scripts/testes/pasta-temporaria.mjs";
 
 const MOTOR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const EXECUTOR = path.join(MOTOR, "hooks-do-motor.mjs");
@@ -32,7 +33,7 @@ function git(cwd, ...args) {
 }
 
 function repo(t) {
-  const dir = realpathSync(mkdtempSync(path.join(os.tmpdir(), "t9-leitura-")));
+  const dir = realpathSync(pastaTemporaria("t9-leitura-"));
   t.after(() => rmSync(dir, { recursive: true, force: true, maxRetries: 3 }));
   git(dir, "init", "-q", "-b", "main");
   git(dir, "config", "user.email", "t@t");
@@ -260,7 +261,7 @@ test("resíduo declarado: interpretador só de leitura segue barrado e é contad
 
 test("erro dentro da classificação fecha (grava = true)", (t) => {
   const d = repo(t);
-  const dir = mkdtempSync(path.join(os.tmpdir(), "t9-preload-"));
+  const dir = pastaTemporaria("t9-preload-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const pre = path.join(dir, "preload.cjs");
   // quebra só o `shift` das atribuições, que roda dentro do `try` de `escritaDeEstadoPeloSubagent`

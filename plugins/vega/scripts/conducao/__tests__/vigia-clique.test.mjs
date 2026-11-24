@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { BOTOES } from "../botoes.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.resolve(AQUI, "..", "conducao.mjs");
@@ -47,7 +48,7 @@ function task(id) {
 }
 
 function novoRepo() {
-  const dir = mkdtempSync(path.join(tmpdir(), "vigia-clique-"));
+  const dir = pastaTemporaria("vigia-clique-");
   const g = (args, env = {}) =>
     execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "pipe"] }).trim();
   g(["init", "-q", "-b", "ciclo-teste"]);

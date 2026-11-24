@@ -14,6 +14,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { pastaTemporaria } from "../../scripts/testes/pasta-temporaria.mjs";
 
 const HOOK = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "operaria-stop-guard.js");
 const NONCE = "0123456789abcdef";
@@ -22,7 +23,7 @@ const CICLO = "VEGA-99-prova";
 // `modo`: conteúdo do mode-file no projeto da fixture; `null` = mode-file ausente. Os testes do
 // julgamento rodam em `hard` (o comportamento que recusa); os de modo, no fim, cobrem o shadow.
 function ambiente(t, { task = "T15", modo = "hard" } = {}) {
-  const dir = mkdtempSync(path.join(tmpdir(), "stop-guard-"));
+  const dir = pastaTemporaria("stop-guard-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const projeto = path.join(dir, "projeto");
   const modeFile = path.join(projeto, ".claude", "state", "operaria-stop-guard-mode");

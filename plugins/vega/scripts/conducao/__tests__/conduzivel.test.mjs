@@ -13,6 +13,7 @@ import { after, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { codigoDoAdaptador } from "../adaptador.mjs";
 import { ErroPlano, lerPlanoNoCommit } from "../ler-plano.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const RAIZ = path.resolve(AQUI, "..", "..", "..");
@@ -36,7 +37,7 @@ function primeiraColuna(titulo) {
 
 /** Projeto de mentira: declaração com o embutido por nome e o plano em `docs/planos/`. */
 function projeto(plano) {
-  const repo = mkdtempSync(path.join(tmpdir(), "conduzivel-"));
+  const repo = pastaTemporaria("conduzivel-");
   tmps.push(repo);
   const git = (...a) => execFileSync("git", a, { cwd: repo, encoding: "utf8" });
   git("init", "-q", "-b", "main");

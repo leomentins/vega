@@ -16,6 +16,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { PAPEL_DA_DISPENSA, TRAILER_DA_DISPENSA, dispensouPublicacao, validar } from "../adaptador.mjs";
 import { politicaDaConferencia } from "../verbos.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const NUCLEO = path.resolve(AQUI, "..");
@@ -62,7 +63,7 @@ const canonico = [
 
 /** Ramo do ciclo com o plano autorizado, a declaração dada e uma conferência forjada de T1. */
 function auditarCom(t, { declaracao, corpo = null, trailerExtra = [] }) {
-  const raiz = mkdtempSync(path.join(tmpdir(), "operador-declarado-"));
+  const raiz = pastaTemporaria("operador-declarado-");
   t.after(() => rmSync(raiz, { recursive: true, force: true }));
   const origin = path.join(raiz, "origin.git");
   execFileSync("git", ["init", "-q", "--bare", origin]);

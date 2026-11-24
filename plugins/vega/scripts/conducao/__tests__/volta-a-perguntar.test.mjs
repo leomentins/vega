@@ -31,6 +31,7 @@ import { aposentar, comAposentadoria, proximo, registrarVoltasDoRamo, voltarAPer
 import * as pergunta from "../pergunta.mjs";
 import { TEXTO_DA_CALIBRACAO } from "../regras.mjs";
 import { ACAO_DA_VOLTA, exigirVoltaAMando, voltasDoRamo } from "../verbos.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.resolve(AQUI, "..", "conducao.mjs");
@@ -98,7 +99,7 @@ function escreverEm(dir, arquivos) {
 }
 
 function logDoTeste(t) {
-  const pasta = mkdtempSync(path.join(tmpdir(), "conducao-volta-log-"));
+  const pasta = pastaTemporaria("conducao-volta-log-");
   const antes = process.env.ALTAIR_CONDUCAO_LOG_DIR;
   process.env.ALTAIR_CONDUCAO_LOG_DIR = pasta;
   t.after(() => {
@@ -112,7 +113,7 @@ function logDoTeste(t) {
 /** O ciclo com a T1 trazida e a conferência do operador pendente. */
 function trazidaPendente(t) {
   const log = logDoTeste(t);
-  const raiz = mkdtempSync(path.join(tmpdir(), "conducao-volta-"));
+  const raiz = pastaTemporaria("conducao-volta-");
   t.after(() => rmSync(raiz, { recursive: true, force: true }));
   const origin = path.join(raiz, "origin.git");
   execFileSync("git", ["init", "-q", "--bare", origin]);
@@ -196,7 +197,7 @@ const plano = { tasks: [{ id: "T2", outputs: ["src/t2.mjs"], publicacao: [], pro
  * parada seguir, e o corpo exportado roda de uma pasta assim (VEGA-20 T46).
  */
 const REPO_DE_TESTE = (() => {
-  const d = mkdtempSync(path.join(tmpdir(), "conducao-repo-de-teste-"));
+  const d = pastaTemporaria("conducao-repo-de-teste-");
   execFileSync("git", ["init", "-q"], { cwd: d, stdio: "ignore" });
   execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@local", "-c", "core.hooksPath=/dev/null", "commit", "-q", "--allow-empty", "-m", "vazio"], { cwd: d, stdio: "ignore" });
   process.on("exit", () => rmSync(d, { recursive: true, force: true }));

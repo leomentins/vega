@@ -22,12 +22,13 @@ import { ESTADOS_DA_POSSE, posseDoProjeto, validarCodigo } from "../adaptador.mj
 import { empurrarRamo, ramoNoOrigin } from "../git-conducao.mjs";
 import { ErroPlano } from "../ler-plano.mjs";
 import { linhasDoEvento } from "../log-eventos.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const RAMO = "ciclo-TESTE-9-ramo";
 const ABERTA = () => ({ number: 77, state: "OPEN" });
 
 function novoRepo(t) {
-  const dir = mkdtempSync(path.join(tmpdir(), "condutora-empurra-ramo-"));
+  const dir = pastaTemporaria("condutora-empurra-ramo-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const origin = path.join(dir, "origin.git");
   const arvore = path.join(dir, "arvore");
@@ -149,7 +150,7 @@ test("o código do adaptador não ganha campo de posse: o adaptador do ramo segu
 
 /** Projeto mínimo com `.vega/declaracao.json`; `posse` entra só quando dado. */
 function projeto(t, posse) {
-  const dir = mkdtempSync(path.join(tmpdir(), "condutora-posse-"));
+  const dir = pastaTemporaria("condutora-posse-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   mkdirSync(path.join(dir, ".vega"));
   const d = { esquema: 1, papel: "consumidor", versao: { corpo: "1.0.0" }, decisoes: { destino: "banco" }, ...(posse ? { posse } : {}) };

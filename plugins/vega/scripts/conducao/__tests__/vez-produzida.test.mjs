@@ -21,6 +21,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { ErroAdaptador, PROJETO_DE_TESTE, esperandoAVezDoProjeto, validarCodigo } from "../adaptador.mjs";
 import { comVezDoAdaptador, problemasDaEntrada, proximo } from "../conducao.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const CICLO = "TESTE-1-vez";
 const CAMINHO = `.agents/ciclo/teste/${CICLO}/canonico.md`;
@@ -61,7 +62,7 @@ const CANONICO = ["---", `cycle: ${CICLO}`, "opened: 2026-11-02", "---", "", "##
  * com a `capacidade()` que diz caber esse número de filhas novas (T24).
  */
 function repo({ comVez, mede = null }) {
-  const dir = mkdtempSync(path.join(tmpdir(), "vez-produzida-"));
+  const dir = pastaTemporaria("vez-produzida-");
   repos.push(dir);
   const g = (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   g("init", "-q", "-b", "ciclo-teste");

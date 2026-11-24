@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { ehNomeEmbutido } from "../adaptador.mjs";
 import { gerarBrief } from "../git-conducao.mjs";
 import { ErroLogV0 } from "../log-eventos.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 /** O projeto de teste das suítes: a declaração e o código de um projeto de mentira. */
@@ -21,7 +22,7 @@ const CICLO = "X-1-teste";
 
 const tmps = [];
 function tmp(prefixo) {
-  const d = mkdtempSync(path.join(tmpdir(), prefixo));
+  const d = pastaTemporaria(prefixo);
   tmps.push(d);
   return d;
 }

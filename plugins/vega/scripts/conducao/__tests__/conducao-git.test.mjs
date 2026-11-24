@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { paginaDoProjeto } from "../adaptador.mjs";
 import { anexarAoBrief, partidaDoBrief, vereditoAprova } from "../git-conducao.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.resolve(AQUI, "..", "conducao.mjs");
@@ -96,7 +97,7 @@ function escreverEm(dir, arquivos) {
 
 /** Origin bare + árvore da maestra no ramo do ciclo + clone da filha. */
 function ambiente(t, { tasks = [task("T1"), task("T2")], largura = 3 } = {}) {
-  const raiz = mkdtempSync(path.join(tmpdir(), "conducao-git-"));
+  const raiz = pastaTemporaria("conducao-git-");
   t.after(() => rmSync(raiz, { recursive: true, force: true }));
   const origin = path.join(raiz, "origin.git");
   execFileSync("git", ["init", "-q", "--bare", origin]);

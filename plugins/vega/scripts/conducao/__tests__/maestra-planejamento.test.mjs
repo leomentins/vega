@@ -14,11 +14,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { criarRamo } from "../criar-ramo.mjs";
 import { maestra, ramoDePlanejamento } from "../conducao.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const CICLO = "TESTE-7-planejar";
 
 function novoRepo(t) {
-  const base = realpathSync(mkdtempSync(path.join(tmpdir(), "maestra-plano-")));
+  const base = realpathSync(pastaTemporaria("maestra-plano-"));
   t.after(() => rmSync(base, { recursive: true, force: true }));
   const origin = path.join(base, "origin.git");
   const repo = path.join(base, "maestra");

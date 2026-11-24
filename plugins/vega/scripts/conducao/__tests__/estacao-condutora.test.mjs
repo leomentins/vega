@@ -21,6 +21,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { lerPlano, normalizarEstacao } from "../ler-plano.mjs";
 import { politicaDaConferencia } from "../verbos.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.resolve(AQUI, "..", "conducao.mjs");
@@ -71,7 +72,7 @@ function canonico(estacao) {
 }
 
 function novoRepo(t) {
-  const dir = mkdtempSync(path.join(tmpdir(), "conducao-condutora-"));
+  const dir = pastaTemporaria("conducao-condutora-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const g = (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   g("init", "-q", "-b", "ciclo-teste");

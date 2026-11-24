@@ -14,6 +14,7 @@ import path from "node:path";
 import { describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { existe, lerDeclaracao } from "../declaracao.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const PLUGIN = path.resolve(AQUI, "..", "..", "..");
@@ -193,7 +194,7 @@ describe("as listas do que sai, na fonte", { skip: fora }, () => {
 
   test("contraprova: o canário acusa um termo real do vocabulário plantado num arquivo", (t) => {
     const termo = linhasUteis(readFileSync(path.join(RAIZ, VOCABULARIO.corpo), "utf8"))[0];
-    const dir = mkdtempSync(path.join(tmpdir(), "vega-listas-"));
+    const dir = pastaTemporaria("vega-listas-");
     t.after(() => rmSync(dir, { recursive: true, force: true }));
     writeFileSync(path.join(dir, "a.md"), `limpo\nantes ${termo.toUpperCase()} depois\n`);
     assert.deepEqual(varrer(dir, ["a.md"], [termo]), [`a.md:2 — ${termo}`]);

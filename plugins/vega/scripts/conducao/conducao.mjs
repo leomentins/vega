@@ -504,6 +504,8 @@ export function mudancasDeAlcance(de, para) {
     return (
       JSON.stringify(a.outputs) !== JSON.stringify(b.outputs) ||
       a.verificacao !== b.verificacao ||
+      // Pós-merge muda o que a conferência exige (`verde` ⇒ `declarada-pos-merge`): é alcance.
+      Boolean(a.posMerge) !== Boolean(b.posMerge) ||
       a.estacao !== b.estacao ||
       a.fase !== b.fase
     );
@@ -511,7 +513,10 @@ export function mudancasDeAlcance(de, para) {
 }
 
 /** Campos do plano parseado que decidem a condução de uma task (T22 passo 1). */
-const CAMPOS_DO_PLANO = ["fase", "deps", "classe", "outputs", "publicacao", "estacao"];
+// `verificacao` e `posMerge` entram porque o `conferir` os lê do plano congelado: trocá-los sem
+// mudar a lista deixava a condução sob o plano velho (percalço 1 da F0 do L4, hotfix
+// conducao-niveis-e-replano).
+const CAMPOS_DO_PLANO = ["fase", "deps", "classe", "outputs", "publicacao", "estacao", "verificacao", "posMerge"];
 
 /**
  * Tasks cujo plano parseado mudou entre dois planos: as que nasceram, sumiram
@@ -592,9 +597,9 @@ export function semSaidasGeradasNaVaga(ctx, geradas) {
  * `geradas` são os caminhos das saídas geradas declaradas (`semSaidasGeradasNaVaga`);
  * `consentimentos` são os casos do ciclo no git (`lerConsentimentos`).
  */
-export function contextoDoProximo({ ciclo, head, plano, planoBlob, planoHead, planoHeadBlob, diffPlano, autorizacoes, estado, entrada = {}, agora = null, reinicioEm = null, encerradas = new Set(), repo = null, replanos = null, anteriores = [], planoHeadTexto = null, reconhecer = parsePhaseCommit, autorizacaoDoCiclo = null, conferencia = [], temCi = true, geradas = [], tiers = {}, passagem = null, consentimentos = [], niveis: arranjo = 2 }, acao) {
+export function contextoDoProximo({ ciclo, head, plano, planoBlob, planoHead, planoHeadBlob, diffPlano, autorizacoes, estado, entrada = {}, agora = null, reinicioEm = null, encerradas = new Set(), repo = null, replanos = null, anteriores = [], planoHeadTexto = null, planoTexto = null, reconhecer = parsePhaseCommit, autorizacaoDoCiclo = null, conferencia = [], temCi = true, geradas = [], tiers = {}, passagem = null, consentimentos = [], niveis: arranjo = 2 }, acao) {
   const ctx = contextoDaDecisao(
-    { ciclo, head, plano, planoBlob, planoHead, planoHeadBlob, diffPlano, autorizacoes, estado, entrada, agora, reinicioEm, encerradas, repo, replanos, anteriores, planoHeadTexto, reconhecer, autorizacaoDoCiclo, conferencia, temCi, tiers, passagem, consentimentos, niveis: arranjo },
+    { ciclo, head, plano, planoBlob, planoHead, planoHeadBlob, diffPlano, autorizacoes, estado, entrada, agora, reinicioEm, encerradas, repo, replanos, anteriores, planoHeadTexto, planoTexto, reconhecer, autorizacaoDoCiclo, conferencia, temCi, tiers, passagem, consentimentos, niveis: arranjo },
     {
       acao,
       nonce,
@@ -1819,6 +1824,9 @@ export function proximo({ repo, ciclo, entrada = {}, entradaErro = null, reinici
     ? commitsDoCanonico(repo, "HEAD", noHead.caminho, { linhaDoCiclo: false }).filter((c) => c.motivo && !doReplano.has(c.sha))
     : [];
   const planoHeadTexto = replanos?.length ? git(repo, ["cat-file", "-p", noHead.blob]) : null;
+  // O canonico congelado na autorização: a restrição `replano` → pergunta vale pelo que o sim viu,
+  // não só pelo que o re-plano escreveu (o re-plano não apaga a própria restrição).
+  const planoTexto = replanos?.length ? git(repo, ["cat-file", "-p", congelado.blob]) : null;
   // O último sim do operador ao ciclo (`autorizar-ciclo`), com o plano congelado
   // nele: a régua do que o sim cobre. Marca ilegível não cobre nada.
   const marcaDoCiclo = autorizacoes.findLast((m) => m.ciclo) ?? null;
@@ -1888,6 +1896,7 @@ export function proximo({ repo, ciclo, entrada = {}, entradaErro = null, reinici
     replanos,
     anteriores,
     planoHeadTexto,
+    planoTexto,
     // Casos de conferência do operador que o adaptador declara (T14) e se o
     // projeto tem CI da proposta (T15, 5-a).
     conferencia: decl.conferencia,
@@ -2148,14 +2157,15 @@ export function aposentar({ repo, ciclo, nonce: n, entrada = {}, historico = und
  * pergunta }`, null no que faltar. Registro por `%x1e`: o trailer vem depois do subject e pode faltar.
  */
 function commitsDoCanonico(repo, faixa, caminho, { linhaDoCiclo = true } = {}) {
-  const fmt = `--format=%H%x1f%s%x1f%(trailers:key=${TRAILER_REPLANO_MOTIVO},valueonly=true,separator=%x2c)%x1f%(trailers:key=${TRAILER_REPLANO_PERGUNTA},valueonly=true,separator=%x2c)%x1e`;
+  const fmt = `--format=%H%x1f%s%x1f%(trailers:key=${TRAILER_REPLANO_MOTIVO},valueonly=true,separator=%x2c)%x1f%(trailers:key=${TRAILER_REPLANO_PERGUNTA},valueonly=true,separator=%x2c)%x1f%P%x1e`;
   return git(repo, ["log", ...(linhaDoCiclo ? ["--first-parent"] : []), fmt, faixa, "--", caminho])
     .split("\x1e")
     .map((r) => r.replace(/^\n+/, ""))
     .filter(Boolean)
     .map((r) => {
-      const [sha, subject = "", motivo = "", pergunta = ""] = r.split("\x1f");
-      return { sha: sha.trim(), subject, motivo: motivo.trim() || null, pergunta: pergunta.trim() || null };
+      const [sha, subject = "", motivo = "", pergunta = "", pais = ""] = r.split("\x1f");
+      // `merge`: o commit tem mais de um pai — o canonico chegou de fora do ciclo (merge de main).
+      return { sha: sha.trim(), subject, motivo: motivo.trim() || null, pergunta: pergunta.trim() || null, merge: pais.trim().split(/\s+/).filter(Boolean).length > 1 };
     });
 }
 
@@ -2203,8 +2213,9 @@ export function herdarAutorizacao({ repo, ciclo, fase, nonce: n }) {
   }).map((c) => ({ sha: c.sha, caso: c.registro.caso, ...(c.registro.task ? { task: c.registro.task } : {}), ...(c.pergunta ? { pergunta: c.pergunta } : {}) }));
   const r = gitConducao.registrarHeranca({ repo, ciclo, fase, autorizacao: p.autorizacao, replanos: p.replanos, planoNovo: p.planoNovo, origem: p.origem ?? "replano", replanoMotivo: p.replanoMotivo ?? null });
   process.stderr.write(`conducao: ${p.aviso}\n`);
-  // T43: o re-plano que seguiu sozinho passa o aviso ao operador com o motivo e o `replano:<sha8>`.
-  return { ...r, aviso: p.aviso, consentimentos, ...(p.origem === "sozinho" ? { avisarOperador: true, replanoMotivo: p.replanoMotivo, ponteiro: p.ponteiro, recibo: p.recibo ?? null } : {}) };
+  // T43: o re-plano que seguiu sozinho passa o aviso ao operador com o motivo e o `replano:<sha8>`;
+  // o pré-autorizado (ruling de 23/11/2026), o aviso e o `replano:<sha8>`.
+  return { ...r, aviso: p.aviso, consentimentos, ...(p.origem === "sozinho" ? { avisarOperador: true, replanoMotivo: p.replanoMotivo, ponteiro: p.ponteiro, recibo: p.recibo ?? null } : {}), ...(p.origem === "preautorizado" ? { avisarOperador: true, ponteiro: p.ponteiro } : {}) };
 }
 
 /** Aspas simples de shell. */

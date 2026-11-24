@@ -14,6 +14,7 @@ import path from "node:path";
 import { after, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { PLUGINS } from "../versao-instalada.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.resolve(AQUI, "..", "versao-instalada.mjs");
@@ -21,7 +22,7 @@ const CORPO = path.resolve(AQUI, "..", "..", "..");
 
 const tmps = [];
 function tmp(prefixo) {
-  const d = mkdtempSync(path.join(tmpdir(), prefixo));
+  const d = pastaTemporaria(prefixo);
   tmps.push(d);
   return d;
 }

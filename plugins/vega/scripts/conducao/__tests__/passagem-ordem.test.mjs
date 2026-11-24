@@ -35,6 +35,7 @@ import { SECOES_DA_NOTA, autorizarCiclo, passagemAberta, passar, trocarLeitorDaP
 import { ErroPlano } from "../ler-plano.mjs";
 import { lerMarcas } from "../marcas.mjs";
 import { nomeDaCondutora, papelNaPassagem, regraPassagem, regraPassarNaFronteira } from "../regras.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const CICLO = "TESTE-16-ordem";
 const PASTA = `.agents/ciclo/teste/${CICLO}`;
@@ -221,7 +222,7 @@ function real(p) {
  * `posse` — o `passar-posse` do projeto é a troca dela.
  */
 function ambiente(t) {
-  const raiz = real(mkdtempSync(path.join(tmpdir(), "passagem-ordem-")));
+  const raiz = real(pastaTemporaria("passagem-ordem-"));
   t.after(() => rmSync(raiz, { recursive: true, force: true }));
   const origin = path.join(raiz, "origin.git");
   execFileSync("git", ["init", "-q", "--bare", origin]);

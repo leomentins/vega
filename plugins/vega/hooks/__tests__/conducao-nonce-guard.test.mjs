@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { registrar } from "../../scripts/conducao/log-eventos.mjs";
+import { pastaTemporaria } from "../../scripts/testes/pasta-temporaria.mjs";
 
 const HOOK = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "conducao-nonce-guard.js");
 const CRIAR = "mcp__claude-code-remote__create_session";
@@ -23,7 +24,7 @@ const N1 = "0123456789abcdef";
 const N2 = "fedcba9876543210";
 
 function ambiente(t) {
-  const dir = mkdtempSync(path.join(tmpdir(), "nonce-guard-"));
+  const dir = pastaTemporaria("nonce-guard-");
   const log = path.join(dir, "log");
   const projeto = path.join(dir, "projeto");
   mkdirSync(path.join(projeto, ".claude", "state"), { recursive: true });

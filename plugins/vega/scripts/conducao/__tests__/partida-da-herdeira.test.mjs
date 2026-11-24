@@ -27,6 +27,7 @@ import path from "node:path";
 import { confirmarPassagem, proximo, retomar, textoDaHerdeira, trazerRamo } from "../conducao.mjs";
 import { SECOES_DA_NOTA, autorizarCiclo, passar, trocarLeitorDaPosse } from "../git-conducao.mjs";
 import { CONFERENCIAS_DA_HERDEIRA, conferenciasDaHerdeira } from "../pre-voo.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const CICLO = "TESTE-17-partida";
 const PASTA = `.agents/ciclo/teste/${CICLO}`;
@@ -90,7 +91,7 @@ const CANONICO = [
  * teste, como o do projeto, não lê árvore destacada sem o ciclo.
  */
 function ambiente(t) {
-  const raiz = real(mkdtempSync(path.join(tmpdir(), "partida-herdeira-")));
+  const raiz = real(pastaTemporaria("partida-herdeira-"));
   t.after(() => rmSync(raiz, { recursive: true, force: true }));
   const origin = path.join(raiz, "origin.git");
   execFileSync("git", ["init", "-q", "--bare", origin]);

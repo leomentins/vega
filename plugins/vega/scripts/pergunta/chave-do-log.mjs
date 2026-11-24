@@ -10,7 +10,16 @@
  * da filha.
  *
  * Precedência da chave (aplicada em `comando.mjs completarChave`): chave dada > log da condução >
- * ramo > `-`. Log ausente, ilegível ou sem casamento devolve `{}`: o `abrir` nunca quebra por ele.
+ * ramo > `-`; na origem, o ramo vem antes do log (o log grava o mesmo `filha` para toda sessão). Log ausente, ilegível ou sem casamento devolve `{}`: o `abrir` nunca quebra por ele.
+ *
+ * A ORIGEM também sai do casamento (hotfix vega-pareador-texto-livre, 24/11/2026): a filha em HEAD
+ * solto saía `avulsa`, porque a origem vinha só do ramo. O papel é o `qualificador` do objeto
+ * `sessao:` no log (`log-eventos.mjs` grava `filha` para toda sessão que a condução cria), afinado
+ * para `condutora` quando a sessão aparece num evento de condutora (`DA_CONDUTORA`). Regra segura,
+ * quando o papel falta ou não é do vocabulário: `filha` — o papel menos específico que vale para
+ * toda sessão que o log nomeia (quem aparece no log foi criada pela condução); nunca `maestra` nem
+ * `condutora`, que o log não provou. `operaria` (o nome do papel na condução) vira `filha`, que é
+ * como o vocabulário fechado da chave (`ORIGENS`) chama a sessão de task.
  */
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -26,6 +35,14 @@ const FECHA = new Set(["conferida", "trazida", "arquivar", "falha-registrada", "
 const DIZ_A_FASE = new Set(["vida", "autorizada", "autorizacao-herdada"]);
 /** O que mostra a sessão no papel de condutora (e não de operária de uma task). */
 const DA_CONDUTORA = new Set(["criar-condutora", "fazer-condutora", "atendido"]);
+/** Os papéis do log que valem como origem da chave, e o nome dela no vocabulário `ORIGENS`. */
+const PAPEL_DO_LOG = new Map([
+  ["filha", "filha"],
+  ["neta", "neta"],
+  ["operaria", "filha"],
+]);
+/** A origem quando a sessão casou e o papel falta (ou não é do vocabulário): a regra segura. */
+export const ORIGEM_SEGURA = "filha";
 
 /** A sessão da nuvem (`session_<X>`) que a árvore em `cwd` serve; fora de uma árvore da ponte, `null`. Puro. */
 export function sessaoDaArvore(cwd) {
@@ -44,7 +61,8 @@ function lerTalvez(arquivo, ler) {
 
 /**
  * A chave que o texto de um log diz, para a `sessao` dada (ou `null`). Puro: linha ilegível é
- * pulada. Devolve `{ fase?, task?, casou }` — `casou` diz se a sessão aparece no log.
+ * pulada. Devolve `{ fase?, task?, origem?, casou }` — `casou` diz se a sessão aparece no log, e
+ * a `origem` (só com `casou`) é o papel dela no log, pela regra do cabeçalho.
  */
 export function chaveDoTexto(texto, ciclo, sessao = null) {
   const prefixo = `task:${ciclo}/`;
@@ -53,6 +71,7 @@ export function chaveDoTexto(texto, ciclo, sessao = null) {
   let casou = false;
   let daSessao = null;
   let condutora = false;
+  let papel = null;
   const abertas = new Map(); // task -> ordem em que abriu
   let ordem = 0;
   for (const linha of String(texto).split("\n")) {
@@ -73,6 +92,9 @@ export function chaveDoTexto(texto, ciclo, sessao = null) {
     if (objSessao && ids.includes(objSessao)) {
       casou = true;
       if (DA_CONDUTORA.has(e.acao)) condutora = true;
+      // O papel do evento mais recente que o diz (o `qualificador` do objeto da sessão).
+      const q = e.objetos.find((o) => o && o.id === objSessao)?.qualificador;
+      if (typeof q === "string" && PAPEL_DO_LOG.has(q)) papel = PAPEL_DO_LOG.get(q);
       // Só o evento com uma task liga a sessão a ela: o `abrir` da leva paralela traz várias e nenhuma sessão.
       if (tasks.length === 1) daSessao = tasks[0];
     }
@@ -81,6 +103,7 @@ export function chaveDoTexto(texto, ciclo, sessao = null) {
   }
   const out = { casou };
   if (fase) out.fase = fase;
+  if (casou) out.origem = condutora ? "condutora" : (papel ?? ORIGEM_SEGURA);
   // A task da sessão só vale aberta: a condutora que fez T6 e a arquivou não segue "em T6".
   if (daSessao && abertas.has(daSessao)) out.task = daSessao;
   // A aberta única vale para a condutora (ou a sessão sem task própria, a condutora aberta à mão);
@@ -91,7 +114,8 @@ export function chaveDoTexto(texto, ciclo, sessao = null) {
 }
 
 /**
- * O que o log da condução diz da chave: `{ ciclo?, fase?, task? }` ou `{}`. Com `ciclo`, lê só o log
+ * O que o log da condução diz da chave: `{ ciclo?, fase?, task?, origem? }` ou `{}` (a origem só
+ * quando a sessão casou). Com `ciclo`, lê só o log
  * dele (a sessão casando ou não: a condutora aberta à mão não aparece no log). Sem `ciclo` (HEAD
  * solto), procura entre os logs da pasta o que tem a `sessao` (o mais recente, se mais de um) e
  * devolve aquele ciclo. Nunca lança.
@@ -104,6 +128,7 @@ export function chaveDoLog({ pasta = null, ciclo = null, sessao = null, ler = re
       const out = {};
       if (r.fase) out.fase = r.fase;
       if (r.task) out.task = r.task;
+      if (r.origem) out.origem = r.origem;
       return { r, out };
     };
     // O log do ciclo já conhecido (entrada ou ramo): a sessão casou nele, ou não há sessão a casar, e é ele.
@@ -113,7 +138,7 @@ export function chaveDoLog({ pasta = null, ciclo = null, sessao = null, ler = re
       if (texto !== null) {
         const { r, out } = deCiclo(ciclo, texto);
         if (!sessao || r.casou) return out;
-        doDado = out;
+        doDado = out; // sem casamento, `out` não tem origem: a sessão não está no log
       }
     }
     // Ciclo conhecido (entrada ou ramo): os outros logs não são varridos — o ramo diz o ciclo.

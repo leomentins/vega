@@ -26,6 +26,7 @@ import { fileURLToPath } from "node:url";
 import { faseAConduzir, retomar, textoDaProximaSessao, textoDoFechamento } from "../conducao.mjs";
 import { lerMarcas } from "../marcas.mjs";
 import { registrar } from "../log-eventos.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.resolve(AQUI, "..", "conducao.mjs");
@@ -108,7 +109,7 @@ const MARCAS_NEXS27 = [
 
 /** Origin bare + árvore do ciclo no ramo, com as marcas do NEXS-27 até a F1 encerrada. */
 function ambiente(t) {
-  const raiz = mkdtempSync(path.join(tmpdir(), "transicao-de-modo-"));
+  const raiz = pastaTemporaria("transicao-de-modo-");
   t.after(() => rmSync(raiz, { recursive: true, force: true }));
   const origin = path.join(raiz, "origin.git");
   execFileSync("git", ["init", "-q", "--bare", origin]);

@@ -22,6 +22,7 @@ import { ErroPlano } from "../ler-plano.mjs";
 import { decidirNoTrazer } from "../verbos.mjs";
 import { trazer } from "../git-conducao.mjs";
 import { foiConstruida, ponteiroDa } from "../pergunta.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const CICLO = "X-1";
 const CANONICO = ".agents/ciclo/vega/X-1/canonico.md";
@@ -52,7 +53,7 @@ function canonico({ mapa = true, comD27 = true } = {}) {
 }
 
 function repo() {
-  const dir = mkdtempSync(path.join(tmpdir(), "consentimento-trazer-"));
+  const dir = pastaTemporaria("consentimento-trazer-");
   const g = (...a) => execFileSync("git", a, { cwd: dir, encoding: "utf8" }).trim();
   g("init", "-q", "-b", "main");
   g("config", "user.email", "t@t");
@@ -223,7 +224,7 @@ function canonicoGit() {
 
 /** Origin bare + árvore da maestra no ramo do ciclo + clone da filha, hooks desligados (como em conducao-git). */
 function ambienteGit(t) {
-  const raiz = mkdtempSync(path.join(tmpdir(), "consentimento-trazer-git-"));
+  const raiz = pastaTemporaria("consentimento-trazer-git-");
   t.after(() => rmSync(raiz, { recursive: true, force: true }));
   const em = (dir) => (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   const configurar = (g) => {

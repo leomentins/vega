@@ -30,6 +30,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { saidasGeradas, raizDoGrafo } from "../../scripts/vega/declaracao.mjs";
+import { pastaTemporaria } from "../../scripts/testes/pasta-temporaria.mjs";
 
 const MOTOR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const GUARD = path.join(MOTOR, "git-guard.js");
@@ -65,7 +66,7 @@ const bump = (file_path, projeto) => rodar(BUMP, { tool_name: "Edit", tool_input
 const git = (args, cwd) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 
 function tmp(prefixo) {
-  return realpathSync.native(mkdtempSync(path.join(os.tmpdir(), prefixo)));
+  return realpathSync.native(pastaTemporaria(prefixo));
 }
 
 /** Repo com cada caminho commitado com X e reescrito com Y no disco: Y em ref nenhuma. */

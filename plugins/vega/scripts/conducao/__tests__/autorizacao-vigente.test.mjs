@@ -21,6 +21,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { lerMarcas, ultimaAutorizacao } from "../marcas.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.resolve(AQUI, "..", "conducao.mjs");
@@ -69,7 +70,7 @@ function canonico(fases) {
 }
 
 function novoRepo(t) {
-  const raiz = mkdtempSync(path.join(tmpdir(), "conducao-autorizacao-vigente-"));
+  const raiz = pastaTemporaria("conducao-autorizacao-vigente-");
   t.after(() => rmSync(raiz, { recursive: true, force: true }));
   const origin = path.join(raiz, "origin.git");
   execFileSync("git", ["init", "-q", "--bare", origin]);

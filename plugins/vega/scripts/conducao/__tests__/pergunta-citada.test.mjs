@@ -23,6 +23,7 @@ import * as c from "../consentimento.mjs";
 import { ErroPlano } from "../ler-plano.mjs";
 import { autorizarCiclo, conferirPerguntaDaHeranca } from "../git-conducao.mjs";
 import { ehDadoDeFixture, motivosParaPerguntar } from "../verbos.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const RAIZ = path.resolve(AQUI, "..", "..", "..", "..", "..", "..");
@@ -85,7 +86,7 @@ function registro(perguntas, { sem_registro = false } = {}) {
 }
 
 function novoRepo(t) {
-  const dir = mkdtempSync(path.join(tmpdir(), "pergunta-citada-"));
+  const dir = pastaTemporaria("pergunta-citada-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const g = (...a) => execFileSync("git", a, { cwd: dir, encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } }).trim();
   g("init", "-q", "-b", "main");
@@ -276,7 +277,7 @@ function bancoEmMemoria(t) {
       gravado_em: new Date().toISOString(),
     },
   ];
-  const pasta = mkdtempSync(path.join(tmpdir(), "pergunta-citada-fila-"));
+  const pasta = pastaTemporaria("pergunta-citada-fila-");
   t.after(() => rmSync(pasta, { recursive: true, force: true }));
   const deps = {
     pasta,

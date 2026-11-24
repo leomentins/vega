@@ -25,6 +25,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { caminhoDoContrato } from "../git-conducao.mjs";
 import { settingsMudaAParada } from "../consentimento.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.resolve(AQUI, "..", "conducao.mjs");
@@ -109,7 +110,7 @@ function escreverEm(dir, arquivos) {
 
 /** Origin bare + maestra no ramo do ciclo (com `extra` no primeiro commit) + clone da filha. */
 function ambiente(t, { extra = {} } = {}) {
-  const raiz = mkdtempSync(path.join(tmpdir(), "trazer-sem-parada-"));
+  const raiz = pastaTemporaria("trazer-sem-parada-");
   t.after(() => rmSync(raiz, { recursive: true, force: true }));
   const origin = path.join(raiz, "origin.git");
   execFileSync("git", ["init", "-q", "--bare", origin]);

@@ -21,6 +21,7 @@ import { fileURLToPath } from "node:url";
 import * as c from "../consentimento.mjs";
 import { decidirNoTrazer } from "../verbos.mjs";
 import { caminhoDoContrato, trazer } from "../git-conducao.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const CONTRATO_REL = "../../../skills/conducao/references/contrato.md";
@@ -229,7 +230,7 @@ function canonicoGit() {
 
 /** Origin bare + árvore da maestra no ramo do ciclo, com o contrato real no lugar dele, + clone da filha. */
 function ambienteGit(t) {
-  const raiz = mkdtempSync(path.join(tmpdir(), "trazer-coberto-pelo-carimbo-"));
+  const raiz = pastaTemporaria("trazer-coberto-pelo-carimbo-");
   t.after(() => rmSync(raiz, { recursive: true, force: true }));
   const em = (dir) => (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   const configurar = (g) => {

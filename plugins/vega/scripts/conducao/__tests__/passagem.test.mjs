@@ -33,6 +33,7 @@ import {
 import { posseDoProjeto } from "../adaptador.mjs";
 import { ErroPlano } from "../ler-plano.mjs";
 import { lerMarcas } from "../marcas.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.resolve(AQUI, "..", "conducao.mjs");
@@ -90,7 +91,7 @@ function corpoNoMolde(extra = 0) {
 }
 
 function ambiente(t) {
-  const raiz = mkdtempSync(path.join(tmpdir(), "passagem-"));
+  const raiz = pastaTemporaria("passagem-");
   t.after(() => rmSync(raiz, { recursive: true, force: true }));
   const origin = path.join(raiz, "origin.git");
   execFileSync("git", ["init", "-q", "--bare", origin]);
@@ -266,7 +267,7 @@ test("a cópia não sobe com a posse passada: a marca fica e o desfecho diz o re
 });
 
 test("o leitor declarado que sai ≠ 0 vira posse ilegível, e o par da dona chega à cerca", (t) => {
-  const raiz = mkdtempSync(path.join(tmpdir(), "passagem-leitor-"));
+  const raiz = pastaTemporaria("passagem-leitor-");
   t.after(() => rmSync(raiz, { recursive: true, force: true }));
   mkdirSync(path.join(raiz, ".vega"));
   const declarar = (leitor) =>

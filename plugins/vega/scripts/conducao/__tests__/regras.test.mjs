@@ -395,7 +395,12 @@ const TABELA = {
   ],
   regraReplano: [
     { caso: "plano do HEAD igual", ctx: { fases: [["F1", [task("T1")]]] }, espera: null },
-    { caso: "task nova no meio da fase, sem ruling", ctx: { fases: [["F1", [task("T1")]]], fasesHead: [["F1", [task("T1"), task("T3")]]] }, espera: "perguntar:plano-mudou" },
+    { caso: "task nova no meio da fase, sem commit de re-plano", ctx: { fases: [["F1", [task("T1")]]], fasesHead: [["F1", [task("T1"), task("T3")]]] }, espera: "perguntar:plano-mudou" },
+    {
+      caso: "task nova no meio da fase, commitada sem ruling, herda pela pré-autorização (ruling de 23/11/2026)",
+      ctx: { fases: [["F1", [task("T1")]]], fasesHead: [["F1", [task("T1"), task("T3")]]], replanos: [{ sha: "1".repeat(40), subject: "re-plano à mão", motivo: null, pergunta: null }] },
+      espera: "herdar-autorizacao",
+    },
     {
       caso: "re-plano que cita a pergunta respondida (Replano-Pergunta) reautoriza pela resposta, sem segunda pergunta",
       ctx: {
@@ -406,25 +411,25 @@ const TABELA = {
       espera: "autorizar-pela-resposta",
     },
     {
-      caso: "re-plano pela resposta que mexe em task de outra fase segue perguntando",
+      caso: "re-plano pela resposta que mexe em task de outra fase herda pela pré-autorização (ruling de 23/11/2026)",
       ctx: {
         fases: [["F1", [task("T1")]], ["F2", [task("T2", { fase: "F2" })]]],
         fasesHead: [["F1", [task("T1"), task("T3")]], ["F2", [task("T2", { fase: "F2" }), task("T4", { fase: "F2" })]]],
         replanos: [{ sha: "1".repeat(40), subject: "re-plano à mão", motivo: null, pergunta: "p-0123456789abcdef" }],
       },
-      espera: "perguntar:plano-mudou",
+      espera: "herdar-autorizacao",
     },
     {
-      caso: "re-plano pela resposta que traz task de outra fase para esta segue perguntando",
+      caso: "re-plano pela resposta que traz task de outra fase para esta herda pela pré-autorização (ruling de 23/11/2026)",
       ctx: {
         fases: [["F1", [task("T1")]], ["F2", [task("T2")]]],
         fasesHead: [["F1", [task("T1"), task("T2")]], ["F2", []]],
         replanos: [{ sha: "1".repeat(40), subject: "re-plano à mão", motivo: null, pergunta: "p-0123456789abcdef" }],
       },
-      espera: "perguntar:plano-mudou",
+      espera: "herdar-autorizacao",
     },
     {
-      caso: "re-plano com dois commits que citam perguntas diferentes segue perguntando",
+      caso: "re-plano com dois commits que citam perguntas diferentes herda pela pré-autorização (ruling de 23/11/2026)",
       ctx: {
         fases: [["F1", [task("T1")]]],
         fasesHead: [["F1", [task("T1"), task("T3")]]],
@@ -433,7 +438,7 @@ const TABELA = {
           { sha: "2".repeat(40), subject: "b", motivo: null, pergunta: null },
         ],
       },
-      espera: "perguntar:plano-mudou",
+      espera: "herdar-autorizacao",
     },
     {
       caso: "re-plano de ruling sem mudar classe herda",

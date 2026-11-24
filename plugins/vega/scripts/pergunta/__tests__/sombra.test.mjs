@@ -22,12 +22,13 @@ import { abrir } from "../comando.mjs";
 import { carregar as carregarDestinatarios } from "../destinatarios.mjs";
 import { chaveDaApi, letraDoToken, prever, sombrear, TETO_MS, vetorDoItem } from "../sombra.mjs";
 import { pecasDuble, registroBancoDuble } from "./dubles.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const destinatarios = carregarDestinatarios();
 const pastas = [];
 const pastaTemp = () => {
-  const p = mkdtempSync(path.join(os.tmpdir(), "zz-test-sombra-"));
+  const p = pastaTemporaria("zz-test-sombra-");
   pastas.push(p);
   return p;
 };

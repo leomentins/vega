@@ -363,7 +363,11 @@ export function contextoDaDecisao(params, injetados) {
   const autoridade = ultimaAutorizacao?.herdada
     ? autorizacoes.find((a) => a.sha === ultimaAutorizacao.herdada) ?? null
     : ultimaAutorizacao;
-  const cobertaPelaFase = daFase && autoridade?.fase === fase.id;
+  // A herança pré-autorizada (ruling de 23/11/2026) cobre como o sim do ciclo: a task com
+  // `simProprio` (caminho clínico ou publicação que altera, D18a) segue pedindo o sim dela.
+  // Vale pela cadeia: herança `sozinho`/`replano` gravada depois de uma pré-autorizada sobre o mesmo sim não devolve a cobertura.
+  const preautorizadaSobreOSim = Boolean(autoridade) && autorizacoes.some((a) => a.fase === fase?.id && a.origem === "preautorizado" && a.herdada === autoridade.sha);
+  const cobertaPelaFase = daFase && autoridade?.fase === fase.id && !preautorizadaSobreOSim;
 
   const voo = tasks.filter((t) => estado.emVoo.has(t.id)).map((t) => ({ t, r: estado.emVoo.get(t.id) }));
   const reabrir = new Map();
@@ -562,6 +566,54 @@ function replanoQueSegueSozinho(ctx, f, campos = {}) {
 }
 
 /**
+ * O re-plano pré-autorizado (ruling do operador, 23/11/2026, verbatim: "pra replanos sempre vale
+ * preautorização"): dentro de ciclo autorizado, todo re-plano commitado desde a última autorização
+ * reautoriza a fase `f` pelo sim que já valia (`autorizacao`, sha da marca com o sim), sem pergunta:
+ * a ação é `herdar-autorizacao` com origem `preautorizado`, o caso `replano` registrado e o aviso ao
+ * operador (`ponteiro` `replano:<sha8>`). Seguem perguntando, fora daqui: a publicação
+ * (`simParaPublicar`), a task com sim próprio (a herança cobre como o sim do ciclo, D18a), a
+ * conferência e a vigia. Sem commit de re-plano, com merge entre eles, sem autorização de origem, ou com a linha
+ * `**Consentimentos:**` que devolve `replano` à pergunta (ou ilegível), null: a pergunta de antes.
+ */
+function replanoPreautorizado(ctx, f, autorizacao, campos = {}) {
+  const { acao, ciclo, plano, planoHead, planoHeadBlob, planoBlob, replanos, reconhecer, planoHeadTexto, planoTexto, diferencaDoPlano, tasksQueMudaramDeClasse, trazidas } = ctx;
+  if (!autorizacao || !planoHead || !planoHeadBlob || !Array.isArray(replanos) || !replanos.length) return null;
+  // Merge que traz o canonico de fora (merge de main, C24) não é re-plano do ciclo: segue perguntando.
+  if (replanos.some((c) => c.merge)) return null;
+  // Tentativa trazida e não conferida na fase: a conferência dela é do operador, sob o plano que ele vê.
+  const idsDaFase = new Set([...(plano.fases.find((x) => x.id === f.id)?.tasks ?? []), ...(planoHead.fases.find((x) => x.id === f.id)?.tasks ?? [])]);
+  if (trazidas instanceof Map && [...trazidas.keys()].some((id) => idsDaFase.has(id))) return null;
+  // A restrição vale no plano novo E no congelado na autorização; a linha mudada pelo re-plano também pergunta.
+  const restrita = (texto) => {
+    const r = linhaDeConsentimentos(texto ?? "");
+    return r.estado === "varias" || r.estado === "ilegivel" || r.pares.get(CASOS.replanoPreautorizado) === RESTRICAO_PERGUNTA || r.repetidos.has(CASOS.replanoPreautorizado);
+  };
+  const linhaDoMapa = (texto) => String(texto ?? "").split("\n").filter((l) => /^\*\*Consentimentos:\*\*/.test(l.replace(/\r$/, ""))).map((l) => l.replace(/\r$/, "").trim()).join("\n");
+  if (restrita(planoHeadTexto) || (planoTexto !== null && planoTexto !== undefined && (restrita(planoTexto) || linhaDoMapa(planoTexto) !== linhaDoMapa(planoHeadTexto)))) return null;
+  const sha8 = replanos.at(-1).sha.slice(0, 8);
+  const tasksMudadas = diferencaDoPlano(plano, planoHead);
+  const mudaram = tasksQueMudaramDeClasse(plano, planoHead);
+  const sensiveis = sensiveisDaFase(planoHead, f);
+  return acao("herdar-autorizacao", `herdar:${f.id}`, 0, {
+    fase: f.id,
+    origem: "preautorizado",
+    autorizacao,
+    planoNovo: planoHeadBlob,
+    planoAnterior: planoBlob,
+    tasksMudadas,
+    mudaramDeClasse: mudaram,
+    replanos: replanos.map((c) => ({ sha: c.sha, ruling: ctx.rulingDoReplano(c.subject, ciclo, reconhecer) })),
+    ponteiro: `replano:${sha8}`,
+    aviso: `${f.id} reautorizada pelo re-plano ${replanos.map((c) => c.sha.slice(0, 8)).join(", ")} pela pré-autorização do operador (ruling de 23/11/2026, replano:${sha8}): ${tasksMudadas.length} task(s) mudada(s)${
+      mudaram.length ? `, ${mudaram.length} de classe` : ""
+    }${sensiveis.length ? `; com sim próprio, que seguem pedindo o delas: ${sensiveis.join(", ")}` : ""}`,
+    ...(sensiveis.length ? { sensiveis } : {}),
+    consentimento: pedidoDeCaso({ caso: CASOS.replanoPreautorizado, fase: f.id, origem: autorizacao }),
+    ...campos,
+  });
+}
+
+/**
  * Fase reaberta por task nova (T27, D-VEGA22-34): a fase autorizada com o
  * último fechamento conferido e sem `Conducao-Encerrada` que ganha, no plano
  * do HEAD, task nascida nela e não feita volta pela pergunta de plano —
@@ -586,10 +638,14 @@ function reabrirFase(ctx, cand) {
   // T43: com fechamento novo, o re-plano que cabe na regra herda a autorização e só avisa.
   const sozinho = semFechamento ? null : replanoQueSegueSozinho(ctx, cand, { reaberta: true });
   if (sozinho) return sozinho;
-  return perguntaDoPlano(ctx, cand.id, ids, tasksMudadas, {
+  const pergunta = perguntaDoPlano(ctx, cand.id, ids, tasksMudadas, {
     reaberta: true,
     ...(semFechamento ? { motivo: "fase-reaberta-sem-fechamento" } : {}),
   });
+  // Ruling de 23/11/2026: o re-plano commitado reautoriza sozinho; a fase sem fechamento segue perguntando.
+  const marca = (ctx.autorizacoes ?? []).findLast((a) => a.fase === cand.id);
+  const pre = semFechamento || pergunta.acao !== "perguntar" ? null : replanoPreautorizado(ctx, cand, marca ? (marca.herdada ?? marca.sha) : null, { reaberta: true });
+  return pre ?? pergunta;
 }
 
 /**
@@ -950,6 +1006,10 @@ export function regraAutorizarFase(ctx) {
       // VEGA-37 T19: o caso já coberto passa a ficar registrado (`consentimento.mjs`).
       consentimento: pedidoDeCaso({ caso: CASOS.herancaEntreFases, fase: fase.id, origem: autorizacaoDoCiclo.sha }),
     });
+  // Ruling de 23/11/2026: com o sim do ciclo dado, o re-plano commitado desde a última autorização
+  // reautoriza a fase nova sozinho; sem sim do ciclo nenhum, a pergunta `autorizar-ciclo` segue.
+  const pre = autorizacaoDoCiclo ? replanoPreautorizado(ctx, fase, autorizacaoDoCiclo.sha) : null;
+  if (pre) return pre;
   const mudaram = planoHead ? tasksQueMudaramDeClasse(plano, planoHead) : [];
   return acao("perguntar", fase.id, 0, {
     motivo: "autorizar-ciclo",
@@ -1033,6 +1093,12 @@ export function regraReplano(ctx) {
           }
         : {}),
     });
+  // Ruling de 23/11/2026: o re-plano commitado que ainda perguntaria reautoriza sozinho e só avisa.
+  if (pergunta.acao === "perguntar") {
+    const marca = (ctx.autorizacoes ?? []).findLast((a) => a.fase === fase.id);
+    const pre = replanoPreautorizado(ctx, fase, marca ? (marca.herdada ?? marca.sha) : null);
+    if (pre) return pre;
+  }
   return pergunta;
 }
 

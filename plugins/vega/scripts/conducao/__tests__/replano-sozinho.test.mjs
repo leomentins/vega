@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 import { diferencaDoPlano, mudancasDeAlcance, mudancasQuePerguntam } from "../conducao.mjs";
 import { CASOS, eventosDoConsentimento, lerConsentimentos } from "../consentimento.mjs";
 import { blocoDaTask, motivoDoReplano, replanoSozinho } from "../verbos.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.resolve(AQUI, "..", "conducao.mjs");
@@ -80,7 +81,7 @@ const ANTES_DA_F2 = "### F2 — fase F2";
  * anterior do ciclo); `conferidas` as tasks da F1 já conferidas (as duas ⇒ fase fechada).
  */
 function ambiente(t, { antes = null, conferidas = ["T1", "T2"] } = {}) {
-  const raiz = mkdtempSync(path.join(tmpdir(), "replano-sozinho-"));
+  const raiz = pastaTemporaria("replano-sozinho-");
   t.after(() => rmSync(raiz, { recursive: true, force: true }));
   const origin = path.join(raiz, "origin.git");
   execFileSync("git", ["init", "-q", "--bare", origin]);
@@ -281,7 +282,7 @@ test("re-plano no meio da fase com o trailer segue sozinho; sem o trailer, a her
   }
 });
 
-test("fase reaberta fora da regra pergunta plano-mudou como antes", (t) => {
+test("fase reaberta fora da regra do re-plano sozinho herda pela pré-autorização (ruling de 23/11/2026)", (t) => {
   const publica = task("T5", { inputs: "T2", steps: "aplica com `db push`", extra: ["- **Publicação:** sim, altera a coluna"] });
   const merge = task("T5", { inputs: "T2", steps: "roda `gh pr merge` da proposta" });
   const tres = task("T5", { inputs: "T2" }) + task("T7", { inputs: "T5" }) + task("T8", { inputs: "T7" });
@@ -302,9 +303,41 @@ test("fase reaberta fora da regra pergunta plano-mudou como antes", (t) => {
     }
     a.replanejar(c.de, c.para, RULING(9, "T5"), c.motivo);
     const p = a.proximo(a.verde(92));
-    assert.equal(p.acao, "perguntar", `${c.caso}: ${JSON.stringify(p)}`);
-    assert.equal(p.motivo, "plano-mudou", c.caso);
+    // O re-plano que mexe na linha `**Consentimentos:**` não se pré-autoriza: a restrição vale pelo que o sim viu.
+    if (c.caso === "linha de restrição") {
+      assert.equal(p.acao, "perguntar", `${c.caso}: ${JSON.stringify(p)}`);
+      assert.equal(p.motivo, "plano-mudou", c.caso);
+    } else {
+      assert.equal(p.acao, "herdar-autorizacao", `${c.caso}: ${JSON.stringify(p)}`);
+      assert.equal(p.origem, "preautorizado", c.caso);
+    }
     assert.equal(p.reaberta, true, c.caso);
+  }
+});
+
+test("fase reaberta pelo CI com republicação aditiva da função (o caso T42 do L4) herda sem pergunta e abre a task", (t) => {
+  // Hotfix nodus-mapa-uma-vez-por-ciclo, 24/11/2026: a T42 do L4 (mapa de telas vencido, republica
+  // a `nodus-chat`) parou em D24 pedindo o sim do plano novo; o motor da árvore do ciclo ainda não
+  // tinha a pré-autorização. Com e sem o trailer do motivo, o re-plano que acrescenta publicação
+  // aditiva reautoriza sozinho, e a task abre coberta pelo sim do ciclo: só o `publicacao-gate.js`
+  // pergunta, no ato do deploy.
+  const republica = task("T5", {
+    inputs: "T2",
+    steps: "regenera o mapa e republica com `db-publish.mjs functions deploy nodus-chat`",
+    extra: ["- **Publicação:** sim, aditiva"],
+  });
+  for (const motivo of ["ci:mapa-vencido", null]) {
+    const a = ambiente(t);
+    a.replanejar(ANTES_DA_F2, republica + T6 + ANTES_DA_F2, RULING(9, "T5-T6"), motivo);
+    const h = a.proximo(a.verde(94));
+    assert.equal(h.acao, "herdar-autorizacao", `${motivo}: ${JSON.stringify(h)}`);
+    assert.ok(["sozinho", "preautorizado"].includes(h.origem), `${motivo}: ${h.origem}`);
+    const ok = a.cli("herdar-autorizacao", "F1", "--nonce", h.nonce);
+    assert.equal(ok.status, 0, ok.stderr);
+    assert.equal(JSON.parse(ok.stdout.trim()).avisarOperador, true);
+    const ab = a.proximo(a.verde(95));
+    assert.equal(ab.acao, "abrir", `${motivo}: ${JSON.stringify(ab)}`);
+    assert.deepEqual(ab.tarefas.map((x) => x.task), ["T5"]);
   }
 });
 

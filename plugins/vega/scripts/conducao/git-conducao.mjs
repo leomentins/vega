@@ -792,8 +792,11 @@ export function gravarAtendido({ repo, ciclo, nonce, sessao }) {
   return { acao: "atendido", ciclo, nonce, sessao: sessao.trim(), ref, commit };
 }
 
-/** As origens da autorização herdada: o re-plano de ruling, o sim do ciclo e o re-plano que seguiu sozinho (T43). */
-export const ORIGENS_DA_HERANCA = Object.freeze(["replano", "ciclo", "sozinho"]);
+/**
+ * As origens da autorização herdada: o re-plano de ruling, o sim do ciclo, o re-plano que seguiu
+ * sozinho (T43) e o re-plano pré-autorizado (ruling do operador, 23/11/2026).
+ */
+export const ORIGENS_DA_HERANCA = Object.freeze(["replano", "ciclo", "sozinho", "preautorizado"]);
 
 /**
  * Autorização herdada pelo re-plano de ruling (F4.17): `Conducao: F<n>
@@ -811,7 +814,9 @@ export function registrarHeranca({ repo, ciclo, fase, autorizacao, replanos, pla
       ? `Autorizada pelo sim do ciclo de ${autorizacao.slice(0, 8)} (autorizar-ciclo, ruling de 27/10/2026)${lista ? `, re-plano ${lista}` : ""}: nenhuma task mudou de classe ou sensibilidade desde o sim. Task sensível desta fase segue pedindo o sim por task.`
       : origem === "sozinho"
         ? `Seguiu sozinha pelo re-plano ${lista} (motivo ${replanoMotivo}): o sim do operador de ${autorizacao.slice(0, 8)} segue valendo — o re-plano ficou dentro da fase, sem caminho clínico, publicação que altera nem a proposta do ciclo, e o motivo não se repetiu (D-VEGA19-53). Vega decidiu por delegação; o operador recebeu o aviso.`
-        : `Herdada pelo re-plano ${lista}: o sim do operador de ${autorizacao.slice(0, 8)} segue valendo — nenhuma task mudou de classe e nenhuma trazida está pendente (F4.17).`;
+        : origem === "preautorizado"
+          ? `Reautorizada pelo re-plano ${lista}: re-plano commitado dentro de ciclo autorizado vale pela pré-autorização do operador (ruling de 23/11/2026) — o sim de ${autorizacao.slice(0, 8)} segue valendo. Publicação, task com sim próprio, conferência e vigia seguem perguntando.`
+          : `Herdada pelo re-plano ${lista}: o sim do operador de ${autorizacao.slice(0, 8)} segue valendo — nenhuma task mudou de classe e nenhuma trazida está pendente (F4.17).`;
   const sha = commitVazio(repo, ciclo, `Conducao: ${fase} autorizada`, {
     corpo,
     trailers: {
@@ -821,6 +826,7 @@ export function registrarHeranca({ repo, ciclo, fase, autorizacao, replanos, pla
       ...(origem === "ciclo" ? { "Conducao-Origem": "ciclo" } : {}),
       // T43: o re-plano que seguiu sozinho diz a origem e o motivo do `/intra-plan`.
       ...(origem === "sozinho" ? { "Conducao-Origem": "sozinho", "Conducao-Replano-Motivo": replanoMotivo } : {}),
+      ...(origem === "preautorizado" ? { "Conducao-Origem": "preautorizado" } : {}),
       // A pergunta em que o operador deu o sim viaja com a herança (D-VEGA19-39).
       ...(perguntaDaAutorizacao(repo, autorizacao) ? { [TRAILER_DA_PERGUNTA]: perguntaDaAutorizacao(repo, autorizacao) } : {}),
     },

@@ -17,6 +17,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { validarCodigo } from "../adaptador.mjs";
 import { pedidoDaEtapa } from "../etapa.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const RAIZ = path.resolve(AQUI, "fixtures", "projeto-de-teste");
@@ -26,7 +27,7 @@ const SCRIPT = path.resolve(AQUI, "..", "conducao.mjs");
 const ARVORES = new Map();
 function arvoreNoRamo(ramo) {
   if (!ARVORES.has(ramo)) {
-    const d = mkdtempSync(path.join(tmpdir(), "etapa-arvore-"));
+    const d = pastaTemporaria("etapa-arvore-");
     const g = (...a) => execFileSync("git", ["-C", d, ...a], { stdio: "pipe" });
     g("init", "-q", "-b", ramo);
     g("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base");
@@ -82,7 +83,7 @@ test("etapa: árvore fora do ramo do ciclo recusa", () => {
 });
 
 test("etapa: árvore que o git não lê recusa com o erro real, não como fora do ramo", () => {
-  const r = rodar("revisar-esboco", "--ciclo", "C", "--arvore", mkdtempSync(path.join(tmpdir(), "etapa-sem-git-")));
+  const r = rodar("revisar-esboco", "--ciclo", "C", "--arvore", pastaTemporaria("etapa-sem-git-"));
   assert.equal(r.status, 1);
   assert.match(r.stderr, /arvore-ilegivel/);
   assert.doesNotMatch(r.stderr, /arvore-sem-ramo-do-ciclo/);

@@ -34,6 +34,7 @@ import { aposentar, comAposentadoria, lerAposentadas, proximo, retomar } from ".
 import * as logEventos from "../log-eventos.mjs";
 import * as pergunta from "../pergunta.mjs";
 import { acaoDaAposentadoria, instanciaDaParada, opcaoDaResposta } from "../regras.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 /**
@@ -42,7 +43,7 @@ const AQUI = path.dirname(fileURLToPath(import.meta.url));
  * parada seguir, e o corpo exportado roda de uma pasta assim (VEGA-20 T46).
  */
 const REPO_DE_TESTE = (() => {
-  const d = mkdtempSync(path.join(tmpdir(), "conducao-repo-de-teste-"));
+  const d = pastaTemporaria("conducao-repo-de-teste-");
   execFileSync("git", ["init", "-q"], { cwd: d, stdio: "ignore" });
   execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@local", "-c", "core.hooksPath=/dev/null", "commit", "-q", "--allow-empty", "-m", "vazio"], { cwd: d, stdio: "ignore" });
   process.on("exit", () => rmSync(d, { recursive: true, force: true }));
@@ -117,7 +118,7 @@ function escreverEm(dir, arquivos) {
 
 /** O log do teste: a pasta final, fora do estado da estação e das outras suítes. */
 function logDoTeste(t) {
-  const pasta = mkdtempSync(path.join(tmpdir(), "conducao-aposentadoria-log-"));
+  const pasta = pastaTemporaria("conducao-aposentadoria-log-");
   const antes = process.env.ALTAIR_CONDUCAO_LOG_DIR;
   process.env.ALTAIR_CONDUCAO_LOG_DIR = pasta;
   t.after(() => {
@@ -131,7 +132,7 @@ function logDoTeste(t) {
 /** O ciclo com a T1 trazida e a conferência do operador pendente: a parada que o `proximo` emite. */
 function trazidaPendente(t, outputs) {
   const log = logDoTeste(t);
-  const raiz = mkdtempSync(path.join(tmpdir(), "conducao-aposentadoria-"));
+  const raiz = pastaTemporaria("conducao-aposentadoria-");
   t.after(() => rmSync(raiz, { recursive: true, force: true }));
   const origin = path.join(raiz, "origin.git");
   execFileSync("git", ["init", "-q", "--bare", origin]);

@@ -18,6 +18,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.resolve(AQUI, "..", "conducao.mjs");
@@ -70,7 +71,7 @@ function canonico() {
 }
 
 function novoRepo(t) {
-  const raiz = mkdtempSync(path.join(tmpdir(), "conducao-sim-ciclo-"));
+  const raiz = pastaTemporaria("conducao-sim-ciclo-");
   t.after(() => rmSync(raiz, { recursive: true, force: true }));
   const origin = path.join(raiz, "origin.git");
   execFileSync("git", ["init", "-q", "--bare", origin]);
@@ -129,7 +130,7 @@ function atravessarF1eF2(r) {
   return saidas;
 }
 
-test("o sim do ciclo atravessa duas fases sem novo pedido e para na task que muda de classe", (t) => {
+test("o sim do ciclo atravessa duas fases sem novo pedido e a task que muda de classe herda pela pré-autorização", (t) => {
   const r = novoRepo(t);
   // Sem autorização nenhuma, a pergunta é o sim do ciclo, com a fase de partida sugerida.
   const pedido = r.proximo();
@@ -151,11 +152,13 @@ test("o sim do ciclo atravessa duas fases sem novo pedido e para na task que mud
     "- **Steps:** aplica a migration com `db-publish.mjs … db push`\n- **Verificação:** `echo verificacao-T3`",
     `${CICLO}-F2/D-TESTE1-9 — re-plano de T3: publica`,
   );
-  const parada = r.proximo();
-  assert.equal(parada.acao, "perguntar", JSON.stringify(parada));
-  assert.equal(parada.motivo, "autorizar-ciclo", "pede o sim do ciclo de novo, nunca o da fase");
-  assert.equal(parada.fase, "F3");
-  assert.deepEqual(parada.mudaramDeClasse.map((m) => m.task), ["T3"]);
+  // Ruling de 23/11/2026: o re-plano commitado reautoriza a fase nova pela pré-autorização, sem o sim do ciclo de novo.
+  const h3 = r.proximo();
+  assert.equal(h3.acao, "herdar-autorizacao", JSON.stringify(h3));
+  assert.equal(h3.origem, "preautorizado");
+  assert.equal(h3.fase, "F3");
+  assert.deepEqual(h3.mudaramDeClasse.map((m) => m.task), ["T3"]);
+  r.ok("herdar-autorizacao", "F3", "--nonce", h3.nonce);
 
   // O sim por fase não é a saída: o verbo recusa e não grava nada.
   const antes = r.g("rev-parse", "HEAD");
@@ -164,13 +167,13 @@ test("o sim do ciclo atravessa duas fases sem novo pedido e para na task que mud
   assert.match(velho.stderr, /autorizar-fase foi aposentado/);
   assert.equal(r.g("rev-parse", "HEAD"), antes);
 
-  // O sim do ciclo de novo, sob o plano novo: a T3, sensível, abre coberta pelo sim dado nesta fase. Pergunta nova: a
-  // da F1 já autorizou uma marca, e reusá-la sai `pergunta-reusada` (D-VEGA19-45).
-  r.ok("autorizar-ciclo", "F3", "--sim", "sim, a T3 pode publicar", "--pergunta", "p-00000000000000a3");
+  // A T3 publica alterando o existente (sem a declaração aditiva): a pré-autorização não a cobre, e ela
+  // pede o sim próprio dela, uma vez (D18a).
   const a3 = r.proximo();
-  assert.equal(a3.acao, "abrir", JSON.stringify(a3));
-  assert.deepEqual(a3.tarefas.map((x) => [x.task, x.classe]), [["T3", "sensivel"]]);
-  assert.deepEqual(a3.cobertasPelaFase?.tasks, ["T3"]);
+  assert.equal(a3.acao, "perguntar", JSON.stringify(a3));
+  assert.equal(a3.motivo, "task-sensivel");
+  assert.equal(a3.task, "T3");
+  assert.equal(a3.porque, "publicacao-que-altera");
 });
 
 test("contraprova: o mesmo re-plano sem mudar classe nem sensibilidade segue sob o sim do ciclo", (t) => {

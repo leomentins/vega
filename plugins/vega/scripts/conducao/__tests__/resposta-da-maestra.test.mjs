@@ -18,6 +18,7 @@ import path from "node:path";
 import { exigirRespostaDaMaestra } from "../consentimento.mjs";
 import { autorizarCiclo, respostaDaMaestra } from "../git-conducao.mjs";
 import { ErroPlano } from "../ler-plano.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const ID = "p-00000000000000c1";
 const MAESTRA = "session_maestra";
@@ -79,7 +80,7 @@ test("o verbo resposta-da-maestra sai aplicar com a origem e o recibo, e nada gr
 });
 
 test("autorizar-ciclo com --maestra recusa o sim que veio de outra sessão, sem commit", (t) => {
-  const dir = mkdtempSync(path.join(tmpdir(), "resposta-da-maestra-"));
+  const dir = pastaTemporaria("resposta-da-maestra-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const g = (...a) => execFileSync("git", a, { cwd: dir, encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } }).trim();
   g("init", "-q", "-b", "main");
@@ -113,7 +114,7 @@ test("autorizar-ciclo com --maestra recusa o sim que veio de outra sessão, sem 
 });
 
 test("em 3 níveis o repasse de pé só pelo texto da mensagem nunca autoriza o ciclo", (t) => {
-  const dir = mkdtempSync(path.join(tmpdir(), "resposta-da-maestra-"));
+  const dir = pastaTemporaria("resposta-da-maestra-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const g = (...a) => execFileSync("git", a, { cwd: dir, encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } }).trim();
   g("init", "-q", "-b", "main");

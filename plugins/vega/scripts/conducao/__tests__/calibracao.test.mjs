@@ -21,6 +21,7 @@ import {
   principal,
   SEQUENCIAS_PARA_APOSENTAR,
 } from "../calibracao.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 /** O que define a parada no adaptador de fixture: o histórico o carrega, como `carregarHistorico`. */
 const DEFINEM_DA_FIXTURE = Object.freeze(["**/hooks/gate-de-publicacao.js", "**/liberacao-da-publicacao.mjs", "db/scripts/**"]);
 const historicoDe = (h) => historicoPuro({ definemAParada: DEFINEM_DA_FIXTURE, ...h });
@@ -147,7 +148,7 @@ test("a resposta aplicada pela aposentadoria nunca entra no histórico", () => {
 });
 
 test("log corrompido ou adaptador com erro saem sem-calibracao, nunca histórico parcial", () => {
-  const pasta = mkdtempSync(path.join(tmpdir(), "calibracao-"));
+  const pasta = pastaTemporaria("calibracao-");
   try {
     const { linhas } = serie("conferencia-do-operador", vezes(10));
     writeFileSync(path.join(pasta, "ciclo-a.jsonl"), `${linhas.map((l) => JSON.stringify(l)).join("\n")}\n{"v":1,"linha":"ev`);
@@ -168,7 +169,7 @@ test("consultar sem --instancia ou com JSON ilegível sai nunca, sem ler o hist�
   const carregar = () => assert.fail("não devia carregar o histórico");
   const rodar = (argv) => principal(argv, { escrever: (s) => saidas.push(JSON.parse(s)), carregar });
   assert.equal(rodar(["consultar", "--motivo", "conferencia-do-operador"]), 0);
-  const pasta = mkdtempSync(path.join(tmpdir(), "calibracao-"));
+  const pasta = pastaTemporaria("calibracao-");
   try {
     const ruim = path.join(pasta, "i.json");
     writeFileSync(ruim, "{ não é json");
@@ -181,7 +182,7 @@ test("consultar sem --instancia ou com JSON ilegível sai nunca, sem ler o hist�
 
 test("consultar e tabela pela linha de comando", () => {
   const h = historicoDe(serie("conferencia-do-operador", vezes(7)));
-  const pasta = mkdtempSync(path.join(tmpdir(), "calibracao-"));
+  const pasta = pastaTemporaria("calibracao-");
   try {
     const arq = path.join(pasta, "i.json");
     writeFileSync(arq, JSON.stringify(LIMPA));

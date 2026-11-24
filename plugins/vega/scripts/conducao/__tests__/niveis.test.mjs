@@ -33,6 +33,7 @@ import {
 } from "../niveis.mjs";
 import { perguntar } from "../pergunta.mjs";
 import { regraPassagem } from "../regras.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const CICLO = "TESTE-90-niveis";
 const RAMO = "ciclo-teste";
@@ -227,7 +228,7 @@ const CANONICO = [
 ].join("\n");
 
 function novoRepo(t) {
-  const dir = mkdtempSync(path.join(tmpdir(), "niveis-"));
+  const dir = pastaTemporaria("niveis-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const origin = path.join(dir, "origin.git");
   const repo = path.join(dir, "arvore");

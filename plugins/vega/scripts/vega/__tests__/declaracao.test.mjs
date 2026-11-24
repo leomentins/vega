@@ -16,6 +16,7 @@ import { describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import * as adaptador from "../../conducao/adaptador.mjs";
 import { ARQUIVO, ErroDeclaracao, existe, lerDeclaracao, validar } from "../declaracao.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const PLUGIN = path.resolve(AQUI, "..", "..", "..");
@@ -48,7 +49,7 @@ function recusa(d, re) {
 }
 
 function repo(t, arquivos) {
-  const r = mkdtempSync(path.join(tmpdir(), "vega-declaracao-"));
+  const r = pastaTemporaria("vega-declaracao-");
   t.after(() => rmSync(r, { recursive: true, force: true }));
   for (const [rel, conteudo] of Object.entries(arquivos)) {
     mkdirSync(path.dirname(path.join(r, rel)), { recursive: true });

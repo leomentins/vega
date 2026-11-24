@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { SEM_COFRE, embrulharSemProducao, estadoDasTasks, lerAviso, nonce } from "../conducao.mjs";
 import { MARCA_SEM_COFRE_PADRAO, PROJETO_DE_TESTE, validar } from "../adaptador.mjs";
 import { comandoDaVerificacao, globParaRegex, lerPlano } from "../ler-plano.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.resolve(AQUI, "..", "conducao.mjs");
@@ -68,7 +69,7 @@ function canonico({ largura, fases }) {
 }
 
 function novoRepo() {
-  const dir = mkdtempSync(path.join(tmpdir(), "conducao-proximo-"));
+  const dir = pastaTemporaria("conducao-proximo-");
   const g = (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   g("init", "-q", "-b", "ciclo-teste");
   g("config", "core.hooksPath", "/dev/null");

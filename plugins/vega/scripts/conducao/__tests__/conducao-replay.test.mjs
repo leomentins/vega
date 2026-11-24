@@ -22,6 +22,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { lerNota } from "../conducao.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.resolve(AQUI, "..", "conducao.mjs");
@@ -32,7 +33,7 @@ const CANONICO_GRAVADO = path.join(AQUI, "fixtures", "replay-canonico.md");
 // ── repo de teste ───────────────────────────────────────────────────────────
 
 function novoRepo(ciclo, { bare = false } = {}) {
-  const dir = mkdtempSync(path.join(tmpdir(), "conducao-replay-"));
+  const dir = pastaTemporaria("conducao-replay-");
   const g = (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   if (bare) {
     g("init", "-q", "--bare");

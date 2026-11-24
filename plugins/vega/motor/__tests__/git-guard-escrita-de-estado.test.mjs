@@ -29,6 +29,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { pastaTemporaria } from "../../scripts/testes/pasta-temporaria.mjs";
 
 const MOTOR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const EXECUTOR = path.join(MOTOR, "hooks-do-motor.mjs");
@@ -44,7 +45,7 @@ function git(cwd, ...args) {
 }
 
 function repo(t) {
-  const dir = realpathSync(mkdtempSync(path.join(os.tmpdir(), "t9-escrita-")));
+  const dir = realpathSync(pastaTemporaria("t9-escrita-"));
   t.after(() => rmSync(dir, { recursive: true, force: true, maxRetries: 3 }));
   git(dir, "init", "-q", "-b", "main");
   git(dir, "config", "user.email", "t@t");
@@ -60,7 +61,7 @@ function repo(t) {
 
 /** Sandbox sem git real: `.git` diretório = árvore principal · `.git` arquivo = worktree linkada. */
 function sandbox(t, tipo) {
-  const dir = realpathSync(mkdtempSync(path.join(os.tmpdir(), `t9-sig-${tipo}-`)));
+  const dir = realpathSync(pastaTemporaria(`t9-sig-${tipo}-`));
   t.after(() => rmSync(dir, { recursive: true, force: true, maxRetries: 3 }));
   if (tipo === "main") mkdirSync(path.join(dir, ".git"));
   else writeFileSync(path.join(dir, ".git"), "gitdir: /em-outro-lugar/.git\n");
@@ -107,7 +108,7 @@ function acoes(d) {
 }
 
 function preload(t, corpo) {
-  const dir = mkdtempSync(path.join(os.tmpdir(), "t9-preload-"));
+  const dir = pastaTemporaria("t9-preload-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const p = path.join(dir, "preload.cjs");
   writeFileSync(p, corpo);

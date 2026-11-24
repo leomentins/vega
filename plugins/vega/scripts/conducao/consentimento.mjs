@@ -24,6 +24,9 @@
  *     `replano-sozinho`               (`regraReplano`, fase reaberta; D-VEGA19-53): decisão de Vega
  *                                     por delegação, que o operador recebe como aviso;
  *     `tela-dos-steps`                (`motivosParaPerguntar`, segmento dos Steps);
+ *     `replano`                       (`regraReplano`, fase reaberta, fase nova; ruling do operador de
+ *                                     23/11/2026): todo re-plano commitado dentro de ciclo autorizado
+ *                                     reautoriza a fase pelo sim que já valia, e o operador recebe o aviso;
  *   novos —
  *     `sensivel-aditiva-na-ordem`      task sensível nova, na ordem do plano, dentro da fase autorizada;
  *     `pergunta-repetida`              mesmo tipo e mesmo motivo já respondidos na fase;
@@ -76,6 +79,10 @@ export const CASOS = Object.freeze({
   herancaEntreFases: "heranca-entre-fases",
   replanoSemMudancaDeClasse: "replano-sem-mudanca-de-classe",
   replanoSozinho: "replano-sozinho",
+  // Ruling do operador, 23/11/2026 ("pra replanos sempre vale preautorização"): o re-plano
+  // commitado dentro de ciclo autorizado reautoriza a fase sem perguntar; a marca é
+  // `Conducao: <fase> consentimento replano`.
+  replanoPreautorizado: "replano",
   telaDosSteps: "tela-dos-steps",
   sensivelAditivaNaOrdem: "sensivel-aditiva-na-ordem",
   perguntaRepetida: "pergunta-repetida",

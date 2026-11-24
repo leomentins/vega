@@ -24,6 +24,7 @@ import { fileURLToPath } from "node:url";
 import * as c from "../consentimento.mjs";
 import { decidirNoTrazer } from "../verbos.mjs";
 import { caminhoDoContrato, contratoDoHead } from "../git-conducao.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const CONTRATO = readFileSync(path.resolve(AQUI, "../../../skills/conducao/references/contrato.md"), "utf8");
@@ -254,7 +255,7 @@ test("o trazer lê o contrato do HEAD", (t) => {
   if (comGit) assert.equal(achado, FONTE);
   else assert.equal(achado, null);
   const rel = achado ?? FONTE;
-  const dir = mkdtempSync(path.join(tmpdir(), "padrao-da-fabrica-"));
+  const dir = pastaTemporaria("padrao-da-fabrica-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const g = (...a) => execFileSync("git", a, { cwd: dir, encoding: "utf8" }).trim();
   g("init", "-q", "-b", "main");

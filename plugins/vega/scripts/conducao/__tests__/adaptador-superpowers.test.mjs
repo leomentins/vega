@@ -9,6 +9,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { validarCodigo } from "../adaptador.mjs";
 import SUPERPOWERS, { A_PERGUNTAR, MARCA_PUBLICACAO, MARCA_SENSIVEL, lerPlanoPublico } from "../adaptadores/superpowers.mjs";
 import { ErroPlano, lerPlano, lerPlanoNoCommit } from "../ler-plano.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const ADAPTADOR = path.resolve(AQUI, "..", "adaptadores", "superpowers.mjs");
@@ -17,7 +18,7 @@ const CODIGO = validarCodigo(SUPERPOWERS, "superpowers");
 
 const tmps = [];
 function tmp(prefixo) {
-  const d = mkdtempSync(path.join(tmpdir(), prefixo));
+  const d = pastaTemporaria(prefixo);
   tmps.push(d);
   return d;
 }

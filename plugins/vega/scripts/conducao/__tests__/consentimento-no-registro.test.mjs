@@ -23,6 +23,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import * as c from "../consentimento.mjs";
 import { ErroPlano } from "../ler-plano.mjs";
 import { autorizarCiclo, consentidosDoTrailer, consentimentosEmFalta } from "../git-conducao.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const RAIZ = path.resolve(AQUI, "..", "..", "..", "..", "..", "..");
@@ -124,7 +125,7 @@ function registroComOsSins() {
 }
 
 function novoRepo(t) {
-  const dir = mkdtempSync(path.join(tmpdir(), "consentimento-no-registro-"));
+  const dir = pastaTemporaria("consentimento-no-registro-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const g = (...a) => execFileSync("git", a, { cwd: dir, encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } }).trim();
   g("init", "-q", "-b", "main");

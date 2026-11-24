@@ -17,6 +17,7 @@ import { after, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { validar } from "../adaptador.mjs";
 import { pedeJulgamento } from "../pre-voo.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const NUCLEO = path.resolve(AQUI, "..");
@@ -27,7 +28,7 @@ const CICLO = "TESTE-1-tier";
 
 const tmps = [];
 function tmp(prefixo) {
-  const d = mkdtempSync(path.join(tmpdir(), prefixo));
+  const d = pastaTemporaria(prefixo);
   tmps.push(d);
   return d;
 }

@@ -22,6 +22,7 @@ import { fileURLToPath } from "node:url";
 import { MOTIVO_SEM_NIVEL, proximo } from "../conducao.mjs";
 import { nomeDaCondutora } from "../regras.mjs";
 import { ErroPlano } from "../ler-plano.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.resolve(AQUI, "..", "conducao.mjs");
@@ -75,7 +76,7 @@ const CANONICO = [
 
 /** Origin bare + árvore da condutora no ramo do ciclo, com a F1 conduzida até o fechamento conferido. */
 function ambiente(t) {
-  const raiz = mkdtempSync(path.join(tmpdir(), "dois-papeis-"));
+  const raiz = pastaTemporaria("dois-papeis-");
   t.after(() => rmSync(raiz, { recursive: true, force: true }));
   const origin = path.join(raiz, "origin.git");
   execFileSync("git", ["init", "-q", "--bare", origin]);

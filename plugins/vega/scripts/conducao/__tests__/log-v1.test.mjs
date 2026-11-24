@@ -21,6 +21,7 @@ import {
   registrar,
   validarLinha,
 } from "../log-eventos.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 /** O projeto de teste das suítes: a declaração e o código de um projeto de mentira. */
@@ -38,7 +39,7 @@ const NONCE = "0123456789abcdef";
 
 const tmps = [];
 function tmp(prefixo) {
-  const d = mkdtempSync(path.join(tmpdir(), prefixo));
+  const d = pastaTemporaria(prefixo);
   tmps.push(d);
   return d;
 }

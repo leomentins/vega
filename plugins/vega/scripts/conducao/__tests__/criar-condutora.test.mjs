@@ -23,6 +23,7 @@ import { fileURLToPath } from "node:url";
 import { textoDoFechamento } from "../conducao.mjs";
 import { lerMarcas } from "../marcas.mjs";
 import { maestraCriarFechamento, nomeDaCondutora, regraFecharCiclo } from "../regras.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.resolve(AQUI, "..", "conducao.mjs");
@@ -69,7 +70,7 @@ const CANONICO = [
 ].join("\n");
 
 function novoRepo(t) {
-  const dir = mkdtempSync(path.join(tmpdir(), "criar-condutora-"));
+  const dir = pastaTemporaria("criar-condutora-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const g = (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   g("init", "-q", "-b", "ciclo-teste");

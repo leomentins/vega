@@ -20,14 +20,15 @@ const RAIZ = "/srv/x/projeto/.claude/worktrees/bridge-cse_01AbC123";
 const EU = "session_01AbC123";
 
 import os from "node:os";
+import { pastaTemporaria } from "../../scripts/testes/pasta-temporaria.mjs";
 
 // Log de condução isolado por teste: o hook não lê mais a última ação emitida (F4.8b), e o teste
 // "a ação `arquivar` emitida não alarga a operária" prova que o log não decide; o log real da
 // estação nunca pode decidir um teste.
-const LOG_VAZIO = fs.mkdtempSync(path.join(os.tmpdir(), "alcance-log-"));
+const LOG_VAZIO = pastaTemporaria("alcance-log-");
 
 function logCom(linhas) {
-  const d = fs.mkdtempSync(path.join(os.tmpdir(), "alcance-log-"));
+  const d = pastaTemporaria("alcance-log-");
   fs.writeFileSync(
     path.join(d, "CICLO-1-teste.jsonl"),
     linhas.map((l) => (typeof l === "string" ? l : JSON.stringify(l))).join("\n") + "\n",
@@ -48,7 +49,7 @@ function intencao(acao, sessao, atributos = {}, quando = new Date().toISOString(
 
 /** Transcript cujo pedido de nascimento é `pedido` (o brief da condução faz operária). */
 function transcriptCom(pedido) {
-  const d = fs.mkdtempSync(path.join(os.tmpdir(), "alcance-transcript-"));
+  const d = pastaTemporaria("alcance-transcript-");
   const f = path.join(d, "t.jsonl");
   fs.writeFileSync(f, JSON.stringify({ type: "user", message: { role: "user", content: pedido } }) + "\n");
   return f;
@@ -374,7 +375,7 @@ test("a ação `arquivar` emitida pela condução não alarga a operária", () =
 
 test("transcript ausente, ilegível ou acima do teto ⇒ raio estreito (a dúvida não libera)", () => {
   const ausente = path.join(LOG_VAZIO, "nao-existe.jsonl");
-  const pasta = fs.mkdtempSync(path.join(os.tmpdir(), "alcance-transcript-"));
+  const pasta = pastaTemporaria("alcance-transcript-");
   // 9 MB de anexos antes do pedido: acima do teto de leitura
   const grande = path.join(pasta, "grande.jsonl");
   const anexo = JSON.stringify({ type: "attachment", texto: "x".repeat(1024 * 1024) }) + "\n";
@@ -487,7 +488,7 @@ test("a forma do aviso em sessão que não é operária, ou ilegível, não é l
 // O guard de alcance não tem mode-file: fora do que libera, devolve `deny` sempre, com ou sem
 // declaração do projeto e com qualquer `<guard>-mode` na pasta declarada.
 test("sem mode-file: fora do alcance devolve deny mesmo com mode-file shadow ou off na pasta declarada", () => {
-  const projeto = fs.mkdtempSync(path.join(os.tmpdir(), "alcance-modo-"));
+  const projeto = pastaTemporaria("alcance-modo-");
   try {
     fs.mkdirSync(path.join(projeto, ".claude", "state"), { recursive: true });
     for (const modo of ["shadow", "off", "hard"]) {
@@ -570,7 +571,7 @@ test("texto digitado na sessão (user sem isMeta) ou tool_result não prova reme
 
 test("remetentesProvados: CRLF, diretório, teto lido pela cauda", async () => {
   const { remetentesProvados } = await import(HOOK);
-  const d = fs.mkdtempSync(path.join(os.tmpdir(), "alcance-rem-"));
+  const d = pastaTemporaria("alcance-rem-");
   const linha = (id) => JSON.stringify({ type: "queue-operation", content: `<cross-session-message from-session="${id}">\nx` });
   const crlf = path.join(d, "crlf.jsonl");
   fs.writeFileSync(crlf, linha("session_01A") + "\r\n" + linha("session_01B") + "\r\n");

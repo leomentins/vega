@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { conflitoSoEmGeradas } from "../git-conducao.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.resolve(AQUI, "..", "conducao.mjs");
@@ -116,7 +117,7 @@ function escreverEm(dir, arquivos) {
 }
 
 function ambiente(t, { saidas = [{ caminho: GERADA, comando: "node gerar.mjs" }] } = {}) {
-  const raiz = mkdtempSync(path.join(tmpdir(), "conducao-geradas-"));
+  const raiz = pastaTemporaria("conducao-geradas-");
   t.after(() => rmSync(raiz, { recursive: true, force: true }));
   const origin = path.join(raiz, "origin.git");
   execFileSync("git", ["init", "-q", "--bare", origin]);

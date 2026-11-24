@@ -26,6 +26,7 @@ import {
 import { DESTINATARIOS_PADRAO, ErroForma } from "../forma.mjs";
 import { existe, lerDeclaracao } from "../../vega/declaracao.mjs";
 import { DESTINATARIOS_DA_CONDUCAO, ErroPergunta, TABELA_DE_DESTINATARIOS, formaDe, perguntar } from "../../conducao/pergunta.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const RAIZ = path.resolve(AQUI, "..", "..", "..", "..", "..", "..");
@@ -80,7 +81,7 @@ test("a condução usa a tabela carregada, com a condutora, dentro ou fora da fo
 
 describe("leitura e conferência", () => {
   test("sem camada: os papéis da forma mais a condutora", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "dest-"));
+    const dir = pastaTemporaria("dest-");
     try {
       const t = carregar({ aqui: dir, raiz: dir });
       assert.equal(t.origem, "padrao");
@@ -93,7 +94,7 @@ describe("leitura e conferência", () => {
   });
 
   test("camada ao lado da peça vence; ilegível recusa, nunca cai no padrão; caminho explícito ausente recusa", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "dest-"));
+    const dir = pastaTemporaria("dest-");
     try {
       writeFileSync(path.join(dir, "destinatarios.json"), JSON.stringify(camada((c) => (c.papeis.revisor = { paridade: false }))));
       assert.ok(carregar({ aqui: dir, raiz: dir }).papeis.includes("revisor"));

@@ -513,8 +513,10 @@ export { chaveDoRamo, ramoAtual };
  * vega-chave-do-log-da-conducao, mesmo dia). Precedência de cada posição: **chave dada > log da
  * condução > ramo > `-`**. O `ciclo` da entrada conta como dado. Do log (`log` = `{ ciclo, fase?, task? }`,
  * o ciclo do log lido) vêm o ciclo (quando o ramo não o diz: HEAD solto), a fase e a task; fase e task
- * só entram se o ciclo do log é o ciclo final da chave. A origem segue do ramo. Sem nada a dizer,
- * `null` (a chave sai `-/-/-` · `avulsa`, como antes). Exportada para teste.
+ * só entram se o ciclo do log é o ciclo final da chave. A origem segue a mesma precedência (hotfix
+ * vega-pareador-texto-livre, 24/11/2026): o ramo, quando diz uma; senão o papel da sessão no log
+ * (`chaveDoLog`, só quando ela casou e no ciclo final da chave). Sem nada a dizer, `null` (a chave sai `-/-/-` · `avulsa`,
+ * como antes). Exportada para teste.
  */
 export function completarChave(chave, { ciclo = null, ramo = null, log = null } = {}) {
   if (chave !== null && chave !== undefined && (typeof chave !== "object" || Array.isArray(chave))) throw new ErroComando("abrir: chave esperada objeto { ciclo?, fase?, task?, origem?, codigos? }");
@@ -534,7 +536,10 @@ export function completarChave(chave, { ciclo = null, ramo = null, log = null } 
     if (vazia(out.fase) && cabe(doLog.fase)) out.fase = doLog.fase;
     if (vazia(out.task) && cabe(doLog.task)) out.task = doLog.task;
   }
+  // A origem do ramo (`-plano`, `hotfix`, `docs`) diz o papel com mais certeza que o log, que grava o
+  // mesmo `filha` para toda sessao: o log so preenche quando o ramo nao diz nenhuma (HEAD solto).
   if (vazia(out.origem) && doRamo.origem) out.origem = doRamo.origem;
+  if (vazia(out.origem) && cabe(doLog.ciclo) && out.ciclo === doLog.ciclo && cabe(doLog.origem)) out.origem = doLog.origem;
   for (const k of Object.keys(out)) if (out[k] === undefined || out[k] === null) delete out[k];
   return Object.keys(out).length ? out : null;
 }
@@ -551,7 +556,7 @@ function logDaConducao(entrada, ramo, conducao) {
   const ciclo = [dado, entrada.ciclo, chaveDoRamo(ramo).ciclo].find((v) => typeof v === "string" && v !== "" && v !== "-") ?? null;
   const lido = chaveDoLog({ pasta: conducao.pasta ?? null, ciclo, sessao: conducao.sessao ?? null });
   // Lido pelo ciclo conhecido, o log fala dele: o ciclo vai junto para a fase e a task valerem nele.
-  return lido.ciclo || !ciclo || !(lido.fase || lido.task) ? lido : { ciclo, ...lido };
+  return lido.ciclo || !ciclo || !(lido.fase || lido.task || lido.origem) ? lido : { ciclo, ...lido };
 }
 
 /** A pasta do log e a sessão da árvore em `cwd`, para o `abrir` da linha de comando; erro vira `null`. */

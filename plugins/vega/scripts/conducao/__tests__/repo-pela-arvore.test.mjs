@@ -21,6 +21,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { maestra } from "../conducao.mjs";
 import { registrarNiveis, trocarLeitorDaPosse } from "../git-conducao.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.resolve(AQUI, "..", "conducao.mjs");
@@ -76,7 +77,7 @@ const CANONICO = [
 
 /** Origin + árvore principal em `main` + (com `comCiclo`) a árvore do ciclo, F1 conduzida até o fechamento conferido. */
 function ambiente(t, { comCiclo = true } = {}) {
-  const raiz = realpathSync(mkdtempSync(path.join(tmpdir(), "repo-pela-arvore-")));
+  const raiz = realpathSync(pastaTemporaria("repo-pela-arvore-"));
   t.after(() => rmSync(raiz, { recursive: true, force: true }));
   const origin = path.join(raiz, "origin.git");
   execFileSync("git", ["init", "-q", "--bare", origin]);

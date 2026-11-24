@@ -19,6 +19,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.resolve(AQUI, "..", "conducao.mjs");
@@ -83,8 +84,14 @@ function confirmarPassagemNaMao(a, fase) {
   a.g("commit", "-q", "--allow-empty", "-m", `Conducao: ${fase} passagem confirmada`, "-m", `Conducao-Passagem: ${fase}\nConducao-Confirma: ${sha}\nConducao-Epoca: 2`);
 }
 
-function ambiente(t) {
-  const raiz = mkdtempSync(path.join(tmpdir(), "conducao-sessao-"));
+/**
+ * O canonico com a restrição `` `replano` → pergunta `` no §1.5: devolve o re-plano à pergunta
+ * `plano-mudou`, que o ruling de 23/11/2026 tirou do caminho padrão (`replano-preautorizado.test.mjs`).
+ */
+const RESTRITO = (txt) => txt.replace("### 1.5 Modo de Execução\n", "### 1.5 Modo de Execução\n\n**Consentimentos:** `replano` → pergunta\n");
+
+function ambiente(t, canonico = CANONICO) {
+  const raiz = pastaTemporaria("conducao-sessao-");
   t.after(() => rmSync(raiz, { recursive: true, force: true }));
   const origin = path.join(raiz, "origin.git");
   execFileSync("git", ["init", "-q", "--bare", origin]);
@@ -96,7 +103,7 @@ function ambiente(t) {
     g("config", k, v);
   g("remote", "add", "origin", origin);
   mkdirSync(path.join(dir, path.dirname(CAMINHO)), { recursive: true });
-  writeFileSync(path.join(dir, CAMINHO), CANONICO);
+  writeFileSync(path.join(dir, CAMINHO), canonico);
   g("add", CAMINHO);
   g("commit", "-q", "-m", "plano");
   g("push", "-q", "origin", "ciclo-teste");
@@ -226,7 +233,7 @@ test("CI vermelho emite perguntar ci-vermelho e CI ausente ou de outro sha emite
 // ── T22: re-plano no meio da fase ───────────────────────────────────────────
 
 test("plano do HEAD diferente do autorizado nas tasks com a fase em curso emite perguntar plano-mudou com o diff", (t) => {
-  const a = ambiente(t);
+  const a = ambiente(t, RESTRITO(CANONICO));
   a.abrirF2();
   assert.equal(a.proximo().acao, "abrir");
   const blobAutorizado = a.g("rev-parse", `HEAD:${CAMINHO}`);
@@ -279,8 +286,8 @@ test("so o paragrafo 13 mudou desde a autorizacao e o proximo segue sem pergunta
 // ── T22: fechamento do ciclo ────────────────────────────────────────────────
 
 /** A F2 conduzida até o fechamento conferido: nenhuma fase restante. */
-function ultimaFaseConferida(t) {
-  const a = ambiente(t);
+function ultimaFaseConferida(t, canonico = CANONICO) {
+  const a = ambiente(t, canonico);
   a.abrirF2();
   for (const id of ["T3", "T4"]) a.conferida(id);
   return a;
@@ -417,7 +424,7 @@ const ANTES_DA_F2 = "### F2 — fase F2";
 const ANTES_DO_PRONTO = "## 4. Pronto\n";
 
 test("task nova no plano do HEAD numa fase com fechamento conferido e sem encerramento emite perguntar plano-mudou com a fase reaberta antes do ci-pendente", (t) => {
-  const a = ambiente(t);
+  const a = ambiente(t, RESTRITO(CANONICO));
   const blobAutorizado = a.g("rev-parse", `HEAD:${CAMINHO}`);
   // Hoje, sem re-plano: a F1 espera o CI para encerrar.
   assert.equal(a.proximo().motivo, "ci-pendente");
@@ -450,10 +457,23 @@ test("task nova no plano do HEAD numa fase com fechamento conferido e sem encerr
   assert.equal(s.fase, "F1");
   assert.equal(s.reaberta, true);
   assert.deepEqual(s.tasksMudadas, [{ task: "T5", mudou: "nasceu" }]);
+
+  // Sem a restrição (ruling de 23/11/2026): a fase reaberta com fechamento novo herda pela
+  // pré-autorização e só avisa; a sem fechamento novo segue perguntando.
+  const c = ambiente(t);
+  c.replanejar(ANTES_DA_F2, T5 + T6 + ANTES_DA_F2);
+  const h = c.proximo();
+  assert.equal(h.acao, "herdar-autorizacao", JSON.stringify(h));
+  assert.equal(h.origem, "preautorizado");
+  assert.equal(h.reaberta, true);
+  assert.equal(h.fase, "F1");
+  const d = ambiente(t);
+  d.replanejar(ANTES_DA_F2, T5 + ANTES_DA_F2);
+  assert.equal(d.proximo({ ci: { sha: d.head(), veredito: "verde", run: 73 } }).motivo, "fase-reaberta-sem-fechamento");
 });
 
 test("a ultima fase fechada que ganha task nova reabre antes do fechar-ciclo", (t) => {
-  const a = ultimaFaseConferida(t);
+  const a = ultimaFaseConferida(t, RESTRITO(CANONICO));
   a.replanejar(ANTES_DO_PRONTO, T7 + T8 + ANTES_DO_PRONTO);
   for (const entrada of [undefined, { ci: { sha: a.head(), veredito: "verde", run: 80 } }, { ci: { sha: a.head(), veredito: "vermelho", run: 81 } }]) {
     const p = a.proximo(entrada);

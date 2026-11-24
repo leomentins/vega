@@ -20,6 +20,7 @@ import { ErroPlano, casaAlgum } from "../ler-plano.mjs";
 import { caminhosDoIntervalo } from "../git-conducao.mjs";
 import { decidirNoTrazer, motivosParaPerguntar } from "../verbos.mjs";
 import { regraAutorizarFase, regraReplano } from "../regras.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 // Gate de teste do próprio plugin: recusa um padrão fixo de documento, na forma
 // `{ recusar, mensagem }` que `gravarConsentimento` espera do gate injetado.
@@ -33,7 +34,7 @@ const CANONICO = ".agents/ciclo/vega/X-1/canonico.md";
 const trazer = (caminhos, outputs, extra = {}) => decidirNoTrazer({ caminhos, canonico: CANONICO, outputs, alcance, codigo: CODIGO, ...extra });
 
 function repo() {
-  const dir = mkdtempSync(path.join(tmpdir(), "consentimento-"));
+  const dir = pastaTemporaria("consentimento-");
   const g = (...a) => execFileSync("git", a, { cwd: dir, encoding: "utf8" }).trim();
   g("init", "-q", "-b", "main");
   g("config", "user.email", "t@t");

@@ -22,6 +22,8 @@ import { fileURLToPath } from "node:url";
 import { PARADAS_QUE_REPLANEJAM } from "../consentimento.mjs";
 import { ErroPlano } from "../ler-plano.mjs";
 import { autorizarCiclo, conferirPerguntaDaHeranca } from "../git-conducao.mjs";
+import { conferir, mudancasDeAlcance, proximo } from "../conducao.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const EXEMPLO = path.resolve(AQUI, "..", "..", "..", "exemplo");
@@ -36,7 +38,7 @@ let seq = 0;
 const novoId = () => `p-${(0xd00 + ++seq).toString(16).padStart(16, "0")}`;
 
 function exemplo(t) {
-  const raiz = mkdtempSync(path.join(tmpdir(), "replano-pela-pergunta-"));
+  const raiz = pastaTemporaria("replano-pela-pergunta-");
   t.after(() => rmSync(raiz, { recursive: true, force: true }));
   const dir = path.join(raiz, "projeto");
   const config = path.join(raiz, "claude-config");
@@ -183,4 +185,36 @@ test("a pergunta citada por só parte dos commits do canonico desde a autorizaç
     e.replano(`Replano-Pergunta: ${id}`);
     assert.throws(() => autorizar(e, id), recusa("pergunta-de-outra-fase"));
   }
+});
+
+/**
+ * Re-plano que só troca a Verificação de uma task, com `Replano-Pergunta` (percalço 1 da F0 do L4,
+ * hotfix conducao-niveis-e-replano): antes, `diferencaDoPlano` não contava a Verificação, o `proximo`
+ * seguia sob o plano congelado sem `autorizar-pela-resposta`, e o `conferir` devolvia a Verificação
+ * velha. Agora o laço reautoriza pela resposta e o `conferir` lê a do plano vigente.
+ */
+test("re-plano só de Verificação com Replano-Pergunta: autorizar-pela-resposta, e o conferir lê a Verificação nova", (t) => {
+  const e = exemplo(t);
+  autorizar(e, doAutorizar(e));
+  const VELHA = "grep -q 'export function despedida' src/despedida.mjs";
+  const NOVA = "grep -q 'despedida' src/despedida.mjs";
+  assert.equal(conferir({ repo: e.dir, ciclo: CICLO, task: "T1" }).comando, VELHA);
+  const id = pergunta(e, { abertura: LIVRE });
+  const PLANO = path.join(e.dir, "docs", "planos", `${CICLO}.md`);
+  writeFileSync(PLANO, readFileSync(PLANO, "utf8").replace(`**Verificação:** \`${VELHA}\``, `**Verificação:** \`${NOVA}\``));
+  e.g("add", "-A");
+  e.g("commit", "-q", "-m", `${CICLO}-F1 — re-plano da Verificação da T1`, "-m", `Replano-Pergunta: ${id}`);
+  const r = proximo({ repo: e.dir, ciclo: CICLO, entrada: {} });
+  assert.equal(r.acao, "autorizar-pela-resposta", JSON.stringify(r));
+  assert.equal(r.pergunta, id);
+  assert.deepEqual(r.tasksMudadas.map((d) => d.task), ["T1"]);
+  autorizar(e, id);
+  assert.equal(conferir({ repo: e.dir, ciclo: CICLO, task: "T1" }).comando, NOVA);
+  assert.notEqual(proximo({ repo: e.dir, ciclo: CICLO, entrada: {} }).acao, "autorizar-pela-resposta");
+});
+
+test("pós-merge trocado é mudança de alcance (não herda pelo sim do ciclo nem segue sozinho)", () => {
+  const plano = (posMerge) => ({ porId: new Map([["T1", { outputs: [], verificacao: "x", estacao: "servidor", fase: "F1", posMerge }]]) });
+  assert.deepEqual(mudancasDeAlcance(plano(false), plano(true)), ["T1"]);
+  assert.deepEqual(mudancasDeAlcance(plano(false), plano(undefined)), []);
 });

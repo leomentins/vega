@@ -20,6 +20,7 @@ import {
   cobertura,
   linhasExecutadas,
 } from "../hooks-alcance.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.resolve(AQUI, "..", "hooks-alcance.mjs");
@@ -33,7 +34,7 @@ const ALCANCE_EFETIVO = Object.freeze([...BOTOES.baseAlcance, ...ALCANCE_DO_ADAP
 
 /** Repo de fixture: `arquivos` = `{ caminho: conteúdo }`. */
 function fixture(arquivos) {
-  const dir = mkdtempSync(path.join(tmpdir(), "hooks-alcance-"));
+  const dir = pastaTemporaria("hooks-alcance-");
   for (const [rel, conteudo] of Object.entries(arquivos)) {
     mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
     writeFileSync(path.join(dir, rel), conteudo);

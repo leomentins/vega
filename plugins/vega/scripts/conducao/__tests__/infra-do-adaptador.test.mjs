@@ -19,6 +19,7 @@ import SUPERPOWERS from "../adaptadores/superpowers.mjs";
 import { BOTOES } from "../botoes.mjs";
 import { textoDoFechamento } from "../conducao.mjs";
 import { motivoDoFechamento } from "../regras.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 
@@ -76,7 +77,7 @@ test("sem os campos, nenhum glob do alcance nem texto do fechamento cita a Sisto
 
 /** O contrato da operária do modelo do núcleo, pelo compositor do adaptador embutido (sem a árvore da Sistoli). */
 function briefDoNucleo() {
-  const d = mkdtempSync(path.join(tmpdir(), "infra-do-adaptador-"));
+  const d = pastaTemporaria("infra-do-adaptador-");
   try {
     const f = path.join(d, "fase-1.md");
     writeFileSync(f, readFileSync(path.join(AQUI, "fixtures", "exemplo-superpowers.md"), "utf8"));

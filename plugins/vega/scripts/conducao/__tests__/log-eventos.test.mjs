@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { linhasDoEvento, pastaDoLog, registrar } from "../log-eventos.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.resolve(AQUI, "..", "conducao.mjs");
@@ -23,7 +24,7 @@ const QUANDO = "2026-10-15T22:00:00.000Z";
 const CONVERSA = "Rita disse: pode seguir com a task, o paciente Fulano ficou de fora";
 
 function pasta() {
-  return mkdtempSync(path.join(tmpdir(), "conducao-log-"));
+  return pastaTemporaria("conducao-log-");
 }
 
 function ler(arquivo) {

@@ -22,6 +22,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { problemasDaEntrada } from "../conducao.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.resolve(AQUI, "..", "conducao.mjs");
@@ -29,7 +30,7 @@ const GIT_EXEC = path.resolve(AQUI, "..", "git-exec.mjs");
 const CICLO = "TESTE-17-fronteira";
 const CAMINHO = `.agents/ciclo/teste/${CICLO}/canonico.md`;
 
-const TMP = mkdtempSync(path.join(tmpdir(), "conducao-fronteira-"));
+const TMP = pastaTemporaria("conducao-fronteira-");
 after(() => rmSync(TMP, { recursive: true, force: true }));
 const ENV = { ...process.env, ALTAIR_CONDUCAO_LOG_DIR: path.join(TMP, "log") };
 

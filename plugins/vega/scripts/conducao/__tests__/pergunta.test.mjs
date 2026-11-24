@@ -14,6 +14,7 @@ import { PONTEIRO_DO_AUTORIZAR } from "../consentimento.mjs";
 import { DESTINATARIOS_DA_CONDUCAO, ErroPergunta, EVENTO, PONTEIRO_DA_PARADA, comPergunta, decisaoDe, foiConstruida, formaDe, gravar, perguntar, ponteiroDa } from "../pergunta.mjs";
 import { criarPergunta } from "../../pergunta/forma.mjs";
 import * as verbos from "../verbos.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 /** O projeto de teste das suítes: a declaração e o código de um projeto de mentira. */
@@ -25,7 +26,7 @@ const QUANDO = "2026-10-28T12:00:00.000Z";
 
 const tmps = [];
 function tmp(prefixo) {
-  const d = mkdtempSync(path.join(tmpdir(), prefixo));
+  const d = pastaTemporaria(prefixo);
   tmps.push(d);
   return d;
 }

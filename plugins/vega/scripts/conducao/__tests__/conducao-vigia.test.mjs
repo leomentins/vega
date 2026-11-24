@@ -22,6 +22,7 @@ import { BOTOES } from "../botoes.mjs";
 import * as logEventos from "../log-eventos.mjs";
 import * as vigia from "../vigia.mjs";
 import { checarTodos, cicloEncerrado } from "../vigia-de-fora.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.resolve(AQUI, "..", "conducao.mjs");
@@ -72,7 +73,7 @@ function canonico(tasks, largura = 2) {
 }
 
 function novoRepo(tasks = [task("T1"), task("T2")], largura = 2) {
-  const dir = mkdtempSync(path.join(tmpdir(), "conducao-vigia-"));
+  const dir = pastaTemporaria("conducao-vigia-");
   const g = (args, env = {}) =>
     execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "pipe"] }).trim();
   g(["init", "-q", "-b", "ciclo-teste"]);
@@ -424,7 +425,7 @@ test("sem aviso ou com tentativa ainda nao decidida, nunca arquivar", (t) => {
 test("abrir com --falhou grava a falha antes do marcador; registrar-falha e idempotente", (t) => {
   const r = novoRepo();
   t.after(r.limpar);
-  const origin = mkdtempSync(path.join(tmpdir(), "conducao-vigia-origin-"));
+  const origin = pastaTemporaria("conducao-vigia-origin-");
   t.after(() => rmSync(origin, { recursive: true, force: true }));
   execFileSync("git", ["init", "-q", "--bare", origin]);
   r.g(["remote", "add", "origin", origin]);
@@ -457,7 +458,7 @@ test("abrir com --falhou grava a falha antes do marcador; registrar-falha e idem
 test("falha de ambiente nao conta no teto, leva trailer proprio e exige motivo (P7 do ATRM-51)", (t) => {
   const r = novoRepo([task("T1"), task("T2")], 2);
   t.after(r.limpar);
-  const origin = mkdtempSync(path.join(tmpdir(), "conducao-vigia-origin-"));
+  const origin = pastaTemporaria("conducao-vigia-origin-");
   t.after(() => rmSync(origin, { recursive: true, force: true }));
   execFileSync("git", ["init", "-q", "--bare", origin]);
   r.g(["remote", "add", "origin", origin]);
@@ -488,7 +489,7 @@ test("falha de ambiente nao conta no teto, leva trailer proprio e exige motivo (
 test("falha de ambiente tem teto proprio e entra pelo abrir --falhou (P7 do ATRM-51)", (t) => {
   const r = novoRepo([task("T1"), task("T2")], 2);
   t.after(r.limpar);
-  const origin = mkdtempSync(path.join(tmpdir(), "conducao-vigia-origin-"));
+  const origin = pastaTemporaria("conducao-vigia-origin-");
   t.after(() => rmSync(origin, { recursive: true, force: true }));
   execFileSync("git", ["init", "-q", "--bare", origin]);
   r.g(["remote", "add", "origin", origin]);
@@ -526,7 +527,7 @@ test("falha de ambiente tem teto proprio e entra pelo abrir --falhou (P7 do ATRM
 function comOrigin(t) {
   const r = novoRepo([task("T1"), task("T2")], 2);
   t.after(r.limpar);
-  const origin = mkdtempSync(path.join(tmpdir(), "conducao-vigia-origin-"));
+  const origin = pastaTemporaria("conducao-vigia-origin-");
   t.after(() => rmSync(origin, { recursive: true, force: true }));
   execFileSync("git", ["init", "-q", "--bare", origin]);
   r.g(["remote", "add", "origin", origin]);
@@ -678,7 +679,7 @@ const vida = (estado, min, extra = {}) => {
   return ev(vigia.sinalDeVida({ ciclo: CV, estado, intervaloMin: j ? j.de : 30, agora: em(min), ...extra }), min);
 };
 const pastaTmp = (t) => {
-  const p = mkdtempSync(path.join(tmpdir(), "vigia-log-"));
+  const p = pastaTemporaria("vigia-log-");
   t.after(() => rmSync(p, { recursive: true, force: true }));
   return p;
 };

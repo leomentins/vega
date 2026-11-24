@@ -22,6 +22,7 @@ import * as c from "../consentimento.mjs";
 import { ErroPlano } from "../ler-plano.mjs";
 import { autorizarCiclo, conferirPerguntaDaHeranca } from "../git-conducao.mjs";
 import { consentimentoDoProjeto, gravarEventosNoRegistro, lerEventosDoRegistro, PHI_DO_CASO } from "../adaptadores/superpowers.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const EXEMPLO = path.resolve(AQUI, "..", "..", "..", "exemplo");
@@ -37,7 +38,7 @@ const novoId = () => `p-${(0xc00 + ++seq).toString(16).padStart(16, "0")}`;
 
 /** O exemplo num repositório git de tmp, com o registro em `.vega/` e a pasta de configuração do transcript. */
 function exemplo(t) {
-  const raiz = mkdtempSync(path.join(tmpdir(), "pergunta-citada-git-"));
+  const raiz = pastaTemporaria("pergunta-citada-git-");
   t.after(() => rmSync(raiz, { recursive: true, force: true }));
   const dir = path.join(raiz, "projeto");
   const config = path.join(raiz, "claude-config");
@@ -213,7 +214,7 @@ test("no exemplo, a opção sim no lugar da letra não autoriza", (t) => {
 
 test("o PHI_DO_CASO do embutido é o do núcleo, e o registro recusa CPF e CNS colados em letra ou com ponto", () => {
   assert.equal(PHI_DO_CASO, c.PHI_DO_CASO);
-  const pasta = mkdtempSync(path.join(tmpdir(), "registro-phi-"));
+  const pasta = pastaTemporaria("registro-phi-");
   try {
     for (const [i, sim] of [["cpf", "12345678", "909"].join(""), ["CNS:", "89800116", "0073035", "x"].join(""), ["cns ", "898", ".0011.", "6007.", "3035"].join("")].entries()) {
       const caso = { ciclo: CICLO, fase: `F${i + 1}`, caso: "instrucao-declarada-em-outputs", quando: ABERTA, sim };

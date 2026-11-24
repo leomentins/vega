@@ -15,7 +15,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { pastaTemporaria } from "../../scripts/testes/pasta-temporaria.mjs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,7 +29,7 @@ const RAMO = "ciclo-TESTE-1";
 const TROCA = `git ${RESET} --keep origin/${RAMO}`;
 
 function tmp(prefixo) {
-  return realpathSync.native(mkdtempSync(path.join(os.tmpdir(), prefixo)));
+  return realpathSync.native(pastaTemporaria(prefixo));
 }
 
 const GIT_ENV = {

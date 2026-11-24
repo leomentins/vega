@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { CAPACIDADE_PADRAO, ErroAdaptador, capacidadeDoProjeto, validar, validarCodigo } from "../adaptador.mjs";
 import { comTetoDoAdaptador } from "../conducao.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const BASE = Object.freeze({
   projeto: "mentira",
@@ -42,7 +43,7 @@ afterEach(() => {
 
 /** Repositório de mentira: declaração em `.altair/adaptador.json` e o código `mentira.mjs` com o corpo dado de `capacidade`. */
 function repoCom(declaracao, corpoDaCapacidade) {
-  const repo = mkdtempSync(path.join(tmpdir(), "capacidade-do-adaptador-"));
+  const repo = pastaTemporaria("capacidade-do-adaptador-");
   repos.push(repo);
   mkdirSync(path.join(repo, ".altair"));
   writeFileSync(path.join(repo, ".altair", "adaptador.json"), JSON.stringify(declaracao));

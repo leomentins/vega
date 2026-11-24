@@ -25,6 +25,7 @@ import { fileURLToPath } from "node:url";
 import { decidir, estadoDasTasks, rulingDoReplano } from "../conducao.mjs";
 import { lerPlano } from "../ler-plano.mjs";
 import { CASOS, gateDaMarcaDeOrigem, gravarCasosHerdados, lerConsentimentos, pedidoDeCaso, seguePorRepeticao } from "../consentimento.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.resolve(AQUI, "..", "conducao.mjs");
@@ -80,7 +81,7 @@ const PADRAO = () =>
   ]);
 
 function novoRepo(t, texto = PADRAO()) {
-  const raiz = mkdtempSync(path.join(tmpdir(), "conducao-sim-fase-"));
+  const raiz = pastaTemporaria("conducao-sim-fase-");
   t.after(() => rmSync(raiz, { recursive: true, force: true }));
   const origin = path.join(raiz, "origin.git");
   execFileSync("git", ["init", "-q", "--bare", origin]);
@@ -123,6 +124,13 @@ function novoRepo(t, texto = PADRAO()) {
   return { dir, g, vazio, blob, autorizar, replanejar, cli, proximo, emVoo };
 }
 
+
+/**
+ * O canonico com a restrição `` `replano` → pergunta `` no §1.5: devolve o re-plano à pergunta
+ * `plano-mudou`, que o ruling de 23/11/2026 tirou do caminho padrão (pré-autorização,
+ * `replano-preautorizado.test.mjs`). Os testes de forma da pergunta rodam sob ela.
+ */
+const RESTRITO = (txt) => txt.replace("### 1.5 Modo de Execução\n", "### 1.5 Modo de Execução\n\n**Consentimentos:** `replano` → pergunta\n");
 const DEP_T3 = ["- **Inputs:** `README.md`\n- **Outputs:** `src/t3.mjs`", "- **Inputs:** T1\n- **Outputs:** `src/t3.mjs`"];
 
 // ── 1. o sim da fase cobre a task sensível em toda tentativa ─────────────────
@@ -264,7 +272,7 @@ test("texto diferente da marca de origem é recusado", (t) => {
 // ── 4. re-plano de ruling que muda classe pergunta ────────────────────────────
 
 test("re-plano de ruling que muda a classe de uma task pergunta plano-mudou", (t) => {
-  const r = novoRepo(t);
+  const r = novoRepo(t, RESTRITO(PADRAO()));
   r.autorizar("F1");
   r.replanejar("- **Steps:** faz\n- **Verificação:** `echo verificacao-T3`", "- **Steps:** publica com `vercel --prod`\n- **Verificação:** `echo verificacao-T3`", RULING);
   const p = r.proximo();
@@ -277,7 +285,7 @@ test("re-plano de ruling que muda a classe de uma task pergunta plano-mudou", (t
 });
 
 test("re-plano de ruling que da publicacao a task de estacao condutora pergunta plano-mudou, mesmo sem mudar a classe", (t) => {
-  const r = novoRepo(t, canonico([{ id: "F1", tasks: [task("T1", { estacao: "condutora" }), task("T2")] }]));
+  const r = novoRepo(t, RESTRITO(canonico([{ id: "F1", tasks: [task("T1", { estacao: "condutora" }), task("T2")] }])));
   r.autorizar("F1");
   r.replanejar("- **Steps:** faz\n- **Verificação:** `echo verificacao-T1`", "- **Steps:** publica com `vercel --prod`\n- **Verificação:** `echo verificacao-T1`", RULING);
   const p = r.proximo();
@@ -286,7 +294,7 @@ test("re-plano de ruling que da publicacao a task de estacao condutora pergunta 
 });
 
 test("re-plano de ruling que troca o que uma task ja sensivel publica pergunta plano-mudou", (t) => {
-  const r = novoRepo(t);
+  const r = novoRepo(t, RESTRITO(PADRAO()));
   r.autorizar("F1");
   r.replanejar("aplica a migration com `db-publish.mjs … db push`", "publica com `vercel --prod`", RULING);
   const p = r.proximo();
@@ -297,10 +305,12 @@ test("re-plano de ruling que troca o que uma task ja sensivel publica pergunta p
 test("re-plano de ruling que traz task sensivel de outra fase para a fase autorizada pergunta plano-mudou", (t) => {
   const r = novoRepo(
     t,
-    canonico([
-      { id: "F1", tasks: [task("T1"), task("T2")] },
-      { id: "F2", tasks: [task("T3", { fase: "F2", steps: "publica com `vercel --prod`" })] },
-    ]),
+    RESTRITO(
+      canonico([
+        { id: "F1", tasks: [task("T1"), task("T2")] },
+        { id: "F2", tasks: [task("T3", { fase: "F2", steps: "publica com `vercel --prod`" })] },
+      ]),
+    ),
   );
   r.autorizar("F1");
   const atual = readFileSync(path.join(r.dir, CAMINHO), "utf8");
@@ -328,7 +338,7 @@ test("registrar-conferencia --publicacao feita exige o sim de Rita na primeira p
 });
 
 test("re-plano de ruling com trazida pendente na fase pergunta plano-mudou", (t) => {
-  const r = novoRepo(t);
+  const r = novoRepo(t, RESTRITO(PADRAO()));
   r.autorizar("F1");
   const reg = r.g("commit-tree", r.g("rev-parse", "HEAD^{tree}"), "-p", r.g("rev-parse", "HEAD"), "-m", "Conducao: T2 tentativa 1 trazida", "-m", "Conducao-Nonce: n-traz\nConducao-Sha-Filha: 1234567");
   r.g("update-ref", `refs/conducao-local/${CICLO}/trazida/T2/1`, reg);
@@ -341,7 +351,7 @@ test("re-plano de ruling com trazida pendente na fase pergunta plano-mudou", (t)
 // ── 5. commit de plano que não é de ruling pergunta ───────────────────────────
 
 test("commit de plano que nao e de ruling pergunta plano-mudou, sozinho ou junto de um de ruling", (t) => {
-  const r = novoRepo(t);
+  const r = novoRepo(t, RESTRITO(PADRAO()));
   r.autorizar("F1");
   r.replanejar(...DEP_T3, `${CICLO}-F1/T3 — ajusta a T3`);
   const p = r.proximo();
@@ -422,7 +432,7 @@ test("primeira publicação do ciclo pede o sim e as seguintes do mesmo ciclo n�
 
 // ── 7. contraprova: sem o reconhecedor de ruling, a herança some ──────────────
 
-test("contraprova: com o regex de ruling desligado o mesmo re-plano pergunta plano-mudou", () => {
+test("contraprova: com o regex de ruling desligado o mesmo re-plano herda pela pré-autorização, não pelo ruling", () => {
   const antigo = PADRAO();
   const novo = antigo.replace(...DEP_T3);
   assert.notEqual(novo, antigo);
@@ -439,9 +449,11 @@ test("contraprova: com o regex de ruling desligado o mesmo re-plano pergunta pla
     replanos: [{ sha: "e".repeat(40), subject: RULING }],
   };
   assert.equal(decidir(base).acao, "herdar-autorizacao");
+  assert.equal(decidir(base).origem, "replano");
   const desligado = decidir({ ...base, reconhecer: () => null });
-  assert.equal(desligado.acao, "perguntar");
-  assert.equal(desligado.motivo, "plano-mudou");
+  // Sem o ruling reconhecido, o re-plano commitado herda pela pré-autorização (ruling de 23/11/2026).
+  assert.equal(desligado.acao, "herdar-autorizacao");
+  assert.equal(desligado.origem, "preautorizado");
 
   assert.equal(rulingDoReplano(RULING, CICLO), "D-TESTE1-7");
   assert.equal(rulingDoReplano(RULING, CICLO, () => null), null);

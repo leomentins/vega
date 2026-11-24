@@ -19,6 +19,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { BOTOES } from "../botoes.mjs";
 import { comPassosDoRamo, decidirCi, gatilhoDePush } from "../conducao.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.resolve(AQUI, "..", "conducao.mjs");
@@ -98,7 +99,7 @@ test("ci sem --pr sai 2 e push-em invalido sai 1", () => {
 // ── conferir-workflows ──────────────────────────────────────────────────────
 
 function repoDeWorkflows(arquivos) {
-  const dir = mkdtempSync(path.join(tmpdir(), "conducao-ci-"));
+  const dir = pastaTemporaria("conducao-ci-");
   mkdirSync(path.join(dir, ".github", "workflows"), { recursive: true });
   for (const [nome, texto] of Object.entries(arquivos)) writeFileSync(path.join(dir, ".github", "workflows", nome), texto);
   return dir;

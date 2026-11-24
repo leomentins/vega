@@ -29,12 +29,13 @@ import {
 } from "../comando.mjs";
 import { tabelaPadrao } from "../destinatarios.mjs";
 import { pecasDuble, registroBancoDuble } from "./dubles.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const destinatarios = tabelaPadrao();
 const silencio = { write() {} };
 const pastas = [];
 const pastaTemp = () => {
-  const p = mkdtempSync(path.join(tmpdir(), "pergunta-comando-"));
+  const p = pastaTemporaria("pergunta-comando-");
   pastas.push(p);
   return p;
 };

@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import * as prova from "../prova.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const RAIZ = path.resolve(AQUI, "..", "..", "..", "..", "..", "..");
@@ -155,7 +156,7 @@ describe("a porta do plugin", () => {
   });
 
   test("o transcript real se acha pela pasta de configuração", (t) => {
-    const config = mkdtempSync(path.join(tmpdir(), "prova-config-"));
+    const config = pastaTemporaria("prova-config-");
     t.after(() => rmSync(config, { recursive: true, force: true }));
     const alvo = path.join(config, "projects", "qualquer", `${SESSAO}.jsonl`);
     mkdirSync(path.dirname(alvo), { recursive: true });

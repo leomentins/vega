@@ -13,7 +13,7 @@
 
 ## O que pede o "sim" do operador
 
-1. **Ciclo e fase** — um "sim" na fase de partida, gravado pelo `autorizar-ciclo --pergunta`, vale para as fases seguintes enquanto nenhuma task mudar de classe ou de sensibilidade ante o plano congelado nele. Re-plano que muda isso pede o "sim" de novo, sob o plano novo (`plano-mudou`); fase fechada não encerrada com task nova também (`reaberta`), salvo o re-plano que segue sozinho (§Re-plano dentro da fase) e o que cita em `Replano-Pergunta` a resposta que o pediu, que vale como o sim. Herança só com origem humana nessa pergunta, aberta com `ponteiro` `autorizar-ciclo:F<n>` (ou a parada citada), um item, `--sim` = texto da opção escolhida, uso único.
+1. **Ciclo e fase** — um "sim" na fase de partida, gravado pelo `autorizar-ciclo --pergunta`, vale para as fases seguintes e para o re-plano commitado depois dele (§Re-plano dentro da fase); fora disso, o re-plano pergunta (`plano-mudou`, `reaberta`). O que cita em `Replano-Pergunta` a resposta que o pediu vale como o sim. Herança só com origem humana nessa pergunta, aberta com `ponteiro` `autorizar-ciclo:F<n>` (ou a parada citada), um item, `--sim` = texto da opção escolhida, uso único.
 2. **Task sensível** — publica ou toca caminho sensível do adaptador: o sim do ciclo a cobre em toda fase e tentativa. Fora do sim da própria fase, pergunta de novo (`task-sensivel`, uma vez por fase, com as pendentes pelo nome) só a de dado de paciente ou caminho clínico, ou a que publica alterando o existente — só a anotação `**Publicação:**` aditiva a dispensa.
 3. **Trazer com alcance** — o trazer não pergunta por arquivo da faixa, dentro ou fora dos Outputs; cada arquivo de fora vira linha do relato e fica no registro `trazida`, com o canonico à parte. Pede o "sim" só o caminho clínico fora dos Outputs, o que define a parada de publicação, mesmo declarado (`define-a-parada`), e a integridade da faixa e da ponta.
 4. **Conferência que só menciona publicação** — o `registrar-conferencia` recusa com `publicacao-pendente`, e o "sim" libera `nao-se-aplica`.
@@ -33,6 +33,8 @@ O trazer grava cada caso abaixo com o texto da linha, byte a byte. A linha `**Co
 Caminho que uma decisão do canonico cita junto com a task, na mesma oração e sem negação, segue sem pergunta (`decisao-registrada-da-task`), gravando o corpo dela.
 
 ## Re-plano dentro da fase
+
+**Re-plano pré-autorizado:** sob o sim do ciclo, todo re-plano commitado reautoriza a fase sozinho (`herdar-autorizacao`, origem `preautorizado`; caso `replano`) e avisa (`replano:<sha8>`). Perguntam: publicação, sim próprio, conferência, vigia, `` `replano` → pergunta ``, merge de fora, fase reaberta sem fechamento novo.
 
 **Re-plano sozinho:** O re-plano da fase em curso, ou da fase reaberta, segue sem perguntar ao operador quando todo commit dele traz `Replano-Motivo: <tipo>:<chave>` (`tipo` ∈ `ci` · `revisao` · `operaria` · `escopo`), nenhuma task some, muda de fase ou troca Outputs, Verificação ou estação, nenhuma fase nasce, nascem no máximo duas tasks além do fechamento, nada toca caminho clínico, dado de paciente, publicação que altera o existente nem a proposta do ciclo (task nova de estação `condutora` ou `workstation`, ou Steps que mesclam, fecham ou reabrem a proposta), nada está trazido sem conferência, e a chave não apareceu em re-plano anterior do ciclo.
 

@@ -11,6 +11,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pastaTemporaria } from "../../scripts/testes/pasta-temporaria.mjs";
 
 const require = createRequire(import.meta.url);
 const { contratoDaSessao, contratoDoTranscript } = require("../lib/sessao-operaria.js");
@@ -18,7 +19,7 @@ const NONCE = "0123456789abcdef";
 const CONTRATO = `## contrato da operária — T7 · nonce \`${NONCE}\`\n\nVocê é a operária…`;
 
 function transcript(t, entradas) {
-  const dir = mkdtempSync(path.join(tmpdir(), "sessao-operaria-"));
+  const dir = pastaTemporaria("sessao-operaria-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const f = path.join(dir, "t.jsonl");
   writeFileSync(f, entradas.map((e) => (typeof e === "string" ? e : JSON.stringify(e))).join("\n") + "\n");

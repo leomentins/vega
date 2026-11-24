@@ -14,14 +14,15 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { assuntoDoRamo, criarRamo, nomeDoRamo } from "../criar-ramo.mjs";
-import { lerMarcas } from "../marcas.mjs";
+import { lerMarcas, niveisDasMarcas } from "../marcas.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.resolve(AQUI, "..", "conducao.mjs");
 const RAIZ = path.resolve(AQUI, "fixtures", "projeto-de-teste");
 
 function novoRepo(t) {
-  const base = mkdtempSync(path.join(tmpdir(), "criar-ramo-"));
+  const base = pastaTemporaria("criar-ramo-");
   t.after(() => rmSync(base, { recursive: true, force: true }));
   const origin = path.join(base, "origin.git");
   const repo = path.join(base, "repo");
@@ -106,4 +107,27 @@ test("pela CLI: --tipo é obrigatório", () => {
   const r = spawnSync(process.execPath, [SCRIPT, "criar-ramo", "--ciclo", "C-4", "--repo", RAIZ], { encoding: "utf8" });
   assert.equal(r.status, 1);
   assert.match(r.stderr, /--tipo plano\|execucao/);
+});
+
+// Hotfix conducao-niveis-e-replano: o ramo de execução nasce com a marca de 3 níveis (D10c do L4,
+// p-2fe3674c014f0735), para a `Conducao: F0 autorizada` não fazê-lo ser lido como legado de 2.
+test("o ramo de execução nasce com a marca de 3 níveis; a autorização da F0 não o torna legado", (t) => {
+  const { repo, origin, g } = novoRepo(t);
+  const r = criarRamo({ repo, ciclo: "C-4", tipo: "execucao" });
+  const ref = "refs/heads/ciclo-C-4";
+  assert.equal(execFileSync("git", ["-C", origin, "rev-parse", ref], { encoding: "utf8" }).trim(), r.sha);
+  assert.equal(g("rev-parse", `${r.sha}^{tree}`), g("rev-parse", "origin/main^{tree}"));
+  assert.deepEqual(niveisDasMarcas(lerMarcas(repo, ref)), { niveis: 3, origem: "marca", sha: r.sha });
+  assert.equal(g("log", "-1", "--format=%(trailers:key=Conducao-Origem,valueonly)", r.sha), "criar-ramo");
+  // A F0 autorizada por cima segue em 3.
+  g("checkout", "-q", "ciclo-C-4");
+  g("commit", "-q", "--allow-empty", "-m", "Conducao: F0 autorizada", "-m", "Conducao-Plano: abc");
+  assert.equal(niveisDasMarcas(lerMarcas(repo)).niveis, 3);
+});
+
+test("ramo antigo sem a marca, autorizado: segue legado de 2 (não vira 3 calado)", (t) => {
+  const { repo, g } = novoRepo(t);
+  g("checkout", "-q", "-b", "ciclo-C-5");
+  g("commit", "-q", "--allow-empty", "-m", "Conducao: F0 autorizada", "-m", "Conducao-Plano: abc");
+  assert.deepEqual(niveisDasMarcas(lerMarcas(repo)), { niveis: 2, origem: "legado", sha: null });
 });

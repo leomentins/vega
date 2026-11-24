@@ -23,6 +23,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { caminhoDoContrato } from "../git-conducao.mjs";
+import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.resolve(AQUI, "..", "conducao.mjs");
@@ -66,7 +67,7 @@ function perguntaProvada(dir, config, { id = "p-00000000000000a1", fase = "F1", 
 }
 
 function ambiente(t, { preparar = null } = {}) {
-  const raiz = mkdtempSync(path.join(tmpdir(), "altair-conducao-exemplo-"));
+  const raiz = pastaTemporaria("altair-conducao-exemplo-");
   t.after(() => rmSync(raiz, { recursive: true, force: true }));
   const origin = path.join(raiz, "origin.git");
   execFileSync("git", ["init", "-q", "--bare", origin]);
