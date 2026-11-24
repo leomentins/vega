@@ -86,6 +86,7 @@ import { renderizar } from "./renderizar.mjs";
 import { chaveDoRamo, ramoAtual } from "./chave.mjs";
 import { chaveDoLog, sessaoDaArvore } from "./chave-do-log.mjs";
 import { sombrear } from "./sombra.mjs";
+import { escolhasCitadas, lerTokens } from "./escolhas.mjs";
 import { caminhoDeCodigo, caminhoDoEmbutido, codigoDoAdaptador, ehNomeEmbutido, lerAdaptador } from "../conducao/adaptador.mjs";
 
 /** O verbo do destino banco, relativo à raiz do projeto. */
@@ -276,7 +277,6 @@ export function fraseDeConfirmacao(leitura) {
 }
 
 const LETRA_UNICA = /^\(?([a-z])\)?\s*(?:$|[—–\-:,.;!]\s*([\s\S]*)$)/i;
-const TOKEN = /(?<![A-Za-z0-9])D?(\d{1,4})([a-zA-Z])(?![A-Za-z0-9])/g;
 
 /**
  * Lê o literal do operador contra os itens da abertura (`[{ numero, opcoes: [{ letra }] }]`;
@@ -287,6 +287,12 @@ const TOKEN = /(?<![A-Za-z0-9])D?(\d{1,4})([a-zA-Z])(?![A-Za-z0-9])/g;
  * (D-VEGA20-6, VEGA-20 T8): sai `a-confirmar`, sem escolhas, com a `leitura` da sessão
  * (`D7a não existe neste bloco` · `D1d: d não é opção de D1`), e volta ao operador. Duas letras no
  * mesmo item seguem recusando. Abertura restrita sem as letras (`itens` nulo): só a sintaxe.
+ * Escolha × citação (hotfix vega-escolha-nao-e-citacao, 24/11/2026): os tokens saem de `lerTokens`
+ * (`escolhas.mjs`, a regra única com o pareador) — só o token no começo da linha, ou na sequência
+ * que começa nele, é escolha; a letra citada num texto livre ("…mais inteligente que 2a") fica no
+ * comentário. `N-<texto>` é o texto livre do item N e sai em `livres` (números sem escolha). A
+ * resposta que só traz letra citada (nenhum token, nenhum `N-texto`, e a leitura solta acha uma opção
+ * do bloco) sai `a-confirmar` com a leitura `D2a citado no texto`.
  */
 export function interpretarResposta(literal, itens) {
   if (typeof literal !== "string" || !literal.trim()) throw new ErroComando("responder exige o texto literal do operador");
@@ -294,15 +300,24 @@ export function interpretarResposta(literal, itens) {
   const conhecidos = Array.isArray(itens) && itens.length > 0 ? new Map(itens.map((it) => [it.numero, new Set((it.opcoes ?? []).map((o) => o.letra))])) : null;
   const escolhas = [];
   const foraDoBloco = [];
-  let resto = texto;
+  const { tokens, livres } = lerTokens(texto);
   // Número que o bloco não tem só é número de decisão com o `D` escrito, ou quando a resposta é só
   // tokens (`7a`, `7a 8b`): sem isso, `5h`, `10m` e `2x` do texto livre seguem como texto.
-  const soTokens = texto.replace(TOKEN, " ").replace(/[\s,;.:/+&e-]+/gi, "") === "";
-  for (const m of texto.matchAll(TOKEN)) {
-    const numero = Number(m[1]);
-    const letra = m[2].toLowerCase();
+  let soTokens = "";
+  let ultimo = 0;
+  for (const t of tokens) {
+    soTokens += texto.slice(ultimo, t.ini);
+    ultimo = t.fim;
+  }
+  soTokens = (soTokens + texto.slice(ultimo)).replace(/[\s,;.:/+&e*_|—–-]+/gi, "") === "";
+  const usados = [];
+  for (const t of tokens) {
+    const { numero, letra } = t;
+    // `Decisão 6: sim` é o sim do consentimento, não letra de opção: segue texto, como antes.
+    if (letra.length > 1) continue;
+    const bruto = texto.slice(t.ini, t.fim);
     if (conhecidos && !conhecidos.has(numero)) {
-      if (/^d/i.test(m[0]) || soTokens) foraDoBloco.push(`D${numero}${letra} não existe neste bloco`);
+      if (/^d/i.test(bruto) || soTokens) foraDoBloco.push(`D${numero}${letra} não existe neste bloco`);
       continue;
     }
     if (conhecidos && !conhecidos.get(numero).has(letra)) {
@@ -312,10 +327,12 @@ export function interpretarResposta(literal, itens) {
     const ja = escolhas.find((e) => e.numero === numero);
     if (ja && ja.letra !== letra) throw new ErroComando(`D${numero}: duas letras na mesma resposta (${ja.letra} e ${letra})`);
     if (!ja) escolhas.push({ numero, letra });
-    resto = resto.replace(m[0], " ");
+    usados.push(t);
   }
+  let resto = texto;
+  for (const t of [...usados].reverse()) resto = `${resto.slice(0, t.ini)} ${resto.slice(t.fim)}`;
   if (foraDoBloco.length > 0) {
-    return { tipo: A_CONFIRMAR, escolhas: [], ecoada: [], comentario: null, alternativa_livre: false, leitura: [...new Set(foraDoBloco)].join("; ") };
+    return { tipo: A_CONFIRMAR, escolhas: [], ecoada: [], comentario: null, alternativa_livre: false, livres: [], leitura: [...new Set(foraDoBloco)].join("; ") };
   }
   if (escolhas.length === 0 && conhecidos && conhecidos.size === 1) {
     const m = LETRA_UNICA.exec(texto);
@@ -325,11 +342,24 @@ export function interpretarResposta(literal, itens) {
       resto = m[2] ?? "";
     }
   }
+  // Só letra citada num texto livre ("fico com 2a", "vamos de 2a e 3b"), sem escolha nem `N-texto`:
+  // volta ao operador em vez de virar alternativa livre calada (revisão do hotfix
+  // vega-escolha-nao-e-citacao) — antes a leitura solta gravava essas letras como escolha.
+  if (escolhas.length === 0 && livres.length === 0 && conhecidos) {
+    const citadas = escolhasCitadas(texto).escolhas.filter((e) => conhecidos.get(e.numero)?.has(e.letra));
+    if (citadas.length > 0) {
+      const leitura = citadas.map((e) => `D${e.numero}${e.letra} citado no texto`).join("; ");
+      return { tipo: A_CONFIRMAR, escolhas: [], ecoada: [], comentario: null, alternativa_livre: false, livres: [], leitura };
+    }
+  }
   const comentario = resto.replace(/^[\s—–\-:,.;!]+|[\s—–\-:,.;]+$/g, "").replace(/\s{2,}/g, " ").trim() || null;
   const alternativa_livre = escolhas.length === 0;
   const tipo = alternativa_livre ? "alternativa-livre" : comentario ? "opcao-com-comentario" : "opcao";
   escolhas.sort((a, b) => a.numero - b.numero);
-  return { tipo, escolhas, ecoada: escolhas.map((e) => `D${e.numero}${e.letra}`), comentario: alternativa_livre ? null : comentario, alternativa_livre };
+  // `N-<texto>` do item que não tem escolha (e que o bloco tem): a alternativa livre daquele item.
+  const comEscolha = new Set(escolhas.map((e) => e.numero));
+  const livresDoBloco = [...new Set(livres.map((l) => l.numero))].filter((n) => !comEscolha.has(n) && (!conhecidos || conhecidos.has(n))).sort((a, b) => a - b);
+  return { tipo, escolhas, ecoada: escolhas.map((e) => `D${e.numero}${e.letra}`), comentario: alternativa_livre ? null : comentario, alternativa_livre, livres: livresDoBloco };
 }
 
 // ── os verbos ───────────────────────────────────────────────────────────────

@@ -19,6 +19,7 @@
 //
 // Paridade: `__tests__/prova.test.mjs` roda os mesmos casos contra esta porta e, na fonte, contra
 // a lib da Sistoli; divergência de veredito reprova.
+import { escolhasCitadas, escolhasDoTexto } from "./escolhas.mjs";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -28,8 +29,6 @@ export const FORCA_DAS_ORIGENS = Object.freeze(["digitado", "digitado-no-hub-con
 
 const CROSS_SESSION = /^\s*<cross-session-message from-session="([^"]+)">\s*([\s\S]*?)\s*(?:<\/cross-session-message>\s*)?$/;
 const RECIBO = /^\s*(?:[-*•>]\s*)?Recibo:\s*([A-Za-z0-9_-]{1,128})\s+([A-Za-z0-9_-]{1,128})\s*$/m;
-const DECISAO_FIXA = /^\s*(?:[-*•>]\s*)?(?:\*\*)?\s*Decis(?:ão|ao)\s+D?(\d{1,4})\s*:\s*\(?(sim|[a-z])\)?(?![A-Za-z])/gim;
-const TOKEN_DO_ITEM = /(?<![A-Za-z0-9])D?(\d{1,4})([a-z])(?![A-Za-z0-9])/gi;
 const SEM_TAGS_DO_SISTEMA = /<(system-reminder|command-[a-z]+|local-command-[a-z]+|pasted_content)\b[^>]*>[\s\S]*?<\/\1>/g;
 
 /** Texto dos blocos `text` de uma entrada (sem `tool_result`), sem o que o sistema injeta. */
@@ -64,32 +63,26 @@ export function reciboDoTexto(texto) {
 }
 
 /**
- * As escolhas que um texto declara: `D6a`, `6a` e a linha `Decisão 6: a · …`
- * (ou `Decisão 6: sim`). Devolve `[{ numero, letra }]` na ordem do texto, uma por numero (a
- * primeira). Numero que aparece com duas letras diferentes sai em `conflito`.
+ * As escolhas que a resposta do operador declara: a regra ancorada de `escolhas.mjs` (hotfix
+ * vega-escolha-nao-e-citacao, 24/11/2026) — `D6a`, `6a`, `6 - a` e a linha `Decisão 6: a`, no
+ * começo da linha ou na sequência que começa nele; a letra citada num texto livre não vale.
+ * `{ escolhas, conflito, livres }`. A leitura solta, para o texto que cita decisões (mensagem entre
+ * sessões), é `escolhasCitadas`.
  */
-export function escolhasDoTexto(texto) {
-  const s = String(texto ?? "");
-  const vistas = new Map();
-  const conflito = new Set();
-  const somar = (numero, letra) => {
-    const ja = vistas.get(numero);
-    if (ja && ja !== letra) conflito.add(numero);
-    if (!ja) vistas.set(numero, letra);
-  };
-  for (const m of s.matchAll(DECISAO_FIXA)) somar(Number(m[1]), m[2].toLowerCase());
-  for (const m of s.matchAll(TOKEN_DO_ITEM)) somar(Number(m[1]), m[2].toLowerCase());
-  return { escolhas: [...vistas].map(([numero, letra]) => ({ numero, letra })), conflito: [...conflito] };
-}
+export { escolhasCitadas, escolhasDoTexto, LIVRE_NUMERADO } from "./escolhas.mjs";
 
 /**
  * O texto traz cada escolha (numero e letra do item, ou `sim`)? Escolha vazia nunca casa. Com
  * `itemUnico` (a abertura tem um item so), vale tambem a letra sozinha no inicio do texto (`b`,
- * `(b), mas …`) — a letra unica do bloco de um item (AC-VEGA19-2).
+ * `(b), mas …`) — a letra unica do bloco de um item (AC-VEGA19-2). A conferência le solto
+ * (`escolhasCitadas`, unida à ancorada): a prova confere que as escolhas ja derivadas estao no texto, nao as deriva —
+ * e a prova e relida a cada leitura, entao apertar aqui rebaixaria a origem de respostas antigas.
  */
 export function textoCasaEscolhas(texto, escolhas, { itemUnico = false } = {}) {
   if (!Array.isArray(escolhas) || escolhas.length === 0) return false;
-  const achadas = escolhasDoTexto(texto).escolhas;
+  // A uniao das duas leituras: a solta (a citacao segue provando) e a ancorada (as formas que so ela
+  // le, `4 - a`, `16-a, mas`, que o `responder` ja grava como escolha).
+  const achadas = [...escolhasCitadas(texto).escolhas, ...escolhasDoTexto(texto).escolhas];
   if (itemUnico && achadas.length === 0 && escolhas.length === 1 && escolhas[0].letra !== "sim") {
     const m = /^\s*\(?([a-z])\)?\s*(?:$|[,.;:!—–-])/i.exec(String(texto ?? ""));
     return Boolean(m) && m[1].toLowerCase() === escolhas[0].letra;
