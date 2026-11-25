@@ -404,7 +404,7 @@ export function empurrarCopia({ repo, ciclo }) {
   if (!modo.semRamo) return copia;
   let principal;
   try {
-    principal = levarAoPrincipal({ repo, ciclo, principal: modo.principal });
+    principal = levarAoPrincipal({ repo, ciclo, principal: modo.principal, ramoLocal: modo.ramo });
   } catch (e) {
     // A mescla presa (MERGE_HEAD) não vira aviso: o próximo commit de marca a fecharia calado.
     if (!(e instanceof ErroPlano) || e.codigo === "principal-mescla-presa") throw e;
@@ -452,15 +452,33 @@ function empurrarSoACopia({ repo, ciclo }) {
 
 /**
  * Ciclo sem ramo (`semRamo` da declaração; hotfix vega-conducao-sem-ramo): leva o HEAD ao
- * `principal` do origin, sem força. Só da árvore que tem o principal aberto (fora dela, ou com
- * HEAD destacado, não leva: a árvore dele leva no próximo verbo) e só sem trazida por conferir
+ * `principal` do origin, sem força (`push origin HEAD:<principal>`). Só da árvore que tem o ramo
+ * local da condução aberto (`ramoLocal`, `conducao/<id>`; hotfix vega-sem-ramo-principal-preso: o
+ * principal fica no clone principal, e nada aqui o abre nem o move); fora dela, ou com HEAD
+ * destacado na passagem, não leva — a herdeira leva no próximo verbo — e só sem trazida por conferir
  * (a tentativa chega ao principal depois da conferência; quem empurra no meio já está lá).
  * Origin à frente ⇒ busca e mescla (nunca rebase: as marcas e as tentativas apontam os shas)
  * e tenta mais uma vez; mescla com conflito aborta e sai `principal-diverge`.
  */
-export function levarAoPrincipal({ repo, ciclo, principal }) {
+/**
+ * O remédio da árvore do modo antigo (no próprio principal) com as marcas dela: o ramo local nasce
+ * deste HEAD, ou, já existindo (a maestra o cria na ponta do origin), traz este HEAD por mescla.
+ */
+function remedioDoPrincipal(repo, ramoLocal, principal) {
+  const aqui = revOuNull(repo, "HEAD")?.slice(0, 12) ?? "HEAD";
+  const passos = revOuNull(repo, `refs/heads/${ramoLocal}`)
+    ? `git switch ${ramoLocal} e git merge --no-edit ${aqui} (traz as marcas gravadas no ${principal} daqui; conflito ⇒ o operador decide)`
+    : `git switch --no-track -c ${ramoLocal} (nasce deste HEAD, com as marcas daqui)`;
+  return `a condução sem ramo roda no ramo local ${ramoLocal}, não no ${principal}: ${passos}, depois empurrar-copia`;
+}
+
+export function levarAoPrincipal({ repo, ciclo, principal, ramoLocal = modoDoCiclo(repo, ciclo).ramo }) {
   const ramo = tentar(repo, ["symbolic-ref", "--short", "-q", "HEAD"]).saida;
-  if (ramo !== principal) return { levado: false, porque: "fora-do-principal", ramo: ramo || null };
+  if (!ramoLocal || ramo !== ramoLocal)
+    return ramo && ramo === principal
+      ? // Árvore do modo antigo (0.1.15), no próprio principal: a marca não sobe daqui, e o aviso diz o remédio.
+        { levado: false, porque: "arvore-no-principal", ramo, detalhe: remedioDoPrincipal(repo, ramoLocal, principal) }
+      : { levado: false, porque: "fora-do-ramo-da-conducao", ramo: ramo || null };
   const pendentes = lerTrazidas(repo, ciclo);
   if (pendentes.length) return { levado: false, porque: "trazida-sem-conferencia", tasks: pendentes.map((r) => r.task) };
   const empurrar = (sha) => tentar(repo, ["push", "--porcelain", "origin", `${sha}:refs/heads/${principal}`], { rede: true });
@@ -490,8 +508,50 @@ export function levarAoPrincipal({ repo, ciclo, principal }) {
     push = empurrar(sha);
     exigir(push.status === 0, "principal-push-recusado", `push de ${principal} recusado: ${push.erro.split("\n").slice(-3).join(" | ")} — nada foi forçado; o que já foi gravado fica; rode empurrar-copia de novo`);
   }
-  tentar(repo, ["update-ref", `refs/remotes/origin/${principal}`, sha]);
-  return { levado: true, ramo: principal, sha, ...(mesclado ? { mesclado } : {}) };
+  // O rastreio que não se atualiza não desfaz o push: sai declarado (o fechamento compararia com o velho).
+  const rastreio = tentar(repo, ["update-ref", `refs/remotes/origin/${principal}`, sha]);
+  return { levado: true, ramo: principal, sha, ...(mesclado ? { mesclado } : {}), ...(rastreio.status !== 0 ? { rastreio: false } : {}) };
+}
+
+/**
+ * Ciclo sem ramo (hotfix vega-sem-ramo-principal-preso): o ramo local da condução
+ * (`conducao/<id>`) nasce na ponta do principal do origin, buscada agora, por `git branch`, sem
+ * abrir nem mexer em árvore nenhuma. Nunca do principal local (commit local não empurrado subiria
+ * com a primeira marca) nem de um rastreio que o fetch não renovou: sem a busca, não nasce
+ * (`principal-nao-buscado`). Já existe ⇒ não é recriado; atrás do origin e aberto em árvore
+ * nenhuma, avança por avanço rápido (o plano que entrou no principal chega à maestra); sem a
+ * busca, fica como está e sai `buscado: false`. Fora do modo ⇒ null.
+ */
+export function garantirRamoDaConducao({ repo, ciclo }) {
+  const modo = modoDoCiclo(repo, ciclo);
+  if (!modo.semRamo) return null;
+  const local = `refs/heads/${modo.ramo}`;
+  const atual = revOuNull(repo, local);
+  const rastreio = `refs/remotes/origin/${modo.principal}`;
+  const f = tentar(repo, ["fetch", "--no-tags", "--quiet", "origin", `+refs/heads/${modo.principal}:${rastreio}`], { rede: true });
+  const erroDaBusca = f.status === 0 ? null : (f.erro || `git fetch saiu ${f.status ?? "sem status (prazo de rede)"}`).split("\n").at(-1);
+  if (atual && erroDaBusca) return { ramo: modo.ramo, criado: false, buscado: false, detalhe: erroDaBusca };
+  exigir(!erroDaBusca, "principal-nao-buscado", `${ciclo} é conduzido sem ramo de ciclo, no ramo local ${modo.ramo} que nasce da ponta do ${modo.principal} do origin, e o fetch dela falhou (${erroDaBusca}): rode a maestra de novo com o origin ao alcance`);
+  const base = revOuNull(repo, rastreio);
+  exigir(base, "ramo-principal-ausente", `${ciclo} é conduzido sem ramo de ciclo, a partir do ${modo.principal}, e o origin não tem refs/heads/${modo.principal}`);
+  if (!atual) {
+    rodar(repo, ["branch", "--no-track", modo.ramo, base]);
+    return { ramo: modo.ramo, criado: true, base };
+  }
+  if (atual !== base && ancestral(repo, atual, base) === true) {
+    // Aberto numa árvore, quem avança é a condutora (a mescla do levarAoPrincipal): aqui só se declara.
+    if (ramoAbertoEmArvore(repo, modo.ramo)) return { ramo: modo.ramo, criado: false, atras: { de: atual, origin: base } };
+    rodar(repo, ["update-ref", local, base, atual]);
+    return { ramo: modo.ramo, criado: false, avancado: { de: atual, para: base } };
+  }
+  return { ramo: modo.ramo, criado: false };
+}
+
+/** O ramo está aberto (anexado) em alguma árvore do repositório? Lista ilegível ⇒ `true` (não mexe). */
+function ramoAbertoEmArvore(repo, ramo) {
+  const r = tentar(repo, ["worktree", "list", "--porcelain"]);
+  if (r.status !== 0) return true;
+  return r.saida.split("\n").some((l) => l.trim() === `branch refs/heads/${ramo}`);
 }
 
 // ── ramo do ciclo (VEGA-37 T9) ───────────────────────────────────────────────
@@ -520,12 +580,18 @@ export function motivoDosPulos(pulos) {
   return Array.isArray(pulos) && pulos.length ? `pulou:${pulos.map((p) => p.passo).join("+")}` : null;
 }
 
-/** A ponta do ramo no origin pela referência de rastreio (`refs/remotes/origin/<ramo>`), sem rede; `null` sem ela. */
-export function ramoNoOrigin(repo) {
+/**
+ * A ponta do ramo no origin pela referência de rastreio (`refs/remotes/origin/<ramo>`), sem rede; `null` sem ela.
+ * Ciclo sem ramo, na árvore do ramo local da condução: o ramo local nunca sobe como ramo, e a ponta
+ * que conta é a do principal (`refs/remotes/origin/<principal>`, que o `levarAoPrincipal` atualiza).
+ */
+export function ramoNoOrigin(repo, ciclo = null) {
   if (tentar(repo, ["remote", "get-url", "origin"]).status !== 0) return null;
   const ramo = tentar(repo, ["symbolic-ref", "--short", "-q", "HEAD"]).saida;
   if (!ramo) return null;
-  return { nome: ramo, noOrigin: revOuNull(repo, `refs/remotes/origin/${ramo}`) };
+  const modo = ciclo ? modoDoCiclo(repo, ciclo) : null;
+  const destino = modo?.semRamo && ramo === modo.ramo ? modo.principal : ramo;
+  return { nome: ramo, noOrigin: revOuNull(repo, `refs/remotes/origin/${destino}`), ...(destino !== ramo ? { principal: destino } : {}) };
 }
 
 /**
@@ -555,11 +621,20 @@ export function empurrarRamo({ repo, ciclo, head, posse = posseDoProjeto(repo, {
     proposta = lerProposta({ repo, ramo });
     exigir(proposta?.state === "OPEN", "sem-proposta", `${ramo} sem proposta aberta (${proposta ? proposta.state : "nenhuma"}) — abra como rascunho (gh pr create --draft --fill --head ${ramo}) antes de empurrar`);
   } else pulos.push({ passo: "inscrever-na-proposta", motivo: "projeto-sem-proposta" }, { passo: "ci", motivo: "projeto-sem-ci" });
-  const push = tentar(repo, ["push", "--porcelain", "origin", `${atual}:refs/heads/${ramo}`], { rede: true });
+  // Ciclo sem ramo: o ramo local da condução sobe ao principal (HEAD:<principal>), nunca como ramo,
+  // pelo mesmo caminho das marcas (origin à frente ⇒ busca, mescla e sobe de novo).
+  const modo = modoDoCiclo(repo, ciclo);
+  if (modo.semRamo && ramo === modo.ramo) {
+    const levado = levarAoPrincipal({ repo, ciclo, principal: modo.principal, ramoLocal: modo.ramo });
+    exigir(levado.levado, "ramo-push-recusado", `o ${modo.principal} não subiu (${levado.porque}${levado.detalhe ? `: ${levado.detalhe}` : ""}) — nada foi forçado; rode o proximo de novo`);
+    return { acao: "ramo-empurrado", ciclo, ramo: modo.principal, sha: levado.sha, ...(levado.mesclado ? { mesclado: levado.mesclado } : {}), ...(levado.rastreio === false ? { rastreio: false } : {}), proposta: null, posse: posse?.estado ?? null, pulos, motivo: motivoDosPulos(pulos) };
+  }
+  const destino = ramo;
+  const push = tentar(repo, ["push", "--porcelain", "origin", `${atual}:refs/heads/${destino}`], { rede: true });
   if (push.status !== 0)
-    throw new ErroPlano("ramo-push-recusado", `push de ${ramo} recusado: ${push.erro.split("\n").slice(-3).join(" | ")} — nada foi forçado; traga o origin para o ramo e rode o proximo de novo`);
-  rodar(repo, ["update-ref", `refs/remotes/origin/${ramo}`, atual]);
-  return { acao: "ramo-empurrado", ciclo, ramo, sha: atual, proposta: proposta?.number ?? null, posse: posse?.estado ?? null, pulos, motivo: motivoDosPulos(pulos) };
+    throw new ErroPlano("ramo-push-recusado", `push de ${destino} recusado: ${push.erro.split("\n").slice(-3).join(" | ")} — nada foi forçado; traga o origin para o ramo e rode o proximo de novo`);
+  rodar(repo, ["update-ref", `refs/remotes/origin/${destino}`, atual]);
+  return { acao: "ramo-empurrado", ciclo, ramo: destino, sha: atual, proposta: proposta?.number ?? null, posse: posse?.estado ?? null, pulos, motivo: motivoDosPulos(pulos) };
 }
 
 /** Recusas do `empurrarCopia` que deixam a escrita já feita no ramo de pé. */

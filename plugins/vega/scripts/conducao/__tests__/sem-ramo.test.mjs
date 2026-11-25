@@ -1,8 +1,10 @@
 /**
- * sem-ramo.test.mjs — o ciclo conduzido sem ramo de ciclo (hotfix vega-conducao-sem-ramo, 25/11/2026).
+ * sem-ramo.test.mjs — o ciclo conduzido sem ramo de ciclo (hotfix vega-conducao-sem-ramo, 25/11/2026;
+ * ramo local da condução no hotfix vega-sem-ramo-principal-preso, mesmo dia).
  *
- * A declaração (v7) lista o ciclo em `semRamo`: a condução acha o ciclo e as marcas no ramo
- * principal, sem `ciclo-<id>` em `refs/heads/` e sem proposta; cada marca gravada sem trazida por
+ * A declaração (v7) lista o ciclo em `semRamo`: a condução acha o ciclo e as marcas no ramo local
+ * `conducao/<id>`, que acompanha o principal, sem `ciclo-<id>` em `refs/heads/` e sem proposta; o
+ * principal aberto em outra árvore do mesmo repositório (o clone principal) não é tocado; cada marca gravada sem trazida por
  * conferir vai ao principal do origin (`levarAoPrincipal`), e a tentativa chega lá depois da
  * conferência; a task que declara `**Empurra no meio:** sim` recebe a seção que libera o push ao
  * principal; a task feita fora da condução, com o commit no subject dela já no principal, sai como
@@ -20,7 +22,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { modoDoCiclo, validar } from "../adaptador.mjs";
-import { ramoDoCiclo } from "../conducao.mjs";
+import { maestra, ramoDoCiclo } from "../conducao.mjs";
 import { pedidoDaEtapa } from "../etapa.mjs";
 import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
@@ -28,6 +30,7 @@ const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const RAIZ = path.resolve(AQUI, "fixtures", "projeto-de-teste");
 const SCRIPT = path.resolve(AQUI, "..", "conducao.mjs");
 const CICLO = "TESTE-7-reorganiza";
+const RAMO = `conducao/${CICLO}`;
 const CAMINHO = `.agents/ciclo/teste/${CICLO}/canonico.md`;
 const DECLARACAO = JSON.parse(readFileSync(path.join(RAIZ, ".altair", "adaptador.json"), "utf8"));
 
@@ -96,8 +99,11 @@ function escreverEm(dir, arquivos) {
   }
 }
 
-/** Origin bare + árvore da condutora no `main` (nenhum `ciclo-*`), com o plano e a declaração; clone da operária e de um terceiro. */
-function ambiente(t, { decl = COM_O_MODO, tasks = PADRAO, antes = null } = {}) {
+/**
+ * Origin bare + árvore da condutora (nenhum `ciclo-*`), com o plano e a declaração; clone da operária
+ * e de um terceiro. Com o modo, a árvore fica no ramo local da condução (`conducao/<id>`); sem ele, no main.
+ */
+function ambiente(t, { decl = COM_O_MODO, tasks = PADRAO, antes = null, noRamoDaConducao = (decl.semRamo ?? []).length > 0, niveis = 2 } = {}) {
   const raiz = pastaTemporaria("conducao-sem-ramo-");
   t.after(() => rmSync(raiz, { recursive: true, force: true }));
   const origin = path.join(raiz, "origin.git");
@@ -111,9 +117,10 @@ function ambiente(t, { decl = COM_O_MODO, tasks = PADRAO, antes = null } = {}) {
   escreverEm(dir, { "README.md": "fixture\n", [CAMINHO]: canonico(tasks), ".altair/adaptador.json": `${JSON.stringify(decl, null, 2)}\n` });
   g("add", "-A");
   g("commit", "-q", "-m", "plano");
-  g("commit", "-q", "--allow-empty", "-m", "Conducao: ciclo niveis 2", "-m", "Conducao-Niveis: 2");
+  g("commit", "-q", "--allow-empty", "-m", `Conducao: ciclo niveis ${niveis}`, "-m", `Conducao-Niveis: ${niveis}`);
   if (antes) antes(g, dir);
   g("push", "-q", "origin", "main");
+  if (noRamoDaConducao) g("switch", "-q", "--no-track", "-c", RAMO);
   const clone = (nome) => {
     const d = path.join(raiz, nome);
     execFileSync("git", ["clone", "-q", origin, d]);
@@ -158,17 +165,21 @@ test("declaração: semRamo só na v7, sem ciclo repetido, principal default mai
 
 // ── achar o ciclo ───────────────────────────────────────────────────────────
 
-test("sem nenhum ciclo-<id>: com o modo o ramo do ciclo é o main; sem ele, ramo-do-ciclo-ausente", (t) => {
+test("sem nenhum ciclo-<id>: com o modo o ramo do ciclo é o local da condução; sem ele, ramo-do-ciclo-ausente", (t) => {
   const com = ambiente(t);
   assert.equal(modoDoCiclo(com.dir, CICLO).semRamo, true);
-  assert.equal(ramoDoCiclo(com.dir, CICLO), "main");
+  assert.equal(modoDoCiclo(com.dir, CICLO).ramo, RAMO);
+  assert.equal(ramoDoCiclo(com.dir, CICLO), RAMO);
+  // Sem o ramo local, o erro diz como criá-lo (a maestra o cria; ninguém abre o principal).
+  const semLocal = ambiente(t, { noRamoDaConducao: false });
+  assert.throws(() => ramoDoCiclo(semLocal.dir, CICLO), (e) => e.codigo === "ramo-da-conducao-ausente");
   const sem = ambiente(t, { decl: SEM_O_MODO });
   assert.throws(() => ramoDoCiclo(sem.dir, CICLO), (e) => e.codigo === "ramo-do-ciclo-ausente");
   // Outro ciclo do mesmo projeto, fora do semRamo, segue a regra de antes.
   assert.throws(() => ramoDoCiclo(com.dir, "OUTRO-1"), (e) => e.codigo === "ramo-do-ciclo-ausente");
 });
 
-test("proximo na árvore do main, sem --repo: acha a árvore pelo main e emite a primeira ação", (t) => {
+test("proximo na árvore do ramo da condução, sem --repo: acha a árvore por ele e emite a primeira ação", (t) => {
   const a = ambiente(t);
   const r = spawnSync(process.execPath, [SCRIPT, "proximo", "--ciclo", CICLO], { cwd: a.dir, encoding: "utf8" });
   assert.equal(r.status, 0, r.stderr);
@@ -181,13 +192,15 @@ test("proximo na árvore do main, sem --repo: acha a árvore pelo main e emite a
   assert.deepEqual(q.tarefas.map((x) => x.task), ["T1"]);
 });
 
-test("etapa: a árvore no main vale com o modo, e a etapa que empurra sobe o main sem proposta", (t) => {
+test("etapa: a árvore no ramo da condução vale com o modo, e a etapa que empurra sobe o main sem proposta", (t) => {
   const com = ambiente(t);
-  const o = pedidoDaEtapa({ repo: com.dir, ciclo: CICLO, etapa: "revisar-plano", arvore: com.dir, ramo: "main" });
-  assert.equal(o.ramo, "main");
-  assert.match(o.pedido, /push origin main`, sem força e sem proposta/);
+  const o = pedidoDaEtapa({ repo: com.dir, ciclo: CICLO, etapa: "revisar-plano", arvore: com.dir, ramo: RAMO });
+  assert.equal(o.ramo, RAMO);
+  assert.match(o.pedido, /push origin HEAD:refs\/heads\/main`, sem força e sem proposta/);
   assert.doesNotMatch(o.pedido, /gh pr create/);
   assert.throws(() => pedidoDaEtapa({ repo: com.dir, ciclo: CICLO, etapa: "revisar-plano", arvore: com.dir, ramo: `ciclo-${CICLO}` }), (e) => e.codigo === "arvore-sem-ramo-do-ciclo");
+  // O principal aberto não é mais a árvore do ciclo sem ramo.
+  assert.throws(() => pedidoDaEtapa({ repo: com.dir, ciclo: CICLO, etapa: "revisar-plano", arvore: com.dir, ramo: "main" }), (e) => e.codigo === "arvore-sem-ramo-do-ciclo");
   const sem = ambiente(t, { decl: SEM_O_MODO });
   assert.throws(() => pedidoDaEtapa({ repo: sem.dir, ciclo: CICLO, etapa: "revisar-plano", arvore: sem.dir, ramo: "main" }), (e) => e.codigo === "arvore-sem-ramo-do-ciclo");
 });
@@ -219,8 +232,8 @@ test("a marca sobe ao main; a tentativa trazida só chega ao main depois da conf
   const conf = a.ok("registrar-conferencia", "T1", "--verificacao", "verde", "--publicacao", "nao-se-aplica", "--sessao", "sessao-operaria");
   assert.equal(conf.acao, "conferida");
   assert.equal(a.noOrigin("refs/heads/main"), a.head(), "conferida, a tentativa e as marcas estão no main do origin");
-  assert.equal(a.g("merge-base", "--is-ancestor", ponta, "refs/heads/main") === "", true);
-  assert.equal(a.g("log", "-1", "--format=%s", "refs/heads/main"), "Conducao: T1 conferida");
+  assert.equal(a.g("merge-base", "--is-ancestor", ponta, "refs/remotes/origin/main") === "", true);
+  assert.equal(a.g("log", "-1", "--format=%s", "refs/remotes/origin/main"), "Conducao: T1 conferida");
   // Nenhum ciclo-* nasceu no caminho.
   assert.equal(a.g("for-each-ref", "--format=%(refname)", "refs/heads/ciclo-*"), "");
 });
@@ -467,4 +480,153 @@ test("deOutroCiclo: só o trailer de outro ciclo descarta; sem trailer ou sem ci
   assert.equal(deOutroCiclo(`Conducao-Ciclo-Id: ${CICLO}`, CICLO), false);
   assert.equal(deOutroCiclo("Conducao-Task: T1", CICLO), false);
   assert.equal(deOutroCiclo("Conducao-Ciclo-Id: OUTRO-1", null), false);
+});
+
+// ── o principal aberto em outra árvore (hotfix vega-sem-ramo-principal-preso) ─
+
+test("o principal aberto no clone principal: a maestra de uma worktree cria o ramo da condução, a marca sobe ao main e o clone não se mexe", async (t) => {
+  const { garantirRamoDaConducao } = await import("../git-conducao.mjs");
+  // O caso real: o clone principal fica no main, e a sessão nasce numa worktree dele.
+  const a = ambiente(t, { noRamoDaConducao: false, niveis: 3 });
+  const arvore = path.join(a.raiz, "arvore-da-sessao");
+  a.g("worktree", "add", "-q", "--detach", arvore);
+  const gc = gitEm(arvore);
+  const clone = () => ({ ramo: a.g("symbolic-ref", "--short", "HEAD"), head: a.g("rev-parse", "HEAD"), main: a.g("rev-parse", "refs/heads/main"), status: a.g("status", "--porcelain") });
+  const antes = clone();
+  assert.equal(antes.ramo, "main");
+  const r = maestra({ repo: arvore, ciclo: CICLO, sessao: "session_maestra", linhagem: "0/8", contexto: "1/1000000" });
+  assert.equal(r.acao, "criar-condutora", JSON.stringify(r));
+  assert.match(r.texto, new RegExp(`git switch ${RAMO.replace("/", "\\/")} — `));
+  assert.doesNotMatch(r.texto, /git switch main/);
+  assert.equal(a.g("rev-parse", `refs/heads/${RAMO}`), a.noOrigin("refs/heads/main"), "o ramo da condução nasce na ponta do main do origin");
+  // A primeira condutora abre o ramo na árvore dela; proximo sem --repo, de lá, acha a árvore (o main no clone não conta).
+  gc("switch", "-q", RAMO);
+  const p = spawnSync(process.execPath, [SCRIPT, "proximo", "--ciclo", CICLO], { cwd: arvore, encoding: "utf8" });
+  assert.equal(p.status, 0, p.stderr);
+  assert.equal(JSON.parse(p.stdout.trim().split("\n").at(-1)).motivo, "autorizar-ciclo");
+  // Uma escrita da condutora (em 3 níveis a autorização pede a maestra; o caminho ao main é o mesmo
+  // `levarAoPrincipal` de toda marca, pelo empurrar-copia).
+  gc("commit", "-q", "--allow-empty", "-m", "nota da condutora");
+  const s = spawnSync(process.execPath, [SCRIPT, "empurrar-copia", "--repo", arvore, "--ciclo", CICLO], { encoding: "utf8", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
+  assert.equal(s.status, 0, s.stderr);
+  const saida = JSON.parse(s.stdout.trim().split("\n").at(-1));
+  assert.equal(saida.principal.levado, true, JSON.stringify(saida));
+  assert.equal(a.noOrigin("refs/heads/main"), gc("rev-parse", "HEAD"), "a escrita está no main do origin");
+  assert.equal(gc("log", "-1", "--format=%s", "refs/remotes/origin/main"), "nota da condutora");
+  assert.equal(a.noOrigin(`refs/heads/${RAMO}`), null, "o ramo da condução nunca sobe como ramo");
+  // O clone principal não foi tocado: mesmo ramo, mesmo HEAD, mesmo main local, mesma árvore.
+  assert.deepEqual(clone(), antes);
+  // Retomar: o ramo que já existe fica como está (não é recriado nem movido).
+  const ponta = gc("rev-parse", "HEAD");
+  assert.deepEqual(garantirRamoDaConducao({ repo: arvore, ciclo: CICLO }), { ramo: RAMO, criado: false });
+  assert.equal(gc("rev-parse", `refs/heads/${RAMO}`), ponta);
+  assert.equal(ramoDoCiclo(arvore, CICLO), RAMO);
+});
+
+test("vigia de fora: o ciclo sem ramo encerrado se reconhece pela marca com o id dele no main do origin", async (t) => {
+  const { cicloEncerrado } = await import("../vigia-de-fora.mjs");
+  const a = ambiente(t);
+  assert.equal(cicloEncerrado(a.dir, CICLO), false);
+  const marca = (id) => {
+    a.g("commit", "-q", "--allow-empty", "-m", "Conducao: ciclo sessao encerrada", "-m", `Conducao-Encerrada: ciclo\nConducao-Nonce: ${"0".repeat(16)}\nConducao-Ciclo-Id: ${id}`);
+    a.g("push", "-q", "origin", "HEAD:refs/heads/main");
+    a.g("fetch", "-q", "origin", "+refs/heads/main:refs/remotes/origin/main");
+  };
+  // A marca de outro ciclo sem ramo no mesmo main não encerra este.
+  marca("OUTRO-9");
+  assert.equal(cicloEncerrado(a.dir, CICLO), false);
+  marca(CICLO);
+  assert.equal(cicloEncerrado(a.dir, CICLO), true);
+  // Mesmo sem o ramo local (a árvore da condução já foi embora), o main do origin basta.
+  a.g("switch", "-q", "--detach");
+  a.g("branch", "-q", "-D", RAMO);
+  assert.equal(cicloEncerrado(a.dir, CICLO), true);
+  // Id sem slug (como o de um projeto consumidor): o padrão o aceita.
+  const b = ambiente(t);
+  b.g("commit", "-q", "--allow-empty", "-m", "Conducao: ciclo sessao encerrada", "-m", "Conducao-Encerrada: ciclo\nConducao-Ciclo-Id: ATLAS-3");
+  b.g("push", "-q", "origin", "HEAD:refs/heads/main");
+  b.g("fetch", "-q", "origin", "+refs/heads/main:refs/remotes/origin/main");
+  assert.equal(cicloEncerrado(b.dir, "ATLAS-3"), true);
+  assert.equal(cicloEncerrado(b.dir, "ATLAS-4"), false);
+});
+
+test("o ramo da condução nasce só da ponta buscada do origin: nunca do main local; sem a busca, não nasce; atrás e solto, avança", async (t) => {
+  const { garantirRamoDaConducao } = await import("../git-conducao.mjs");
+  const a = ambiente(t, { noRamoDaConducao: false });
+  // Commit local no main do clone, nunca empurrado: não entra no ramo da condução.
+  a.g("commit", "-q", "--allow-empty", "-m", "local nao empurrado");
+  const r = garantirRamoDaConducao({ repo: a.dir, ciclo: CICLO });
+  assert.equal(r.criado, true);
+  assert.equal(a.g("rev-parse", `refs/heads/${RAMO}`), a.noOrigin("refs/heads/main"));
+  assert.notEqual(a.g("rev-parse", `refs/heads/${RAMO}`), a.head());
+  // O origin andou (o plano entrou lá): o ramo solto avança por avanço rápido.
+  const { d, c } = a.clone("terceiro");
+  escreverEm(d, { "novo.txt": "x\n" });
+  c("add", "-A");
+  c("commit", "-q", "-m", "plano novo no main");
+  c("push", "-q", "origin", "main");
+  const r2 = garantirRamoDaConducao({ repo: a.dir, ciclo: CICLO });
+  assert.equal(r2.criado, false);
+  assert.equal(r2.avancado?.para, c("rev-parse", "HEAD"));
+  assert.equal(a.g("rev-parse", `refs/heads/${RAMO}`), c("rev-parse", "HEAD"));
+  // Sem origin ao alcance: o que existe fica e sai buscado:false; o que não existe não nasce.
+  a.g("remote", "set-url", "origin", path.join(a.raiz, "sumiu.git"));
+  const r3 = garantirRamoDaConducao({ repo: a.dir, ciclo: CICLO });
+  assert.equal(r3.buscado, false);
+  a.g("branch", "-q", "-D", RAMO);
+  assert.throws(() => garantirRamoDaConducao({ repo: a.dir, ciclo: CICLO }), (e) => e.codigo === "principal-nao-buscado");
+});
+
+test("vigia de fora: a marca de encerramento que só está no ramo local não encerra", async (t) => {
+  const { cicloEncerrado } = await import("../vigia-de-fora.mjs");
+  const a = ambiente(t);
+  a.g("commit", "-q", "--allow-empty", "-m", "Conducao: ciclo sessao encerrada", "-m", `Conducao-Encerrada: ciclo\nConducao-Ciclo-Id: ${CICLO}`);
+  assert.equal(cicloEncerrado(a.dir, CICLO), false, "não subiu ao origin: a vigia segue olhando");
+});
+
+test("empurrar-ramo do fechamento no ciclo sem ramo: sobe ao main (mesclando o que o origin tem) e nunca cria o ramo local no origin", (t) => {
+  const a = ambiente(t, {
+    antes: (g, dir) => {
+      feitaAntes(g, dir);
+      escreverEm(dir, { "src/t2.mjs": "export const t2 = 2;\n" });
+      g("add", "-A");
+      g("commit", "-q", "-m", `${CICLO}-F1/T2 — tarefa T2`);
+    },
+  });
+  a.autorizar();
+  for (const tk of ["T1", "T2"]) {
+    const p = a.proximo();
+    a.ok("registrar-conferencia", tk, "--fora", p.sha, "--verificacao", "verde", "--publicacao", "nao-se-aplica");
+  }
+  // Uma escrita local que não subiu (o rastreio do main fica atrás do HEAD) e outra sessão que empurrou ao main.
+  a.g("commit", "-q", "--allow-empty", "-m", "nota local");
+  const { d, c } = a.clone("terceiro");
+  escreverEm(d, { "outro.txt": "x\n" });
+  c("add", "-A");
+  c("commit", "-q", "-m", "de outra sessão");
+  c("push", "-q", "origin", "main");
+  const f = a.proximo({ sessaoMaestra: "session_condutora" });
+  assert.equal(f.acao, "empurrar-ramo", JSON.stringify(f));
+  const e = a.ok("empurrar-ramo", "--nonce", f.nonce);
+  assert.equal(e.acao, "ramo-empurrado", JSON.stringify(e));
+  assert.equal(e.ramo, "main");
+  assert.equal(a.noOrigin("refs/heads/main"), a.head());
+  assert.equal(a.g("merge-base", "--is-ancestor", c("rev-parse", "HEAD"), "HEAD"), "");
+  assert.equal(a.noOrigin(`refs/heads/${RAMO}`), null);
+});
+
+test("árvore do modo antigo no próprio main: a marca não sobe, e o aviso traz o remédio com as marcas dela", (t) => {
+  const a = ambiente(t, { noRamoDaConducao: false });
+  a.g("commit", "-q", "--allow-empty", "-m", "nota no main");
+  const s = a.ok("empurrar-copia");
+  assert.equal(s.principal.levado, false);
+  assert.equal(s.principal.porque, "arvore-no-principal");
+  assert.match(s.principal.detalhe, new RegExp(`git switch --no-track -c ${RAMO.replace("/", "\\/")}`));
+  // Com o ramo já criado (pela maestra, na ponta do origin), o remédio mescla este HEAD nele.
+  a.g("branch", "--no-track", RAMO, "refs/remotes/origin/main");
+  const r = a.ok("empurrar-copia");
+  assert.match(r.principal.detalhe, new RegExp(`git merge --no-edit ${a.head().slice(0, 12)}`));
+  a.g("switch", "-q", RAMO);
+  a.g("merge", "-q", "--no-edit", r.principal.detalhe.match(/git merge --no-edit ([0-9a-f]{12})/)[1]);
+  assert.equal(a.ok("empurrar-copia").principal.levado, true);
 });

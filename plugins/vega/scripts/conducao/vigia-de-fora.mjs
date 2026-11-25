@@ -28,6 +28,13 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
+// O adaptador só serve ao encerramento do ciclo sem ramo: falha de carga dele não derruba a vigia.
+let modoDoCiclo = null;
+try {
+  ({ modoDoCiclo } = await import("./adaptador.mjs"));
+} catch {
+  modoDoCiclo = null;
+}
 import { fileURLToPath } from "node:url";
 import { BOTOES } from "./botoes.mjs";
 import * as logEventos from "./log-eventos.mjs";
@@ -38,7 +45,8 @@ export const MODO_PADRAO = "seco";
 export const SERVIDOR_PADRAO = "https://ntfy.sh";
 /** "Ciclo" das linhas da vigia que não são de ciclo nenhum (falha do serviço). */
 export const CICLO_DO_SERVICO = "vigia-de-fora";
-const PADRAO_CICLO = /^[A-Z][A-Z0-9]*-\d{1,4}-[a-z0-9][a-z0-9-]{0,80}$/;
+// O slug é opcional (hotfix vega-sem-ramo-principal-preso): projeto consumidor nomeia o ciclo só `ATLAS-3`.
+const PADRAO_CICLO = /^[A-Z][A-Z0-9]*-\d{1,4}(?:-[a-z0-9][a-z0-9-]{0,80})?$/;
 const PADRAO_FASE = /^(F\d{1,2}|fechamento)$/;
 /** Tópico do ntfy: só o alfabeto que o ntfy aceita, sem barra nem espaço. */
 const PADRAO_TOPICO = /^[A-Za-z0-9_-]{1,64}$/;
@@ -127,12 +135,15 @@ export function ciclosDoLog(pastaDoLog) {
  * `Conducao-Encerrada: ciclo`; ou, depois da mescla, quando o ramo some (D-VEGA37-38), o ramo
  * principal do origin (`origin/HEAD`, senão `origin/main`) traz o squash do ciclo: subject que
  * começa por `<id> ` e corpo com a linha `* Conducao: ciclo sessao encerrada` e a linha
- * `Conducao-Encerrada: ciclo`. O log não tem estado terminal, e o critério é só este. Sem `repo`,
+ * `Conducao-Encerrada: ciclo`; ou, no ciclo sem ramo, a marca com o `Conducao-Ciclo-Id` dele no
+ * principal (`encerradoSemRamo`). O log não tem estado terminal, e o critério é só este. Sem `repo`,
  * sem ramo nem squash, ou git que não responde ⇒ false: sem critério legível, o ciclo segue checado.
  */
 export function cicloEncerrado(repo, ciclo) {
   if (!repo || !PADRAO_CICLO.test(ciclo ?? "")) return false;
   const git = (args) => spawnSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  // Os mesmos ramos que a condução aceita (`ehRamoDoCiclo`: `ciclo-<id>` e `ciclo-<id>-<slug>`). Limite
+  // declarado: id sem slug (`ATLAS-3`) também casa `ciclo-ATLAS-3-foo`, ramo de um ciclo `ATLAS-3-foo`.
   const padroes = [`refs/heads/ciclo-${ciclo}`, `refs/heads/ciclo-${ciclo}-*`, `refs/remotes/*/ciclo-${ciclo}`, `refs/remotes/*/ciclo-${ciclo}-*`];
   const refs = git(["for-each-ref", "--format=%(refname)", ...padroes]);
   if (refs.status !== 0) return false;
@@ -144,7 +155,42 @@ export function cicloEncerrado(repo, ciclo) {
       if (subject === "Conducao: ciclo sessao encerrada" && enc?.trim() === "ciclo") return true;
     }
   }
-  return squashEncerradoNoPrincipal(git, ciclo);
+  return squashEncerradoNoPrincipal(git, ciclo) || encerradoSemRamo(git, repo, ciclo);
+}
+
+/**
+ * O ciclo sem ramo (`semRamo`; hotfix vega-sem-ramo-principal-preso) fecha com a marca
+ * `Conducao: ciclo sessao encerrada` + `Conducao-Encerrada: ciclo` no principal do origin — o que
+ * a declaração do ciclo nomeia; sem declaração legível, `origin/HEAD` ou `origin/main` —, e só
+ * conta com o trailer `Conducao-Ciclo-Id: <id>` deste ciclo: no principal moram as marcas de outros
+ * ciclos sem ramo. O ramo local da condução não conta: a marca que não subiu não encerra, e a
+ * vigia segue olhando até ela chegar ao origin.
+ */
+function encerradoSemRamo(git, repo, ciclo) {
+  let declarado = null;
+  try {
+    const modo = modoDoCiclo ? modoDoCiclo(repo, ciclo) : { semRamo: false };
+    if (modo.semRamo) declarado = `refs/remotes/origin/${modo.principal}`;
+  } catch {
+    // Declaração ilegível: o principal do origin pelo palpite de sempre; a vigia não para por isso.
+  }
+  const refs = [declarado ?? principalDoOrigin(git)].filter(Boolean);
+  for (const ref of refs) {
+    const log = git([
+      "log",
+      "-F",
+      "--grep=Conducao-Encerrada: ciclo",
+      "--format=%s%x1f%(trailers:key=Conducao-Encerrada,valueonly)%x1f%(trailers:key=Conducao-Ciclo-Id,valueonly)%x1e",
+      ref,
+      "--",
+    ]);
+    if (log.status !== 0) continue;
+    for (const reg of log.stdout.split("\x1e")) {
+      const [subject, enc, id] = reg.trim().split("\x1f");
+      if (subject === "Conducao: ciclo sessao encerrada" && enc?.trim() === "ciclo" && id?.trim() === ciclo) return true;
+    }
+  }
+  return false;
 }
 
 /** O ramo principal do origin: `origin/HEAD` resolvido, senão `refs/remotes/origin/main`; ou null. */

@@ -376,19 +376,27 @@ function validarSemRamo(v, versao) {
 }
 
 /**
- * O modo do ciclo pela declaração: `{ semRamo: true, principal }` quando o ciclo está em
- * `semRamo`, senão `{ semRamo: false, principal: null }`. Árvore sem declaração ⇒ sem o modo;
- * declaração que existe e não se lê ⇒ o erro dela.
+ * O ramo local da condução do ciclo sem ramo (hotfix vega-sem-ramo-principal-preso): nasce na
+ * ponta do principal do origin e é a identidade da árvore da condutora; nunca sobe como ramo
+ * (as marcas sobem por `push origin HEAD:<principal>`). O principal aberto em outra árvore — o
+ * clone principal de todo projeto real — não importa mais.
+ */
+export const ramoDaConducao = (ciclo) => `conducao/${ciclo}`;
+
+/**
+ * O modo do ciclo pela declaração: `{ semRamo: true, principal, ramo }` quando o ciclo está em
+ * `semRamo` (`ramo` = `ramoDaConducao(ciclo)`), senão `{ semRamo: false, principal: null, ramo: null }`.
+ * Árvore sem declaração ⇒ sem o modo; declaração que existe e não se lê ⇒ o erro dela.
  */
 export function modoDoCiclo(repo, ciclo) {
   // A declaração mora na raiz da árvore: `--repo` numa subpasta lê a mesma. Declaração que não se lê
   // lança, como em todo verbo que a lê: cair calado no modo com ramo esconderia o `semRamo` declarado.
   const r = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd: repo, encoding: "utf8" });
   const raiz = r.status === 0 && r.stdout.trim() ? r.stdout.trim() : repo;
-  if (!vega.existe(raiz) && !existsSync(path.join(raiz, ARQUIVO))) return Object.freeze({ semRamo: false, principal: null });
+  if (!vega.existe(raiz) && !existsSync(path.join(raiz, ARQUIVO))) return Object.freeze({ semRamo: false, principal: null, ramo: null });
   const decl = lerAdaptador(raiz);
   const achado = (decl.semRamo ?? []).find((c) => c.ciclo === ciclo);
-  return Object.freeze(achado ? { semRamo: true, principal: achado.principal } : { semRamo: false, principal: null });
+  return Object.freeze(achado ? { semRamo: true, principal: achado.principal, ramo: ramoDaConducao(ciclo) } : { semRamo: false, principal: null, ramo: null });
 }
 
 /**

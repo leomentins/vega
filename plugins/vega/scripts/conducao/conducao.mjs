@@ -879,12 +879,17 @@ export function textoDaHerdeira({ ciclo, fase, sessao, nota, trazer, niveis: arr
 export function ramoDoCiclo(repo, ciclo) {
   const r = tentarGit(repo, ["for-each-ref", "--format=%(refname:short)", "refs/heads/"]);
   if (r.status !== 0) throw new ErroPlano("ramo-ilegivel", `as referências de ${repo} não se leram: ${(r.erro || "sem saída").split(String.fromCharCode(10))[0]}`);
-  // Ciclo sem ramo (declarado em `semRamo`): o ramo do ciclo é o principal, e ciclo-<id> não conta.
+  // Ciclo sem ramo (declarado em `semRamo`): o ramo do ciclo é o local da condução (`conducao/<id>`),
+  // que acompanha o principal; ciclo-<id> não conta. A maestra o cria (`garantirRamoDaConducao`).
   const modo = adaptador.modoDoCiclo(raizDaArvore(repo), ciclo);
   if (modo.semRamo) {
-    const tem = (r.saida ?? "").split("\n").some((x) => x.trim() === modo.principal);
-    if (!tem) throw new ErroPlano("ramo-principal-ausente", `${ciclo} é conduzido sem ramo, no ${modo.principal}, e ${repo} não tem refs/heads/${modo.principal}`);
-    return modo.principal;
+    const tem = (r.saida ?? "").split("\n").some((x) => x.trim() === modo.ramo);
+    if (!tem)
+      throw new ErroPlano(
+        "ramo-da-conducao-ausente",
+        `${ciclo} é conduzido sem ramo de ciclo, no ramo local ${modo.ramo} que sobe ao ${modo.principal}, e ${repo} não tem refs/heads/${modo.ramo}: a maestra o cria; à mão, git branch --no-track ${modo.ramo} origin/${modo.principal}`,
+      );
+    return modo.ramo;
   }
   const achados = (r.saida ?? "").split("\n").map((x) => x.trim()).filter((x) => x && ehRamoDoCiclo(x, ciclo));
   if (achados.length !== 1)
@@ -958,6 +963,7 @@ export function maestra({ repo, ciclo, sessao, linhagem, contexto, nonce: n = nu
   let propria = null;
   let anexada = null;
   let ramoDaPrimeira = null;
+  let ramoDaConducao = null;
   if (n) {
     const lido = gitConducao.lerPedido({ repo, ciclo, nonce: n });
     if (lido.acao === "perguntar") return lido;
@@ -977,6 +983,8 @@ export function maestra({ repo, ciclo, sessao, linhagem, contexto, nonce: n = nu
       });
     marcas = lerMarcas(repo, lido.base, ciclo);
   } else {
+    // Ciclo sem ramo: o ramo local da condução nasce aqui, na ponta do principal do origin, sem abrir árvore.
+    ramoDaConducao = gitConducao.garantirRamoDaConducao({ repo, ciclo });
     const ramo = ramoDoCiclo(repo, ciclo);
     const ref = `refs/heads/${ramo}`;
     head = git(repo, ["rev-parse", ref]).trim();
@@ -1020,7 +1028,7 @@ export function maestra({ repo, ciclo, sessao, linhagem, contexto, nonce: n = nu
           migracao: Boolean(reservas?.banda),
           lane: Boolean(reservas?.lane),
           conferirReservas: reservas === null,
-          ...(adaptador.modoDoCiclo(repo, ciclo).semRamo ? { principal: ramo } : {}),
+          ...(adaptador.modoDoCiclo(repo, ciclo).semRamo ? { principal: adaptador.modoDoCiclo(repo, ciclo).principal, ramoLocal: ramo } : {}),
         },
       }),
     };
@@ -1028,8 +1036,10 @@ export function maestra({ repo, ciclo, sessao, linhagem, contexto, nonce: n = nu
     n = nonce(ciclo, "maestra:primeira", 0, head);
   }
   const lidos = niveisDasMarcas(marcas);
+  // Ciclo sem ramo: como o ramo local ficou (nasceu, avançou, ou a busca falhou e ele ficou como estava) sai em toda saída.
+  const comRamo = (o) => (ramoDaConducao ? { ...o, ramoDaConducao } : o);
   if (lidos.niveis !== 3)
-    return pergunta.perguntar({
+    return comRamo(pergunta.perguntar({
       acao: "perguntar",
       nonce: n,
       ciclo,
@@ -1038,7 +1048,7 @@ export function maestra({ repo, ciclo, sessao, linhagem, contexto, nonce: n = nu
       niveis: lidos.niveis,
       origem: lidos.origem,
       detalhe: `o ciclo roda em ${lidos.niveis ?? "nível nenhum escolhido"} (${lidos.origem}): a maestra só existe em 3 níveis — niveis 3 --sim "<texto do operador>" antes`,
-    });
+    }));
   const decidida = niveis.decidirMaestra({
     ciclo,
     sessao: String(sessao).trim(),
@@ -1061,8 +1071,10 @@ export function maestra({ repo, ciclo, sessao, linhagem, contexto, nonce: n = nu
       return pergunta.perguntar({ acao: "perguntar", nonce: n, ciclo, head, motivo: "pedido-em-atendimento", nome: criar.nome ?? null, detalhe: `outra maestra reservou o pedido ${n} agora: não criar; ler o atendimento de novo`, ...(r.detalhe ? { origem: r.detalhe } : {}) });
     return { ...decidida, reserva: r.ref };
   }
-  if (decidida.acao === "criar-condutora" && criar.primeira) return soltarParaAPrimeira({ repo, ciclo, head, nonce: n, decidida, ramo: ramoDaPrimeira, propria, anexada });
-  return decidida;
+  if (decidida.acao === "criar-condutora" && criar.primeira) {
+    return comRamo(soltarParaAPrimeira({ repo, ciclo, head, nonce: n, decidida, ramo: ramoDaPrimeira, propria, anexada }));
+  }
+  return comRamo(decidida);
 }
 
 /**
@@ -1343,11 +1355,12 @@ function textoDoPlanejamento(ciclo, verbos) {
  * `adotar` as relê, não reserva outras), depois a posse ali e as reservas
  * atrás dela. O lock da árvore é de cada árvore: nada passa da maestra.
  */
-export function passosDeAdotar(ciclo, { slug = null, migracao = false, lane = false, conferirReservas = false, principal = null } = {}) {
+export function passosDeAdotar(ciclo, { slug = null, migracao = false, lane = false, conferirReservas = false, principal = null, ramoLocal = null } = {}) {
   const flags = [slug ? ` --slug ${slug}` : "", migracao ? " --migracao" : "", lane ? " --lane" : ""].join("");
-  // Ciclo sem ramo (`semRamo`): não há ramo a adotar; a árvore abre o principal, onde o ciclo é conduzido.
+  // Ciclo sem ramo (`semRamo`): não há ramo de ciclo a adotar; a árvore abre o ramo local da
+  // condução (a maestra o criou na ponta do principal do origin), e cada marca sobe ao principal.
   const abrir = principal
-    ? `a. git switch ${principal} — ${ciclo} é conduzido sem ramo, no ${principal}, e o ${principal} abre aqui; já aberto em outra árvore (a maestra o soltou, ou outra árvore o tem): PARADA ramo-preso.`
+    ? `a. git switch ${ramoLocal} — ${ciclo} é conduzido sem ramo de ciclo: o ramo local ${ramoLocal} acompanha o ${principal}, e cada marca e cada tarefa conferida sobem por push origin HEAD:${principal}, sem força; o ${principal} aberto em outra árvore (o clone principal) não importa e não se mexe nele. ${ramoLocal} aberto em outra árvore: PARADA ramo-preso.`
     : `a. arvore.mjs adotar --ciclo ${ciclo}${flags} — abre o ramo do ciclo aqui${migracao || lane ? "; a banda e a lane do ciclo voltam as mesmas" : ""}. Ramo preso em outra árvore: PARADA ramo-preso.`;
   return [
     `Antes do pré-voo, na <árvore> (cwd), nesta ordem, pelos verbos de árvore e de posse que a página do projeto nomeia com o caminho (campo pagina da declaração); saída ≠ 0 em qualquer passo ⇒ PARADA <motivo> à maestra e parar:`,
@@ -1505,12 +1518,13 @@ function raizDaArvore(de) {
 
 /**
  * O ramo que a árvore do ciclo tem aberto: `ciclo-<id>[-<slug>]`, ou, no ciclo declarado sem
- * ramo (`semRamo`), o ramo principal dele — e aí ciclo-<id> não conta.
+ * ramo (`semRamo`), o ramo local da condução (`conducao/<id>`) — e aí ciclo-<id> não conta, nem o
+ * principal, que fica aberto no clone principal sem ser a árvore de ninguém.
  */
 export function ramoAceitoDoCiclo(repo, ciclo, ramo) {
   if (!ramo) return false;
   const modo = adaptador.modoDoCiclo(raizDaArvore(repo), ciclo);
-  return modo.semRamo ? ramo === modo.principal : ehRamoDoCiclo(ramo, ciclo);
+  return modo.semRamo ? ramo === modo.ramo : ehRamoDoCiclo(ramo, ciclo);
 }
 
 /**
@@ -1536,7 +1550,7 @@ export function arvoreDoCiclo(ciclo, de = process.cwd()) {
     throw new ErroPlano(
       "arvore-do-ciclo-ausente",
       modo.semRamo
-        ? `nenhuma árvore tem o ${modo.principal} aberto, e ${ciclo} é conduzido sem ramo, nele — abra a árvore no ${modo.principal} ou passe --repo <árvore>`
+        ? `nenhuma árvore tem o ramo local ${modo.ramo} aberto, e ${ciclo} é conduzido sem ramo de ciclo, nele (sobe ao ${modo.principal}) — abra a árvore da condutora nele (git switch ${modo.ramo}; sem ele, git switch --no-track -c ${modo.ramo} origin/${modo.principal}) ou passe --repo <árvore>`
         : `nenhuma árvore tem o ramo ciclo-${ciclo} aberto — adote a árvore da sessão para o ciclo pelo verbo do projeto (arvore.mjs adotar --ciclo ${ciclo}) ou passe --repo <árvore>`,
     );
   if (achadas.length > 1)
@@ -1960,7 +1974,7 @@ export function proximo({ repo, ciclo, entrada = {}, entradaErro = null, reinici
     consentimentos: lerConsentimentos(repo, { ciclo }),
   });
   // Os passos do ramo no fechamento (T9) vêm depois da ordem das regras, sobre a ação que ela decidiu.
-  const comRamo = comAEntradaDoVerbo(comPassosDoRamo(decidida, { ramo: gitConducao.ramoNoOrigin(repo), temCi: temCi !== false, entrada, niveis: arranjo }), arranjo);
+  const comRamo = comAEntradaDoVerbo(comPassosDoRamo(decidida, { ramo: gitConducao.ramoNoOrigin(repo, ciclo), temCi: temCi !== false, entrada, niveis: arranjo }), arranjo);
   // Os níveis por último: em 3, quem cria a herdeira é a maestra (pedir-herdeira); em 2, a conta da cadeia.
   const comNiveis = niveis.comNiveis(comRamo, { niveis: arranjo, entrada, perguntar: pergunta.perguntar });
   // A aposentadoria depois de tudo (VEGA-20 T19): a parada que sobrou, com a instância da task do plano.
