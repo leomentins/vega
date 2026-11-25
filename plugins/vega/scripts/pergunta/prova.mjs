@@ -191,6 +191,14 @@ export function eventoDoHubConfere(ev, { escolhas, abertaEm, livre = null }) {
   if (papel !== "user") return "nao-confere";
   const sintetico = [ev, ev.user, catchall, msg].some((x) => x?.isSynthetic === true || x?.is_synthetic === true);
   if (sintetico) return "nao-confere";
+  // O evento que chegou por `send_message` ou de outra sessao nunca e o operador digitando, nem que
+  // o papel seja `user` e nao venha marcado sintetico (hotfix vega-pareador-no-plugin, 25/11/2026):
+  // `isMeta` em qualquer camada, `origin.kind` presente e nao humano, ou o embrulho de mensagem entre
+  // sessoes em qualquer ponto do texto. Paridade com a outra porta.
+  const camadas = [ev, ev.user, catchall, msg];
+  if (camadas.some((x) => x?.isMeta === true || x?.is_meta === true)) return "nao-confere";
+  if (camadas.some((x) => x?.origin?.kind != null && x.origin.kind !== "human")) return "nao-confere";
+  if (/<(?:cross-session-message|agent-message)\b/.test(textoDoEventoDoHub(ev))) return "nao-confere";
   const quando = Date.parse(ev.created_at ?? ev.timestamp ?? catchall?.created_at ?? catchall?.timestamp ?? msg?.created_at ?? "");
   if (!Number.isFinite(quando) || !(quando > Date.parse(abertaEm))) return "nao-confere";
   // Texto livre do operador no hub (hotfix resposta-livre-maestra, 24/11/2026): `livre === true`,

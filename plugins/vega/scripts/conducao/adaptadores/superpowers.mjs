@@ -695,9 +695,26 @@ export function consentimentoDoProjeto({ repo = process.cwd(), prova = null } = 
   if (!pasta) return Object.freeze({ phi: PHI_DO_CASO, perguntas: null });
   const ler = prova ?? {};
   const { prova: leitor } = pecasDoPlugin();
+  // As `autoria` do turno corrente (o pareador do plugin sobre o transcript da abertura) somam aos
+  // eventos lidos: o `autorizar-ciclo`/`resposta-da-maestra` no mesmo turno da resposta não espera o
+  // Stop. Nada grava; `origemEfetiva` reconfere a prova delas como a das gravadas.
+  // Carga e falha do pareador nunca derrubam o leitor: sem as autorias do turno, a leitura é a de
+  // antes (o que está gravado), e o motivo vai ao stderr.
+  const doTurno =
+    ler.autoriasDoTurno ??
+    ((id, eventos) => {
+      try {
+        const { pareador } = { pareador: requerer("../../pergunta/pareador.mjs") };
+        return pareador.autoriasDoTurno(id, { eventos, ...(ler.achar ? { achar: ler.achar } : {}), ...(ler.lerEntradas ? { lerEntradas: ler.lerEntradas } : {}) });
+      } catch (e) {
+        process.stderr.write(`aviso: as autorias do turno de ${id} nao se leram (${String(e?.message ?? e).split("\n")[0].slice(0, 160)}); vale so o registro gravado\n`);
+        return [];
+      }
+    });
   const daPergunta = (id) => {
     if (!PERGUNTA_ID_RE.test(id ?? "")) throw new Error("pergunta fora da forma p-<16 hex>");
-    return { eventos: eventosDaPergunta(pasta, id), ...ler };
+    const eventos = eventosDaPergunta(pasta, id);
+    return { eventos: [...eventos, ...doTurno(id, eventos)], ...ler };
   };
   return Object.freeze({
     phi: PHI_DO_CASO,

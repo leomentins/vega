@@ -1,6 +1,6 @@
-# Instalar a condução — plugin, declaração do projeto e os três hooks
+# Instalar a condução — plugin, declaração do projeto e os hooks
 
-> O plugin traz o núcleo da condução (`scripts/conducao/`), a skill (`skills/conducao/`) e três
+> O plugin traz o núcleo da condução (`scripts/conducao/`), a skill (`skills/conducao/`) e quatro
 > hooks (`hooks/`), registrados pelo próprio plugin em `hooks/hooks.json`. Nada do projeto mora
 > aqui: o que é de cada projeto vem da declaração do adaptador, o campo `conducao` de
 > `.vega/declaracao.json` na raiz do repositório conduzido. Os dois guards com modo nascem em `shadow`: registram e não recusam
@@ -62,6 +62,7 @@ do repositório do plugin). O mínimo do campo, com o plano no formato público:
 | `operaria-alcance-guard.js` | `PreToolUse` em `archive_session`, `send_message` do conector remoto e `Bash` | toda sessão | Decide a permissão: a operária arquiva só a si mesma, escreve só para `@parent` ou para quem já lhe escreveu, e empurra só a referência de aviso dela; a sessão comum arquiva e escreve para qualquer uma (`priority` aceito); dentro disso `allow`, fora `deny` com a forma que passa — nunca `ask`, para não parar no operador. Sem modo: nunca fica calado. |
 | `conducao-nonce-guard.js` | `PreToolUse` em `create_session`, `send_message`, `archive_session` | toda sessão que não nasceu de brief da condução | Compara o nonce citado na chamada com a última ação que `conducao.mjs proximo` emitiu (log de eventos). Grava `ok`, `divergencia`, `forma-desconhecida` ou `erro`. **Shadow:** sai 0 sempre. |
 | `operaria-stop-guard.js` | `Stop` | só sessão cujo pedido de nascimento é o contrato da operária | Recusa encerrar sem commit da task depois do marcador da tentativa e sem aviso `T<k>-FALHA … <nonce>` na primeira linha da resposta final. Recusa no máximo 3 vezes por sessão; a 4ª libera com `liberado-teto`. **Só em `hard`.** **Shadow:** o fim que recusaria vira `teria-bloqueado` no log e sai 0. |
+| `pergunta-pareador.mjs` | `Stop` | todo projeto com `decisoes.destino: "git"` | Lê o transcript do turno e grava a `autoria` de cada resposta às perguntas registradas (`.vega/sessao-<id>.jsonl`): mensagem digitada pelo operador ⇒ `digitado`; repasse com `Recibo:` conferido pelo `get_event` ⇒ `digitado-no-hub-conferido`; texto que só chegou por `send_message` nunca sobe a `digitado`. Sem ele, nenhum sim de ciclo passa (`origem-sem-prova`). Destino `banco`: não faz nada. Nunca bloqueia; desligar com `<pastaDoModo>/pergunta-pareador-mode` = `off`. Regra: `scripts/pergunta/pareador.mjs`. |
 
 Corpo e decisões de cada um: o cabeçalho do próprio arquivo. Contraprova:
 `node --test hooks/__tests__/*.test.mjs`.
@@ -109,4 +110,4 @@ echo hard > <pastaDoModo>/operaria-stop-guard-mode    # só com o critério
 - Fim da operária: `echo shadow > <pastaDoModo>/operaria-stop-guard-mode` (ou apagar o arquivo)
   volta a só gravar. Filha presa recusando o fim em `hard`: o teto de 3 já a solta; arquivar a
   sessão pelo app também encerra.
-- Desligar os três: `claude plugin disable altair`.
+- Desligar todos: `claude plugin disable altair`.

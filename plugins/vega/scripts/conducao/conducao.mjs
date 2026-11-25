@@ -258,7 +258,7 @@ import * as pergunta from "./pergunta.mjs";
 import { preVoo } from "./pre-voo.mjs";
 import { pedidoDaEtapa } from "./etapa.mjs";
 import { criarRamo } from "./criar-ramo.mjs";
-import { saidasGeradas } from "../vega/declaracao.mjs";
+import { existe as existeDeclaracao, posseDoProjeto, saidasGeradas } from "../vega/declaracao.mjs";
 import { ErroGitPrazo, tentarGit } from "./git-exec.mjs";
 import { RE, lerMarcas, niveisDasMarcas } from "./marcas.mjs";
 import * as niveis from "./niveis.mjs";
@@ -1028,6 +1028,7 @@ export function maestra({ repo, ciclo, sessao, linhagem, contexto, nonce: n = nu
           migracao: Boolean(reservas?.banda),
           lane: Boolean(reservas?.lane),
           conferirReservas: reservas === null,
+          posse: projetoDeclaraPosse(repo),
           ...(adaptador.modoDoCiclo(repo, ciclo).semRamo ? { principal: adaptador.modoDoCiclo(repo, ciclo).principal, ramoLocal: ramo } : {}),
         },
       }),
@@ -1355,7 +1356,24 @@ function textoDoPlanejamento(ciclo, verbos) {
  * `adotar` as relê, não reserva outras), depois a posse ali e as reservas
  * atrás dela. O lock da árvore é de cada árvore: nada passa da maestra.
  */
-export function passosDeAdotar(ciclo, { slug = null, migracao = false, lane = false, conferirReservas = false, principal = null, ramoLocal = null } = {}) {
+/**
+ * O projeto declara posse (`posse` em `.vega/declaracao.json`)? Só então o texto da primeira
+ * condutora cita os verbos de posse e de lane, que são do projeto (débito do ENSAIO-1 do hub,
+ * 25/11/2026: o texto mandava rodar `estado.mjs lane ler` e `troca.mjs tomar-posse`, que só existem
+ * na fonte). Sem declaração (a árvore do núcleo, os testes do núcleo) ou com ela ilegível ⇒ `true`:
+ * na dúvida, o passo segue escrito (a condutora o lê na página do projeto), nunca some calado. Só a
+ * declaração legível sem `posse` (o consumidor) tira os verbos.
+ */
+export function projetoDeclaraPosse(repo) {
+  try {
+    if (!repo || !existeDeclaracao(repo)) return true;
+    return Boolean(posseDoProjeto(repo));
+  } catch {
+    return true;
+  }
+}
+
+export function passosDeAdotar(ciclo, { slug = null, migracao = false, lane = false, conferirReservas = false, principal = null, ramoLocal = null, posse = true } = {}) {
   const flags = [slug ? ` --slug ${slug}` : "", migracao ? " --migracao" : "", lane ? " --lane" : ""].join("");
   // Ciclo sem ramo (`semRamo`): não há ramo de ciclo a adotar; a árvore abre o ramo local da
   // condução (a maestra o criou na ponta do principal do origin), e cada marca sobe ao principal.
@@ -1363,13 +1381,15 @@ export function passosDeAdotar(ciclo, { slug = null, migracao = false, lane = fa
     ? `a. git switch ${ramoLocal} — ${ciclo} é conduzido sem ramo de ciclo: o ramo local ${ramoLocal} acompanha o ${principal}, e cada marca e cada tarefa conferida sobem por push origin HEAD:${principal}, sem força; o ${principal} aberto em outra árvore (o clone principal) não importa e não se mexe nele. ${ramoLocal} aberto em outra árvore: PARADA ramo-preso.`
     : `a. arvore.mjs adotar --ciclo ${ciclo}${flags} — abre o ramo do ciclo aqui${migracao || lane ? "; a banda e a lane do ciclo voltam as mesmas" : ""}. Ramo preso em outra árvore: PARADA ramo-preso.`;
   return [
-    `Antes do pré-voo, na <árvore> (cwd), nesta ordem, pelos verbos de árvore e de posse que a página do projeto nomeia com o caminho (campo pagina da declaração); saída ≠ 0 em qualquer passo ⇒ PARADA <motivo> à maestra e parar:`,
-    ...(conferirReservas
+    posse
+      ? `Antes do pré-voo, na <árvore> (cwd), nesta ordem, pelos verbos de árvore e de posse que a página do projeto nomeia com o caminho (campo pagina da declaração); saída ≠ 0 em qualquer passo ⇒ PARADA <motivo> à maestra e parar:`
+      : `Antes do pré-voo, na <árvore> (cwd), nesta ordem; saída ≠ 0 em qualquer passo ⇒ PARADA <motivo> à maestra e parar:`,
+    ...(conferirReservas && posse
       ? [`Antes do a: estado.mjs lane ler --eixo migration e --eixo substrato; o ciclo ${ciclo} com banda ⇒ --migracao no adotar, com lane ⇒ --lane (o adotar relê a reserva do ciclo, não cria outra).`]
       : []),
     abrir,
-    `b. troca.mjs tomar-posse --ciclo ${ciclo} — a posse do ciclo nesta árvore (exit 4 = posse ocupada por outra árvore: PARADA posse-ocupada, nunca --forcar).`,
-    ...(migracao || lane ? [`c. estado.mjs lane transferir --ciclo ${ciclo} — as reservas seguem a posse até esta árvore.`] : []),
+    ...(posse ? [`b. troca.mjs tomar-posse --ciclo ${ciclo} — a posse do ciclo nesta árvore (exit 4 = posse ocupada por outra árvore: PARADA posse-ocupada, nunca --forcar).`] : []),
+    ...(posse && (migracao || lane) ? [`c. estado.mjs lane transferir --ciclo ${ciclo} — as reservas seguem a posse até esta árvore.`] : []),
   ];
 }
 

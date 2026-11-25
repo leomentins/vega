@@ -74,7 +74,7 @@
  *      `abrir` chamado direto (testes, ganchos) só a roda com `sombra` explícito.
  */
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -1094,7 +1094,7 @@ const USO =
   "     comando.mjs dispensar --pergunta <p-id> [--motivo <texto>] [--json]\n" +
   "     comando.mjs destino --pergunta <p-id> --ponteiro <ref> [--json]\n" +
   "     comando.mjs ler [--pergunta <p-id> | --sessao <id>] [--abertas [--dono <handle>]] [--json]\n" +
-  "     (--repo <raiz> em todos; padrao: a raiz do repositorio)";
+  "     (--repo <raiz> em todos; padrao: a raiz git do cwd com .vega/declaracao.json)";
 
 const FLAGS = {
   abrir: ["arquivo", "supersedes", "ciclo", "fase", "task", "origem", "repo"],
@@ -1149,7 +1149,25 @@ export function chaveDosFlags(entrada, o) {
   return { ...entrada, chave: { ...dada, ...dos } };
 }
 
-const RAIZ_PADRAO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "..");
+const RAIZ_DO_CORPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "..");
+
+/**
+ * O projeto do comando sem `--repo` (débito do ENSAIO-1 do hub, 25/11/2026): a raiz git do `cwd`
+ * (ou a pasta mais próxima, subindo, com `.vega/declaracao.json`), como o `conducao.mjs` acha a
+ * árvore — nunca a pasta do plugin instalado, onde a declaração não existe (saía exit 2). Na fonte,
+ * o corpo mora dentro do projeto, e a raiz dele segue de reserva quando o `cwd` não tem declaração.
+ */
+export function raizPadrao(cwd = process.cwd(), { corpo = RAIZ_DO_CORPO } = {}) {
+  const declarada = (d) => existsSync(path.join(d, ".vega", "declaracao.json"));
+  const r = spawnSync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], { encoding: "utf8" });
+  const topo = r.status === 0 ? r.stdout.trim() : "";
+  if (topo && declarada(topo)) return topo;
+  for (let d = path.resolve(cwd); ; d = path.dirname(d)) {
+    if (declarada(d)) return d;
+    if (path.dirname(d) === d) break;
+  }
+  return corpo;
+}
 
 export async function principal(argv, { registro = null, stdout = process.stdout, stderr = process.stderr } = {}) {
   const { erro, opcoes: o } = parsear(argv);
@@ -1158,7 +1176,7 @@ export async function principal(argv, { registro = null, stdout = process.stdout
     return EXIT.USO;
   }
   try {
-    const reg = registro ?? (await registroDoProjeto(o.repo ? path.resolve(o.repo) : RAIZ_PADRAO));
+    const reg = registro ?? (await registroDoProjeto(o.repo ? path.resolve(o.repo) : raizPadrao()));
     let r;
     if (o.verbo === "abrir") {
       let entrada;
@@ -1174,7 +1192,7 @@ export async function principal(argv, { registro = null, stdout = process.stdout
       }
       entrada = chaveDosFlags(entrada, o);
       const ondeAbre = o.repo ? path.resolve(o.repo) : process.cwd();
-      r = await abrir(entrada, { registro: reg, sombra: sombrear, ramo: ramoAtual(ondeAbre), conducao: conducaoDoCwd(o.repo ? path.resolve(o.repo) : RAIZ_PADRAO, ondeAbre) });
+      r = await abrir(entrada, { registro: reg, sombra: sombrear, ramo: ramoAtual(ondeAbre), conducao: conducaoDoCwd(o.repo ? path.resolve(o.repo) : raizPadrao(), ondeAbre) });
       stdout.write(o.json ? `${JSON.stringify(r, null, 2)}\n` : `${r.texto}\n`);
     } else if (o.verbo === "responder") {
       const temDivida = ["porque", "porque-livre", "severidade", "gatilho"].some((k) => o[k] !== undefined);
