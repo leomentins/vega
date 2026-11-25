@@ -248,6 +248,11 @@ function sensiveisDaFase(p, f) {
   return (p?.fases.find((x) => x.id === f.id)?.tasks ?? []).filter((id) => p.porId.get(id)?.simProprio);
 }
 
+/** Alguma task da fase `f` no plano `p` tem verbo de publicação (`publicacao` não vazio). */
+function faseTemPublicacao(p, f) {
+  return (p?.fases.find((x) => x.id === f.id)?.tasks ?? []).some((id) => (p.porId.get(id)?.publicacao ?? []).length > 0);
+}
+
 /**
  * A task sensível fora do sim dado à fase pede o sim de novo só com
  * `simProprio` (D18a) e sem aprovação dela — por task, nunca pelo nonce da
@@ -981,13 +986,15 @@ export function nomeDaCondutora(ciclo, fase, ordinal = 1) {
  * autorização herdada (`herdar-autorizacao`, origem `ciclo`) sem perguntar a
  * o operador; fora dele (nenhum sim do ciclo, ou task que mudou de classe ou de
  * sensibilidade desde o sim), pede o sim do ciclo de novo: o sim por fase
- * foi aposentado (D-VEGA29-14).
+ * foi aposentado (D-VEGA29-14). Exceção (ruling de 24/11/2026): fase sem verbo
+ * de publicação, com o plano igual ao da última autorização, herda pelo sim do
+ * ciclo e só avisa.
  *
  * Lê: `fase`, `autorizadas`, `cicloCobre`, `replanoSoDeRuling`,
  * `semMudarAlcance`, `autorizacaoDoCiclo`, `plano`, `planoHead`, `diffPlano`, `entrada.ci`.
  */
 export function regraAutorizarFase(ctx) {
-  const { acao, plano, planoHead, planoHeadBlob, planoBlob, diffPlano, entrada, autorizadas, fase, cicloCobre, replanoSoDeRuling, semMudarAlcance, autorizacaoDoCiclo, tasksQueMudaramDeClasse } = ctx;
+  const { acao, plano, planoHead, planoHeadBlob, planoBlob, diffPlano, entrada, autorizadas, fase, cicloCobre, replanoSoDeRuling, semMudarAlcance, autorizacaoDoCiclo, tasksQueMudaramDeClasse, mudancasQuePerguntam } = ctx;
   if (!fase || autorizadas.has(fase.id)) return null;
   const sensiveis = sensiveisDaFase(planoHead ?? plano, fase);
   if (cicloCobre && (replanoSoDeRuling || semMudarAlcance))
@@ -1010,6 +1017,33 @@ export function regraAutorizarFase(ctx) {
   // reautoriza a fase nova sozinho; sem sim do ciclo nenhum, a pergunta `autorizar-ciclo` segue.
   const pre = autorizacaoDoCiclo ? replanoPreautorizado(ctx, fase, autorizacaoDoCiclo.sha) : null;
   if (pre) return pre;
+  // Ruling do operador (24/11/2026, D29 do L4): fase sem verbo de publicação começa pelo sim do ciclo
+  // já dado e a condutora só avisa. Exige o plano do HEAD igual ao congelado na última autorização (sem
+  // re-plano por conferir) e nenhuma task DESTA fase mudada de classe ou sensibilidade desde o sim do
+  // ciclo: a divergência que derrubou `cicloCobre` tem de estar em fase anterior, já conduzida. Fase
+  // com publicação segue perguntando, e o `publicacao-gate.js` no ato da publicação não muda. Caso
+  // medido: o re-plano pré-autorizado da F1 do L4 fez a T47 (F1) nascer `fechamento`, `cicloCobre`
+  // ficou falso, e a F2, sem publicação e sem re-plano novo, voltava a pedir o `autorizar-ciclo`.
+  const idsDaFase = planoHead?.fases.find((x) => x.id === fase.id)?.tasks ?? [];
+  const divergencias = autorizacaoDoCiclo && planoHead ? mudancasQuePerguntam(autorizacaoDoCiclo.plano, planoHead) : [];
+  const divergeNaFase = divergencias.some((m) => idsDaFase.includes(m.task));
+  if (autorizacaoDoCiclo && planoHead && planoHeadBlob && planoHeadBlob === planoBlob && !faseTemPublicacao(planoHead, fase) && !divergeNaFase)
+    return acao("herdar-autorizacao", `herdar:${fase.id}`, 0, {
+      fase: fase.id,
+      origem: "ciclo",
+      autorizacao: autorizacaoDoCiclo.sha,
+      planoNovo: planoHeadBlob,
+      planoAnterior: planoBlob,
+      tasksMudadas: [],
+      replanos: [],
+      aviso: `${fase.id} começa pelo sim do ciclo de ${autorizacaoDoCiclo.sha.slice(0, 8)}: fase sem publicação, plano igual ao da última autorização (ruling de 24/11/2026)${
+        divergencias.length ? `; divergem do plano do sim, em fase anterior: ${divergencias.map((m) => m.task).join(", ")}` : ""
+      }${
+        sensiveis.length ? `; tasks com sim próprio, que seguem pedindo o delas: ${sensiveis.join(", ")}` : ""
+      }`,
+      ...(sensiveis.length ? { sensiveis } : {}),
+      consentimento: pedidoDeCaso({ caso: CASOS.herancaEntreFases, fase: fase.id, origem: autorizacaoDoCiclo.sha }),
+    });
   const mudaram = planoHead ? tasksQueMudaramDeClasse(plano, planoHead) : [];
   return acao("perguntar", fase.id, 0, {
     motivo: "autorizar-ciclo",

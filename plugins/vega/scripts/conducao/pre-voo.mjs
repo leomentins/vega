@@ -488,7 +488,7 @@ function inscricaoFeita(temCi, entrada, arranjo = 2) {
  * `CONFERENCIAS_DA_HERDEIRA`. `lerPosse` é o leitor da cerca (o da declaração,
  * ou o do teste); `temCi` é `ci !== false` da declaração.
  */
-export function conferenciasDaHerdeira({ repo, ciclo = null, entrada = {}, temCi = true, lerPosse = lerPosseDaCerca, marcas = lerMarcas(repo) }) {
+export function conferenciasDaHerdeira({ repo, ciclo = null, entrada = {}, temCi = true, lerPosse = lerPosseDaCerca, marcas = lerMarcas(repo, "HEAD", ciclo) }) {
   const p = passagemDaHerdeira(marcas);
   const arranjo = niveisDasMarcas(marcas).niveis ?? 2;
   return { passagem: p, conferencias: [arvoreNaPonta(repo, p), epocaDaPosse(repo, p, lerPosse, ciclo), inscricaoFeita(temCi, entrada, arranjo)] };
@@ -517,7 +517,7 @@ export function preVoo({ repo, ciclo = null, env = process.env, prazoMs = PRAZO_
   const conferencias = [pluginCarregado(decl, lista, () => pluginNaSessao(decl, { env })), instalacaoUnica(decl, lista, settings), ponteComRestart(decl, { env, prazoMs }), trafegoLigado(decl, settings, env)];
   let daHerdeira = null;
   if (herdeira) {
-    const h = conferenciasDaHerdeira({ repo, ciclo, entrada, temCi: decl.ci !== false, lerPosse });
+    const h = conferenciasDaHerdeira({ repo, ciclo, entrada, temCi: decl.ci !== false && !(ciclo && adaptador.modoDoCiclo(repo, ciclo).semRamo), lerPosse });
     conferencias.push(...h.conferencias);
     daHerdeira = { passagem: h.passagem?.sha ?? null, epocaDaNota: epocaDe(h.passagem?.epoca) };
   } else if (ciclo) conferencias.push(posseDoCiclo(repo, ciclo, lerPosse));

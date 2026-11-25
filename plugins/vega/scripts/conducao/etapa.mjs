@@ -45,8 +45,15 @@ export function comandoDaPergunta(repo) {
 export function pedidoDaEtapa({ repo, ciclo, etapa, rodada, arvore, ramo }) {
   if (!ciclo) throw new ErroPlano("uso", "etapa exige --ciclo <id>");
   if (!arvore || !path.isAbsolute(arvore)) throw new ErroPlano("uso", "etapa exige a árvore do ciclo (caminho absoluto)");
-  if (!ramo || !(ramo === `ciclo-${ciclo}` || ramo.startsWith(`ciclo-${ciclo}-`)))
-    throw new ErroPlano("arvore-sem-ramo-do-ciclo", `a árvore ${arvore} está em ${ramo || "HEAD destacado"}, não no ramo ciclo-${ciclo}: adote-a antes da primeira etapa (arvore.mjs adotar --ciclo ${ciclo})`);
+  // Ciclo declarado sem ramo (`semRamo`): a árvore é a do ramo principal, e ciclo-<id> não conta.
+  const modo = adaptador.modoDoCiclo(repo, ciclo);
+  if (modo.semRamo ? ramo !== modo.principal : !ramo || !(ramo === `ciclo-${ciclo}` || ramo.startsWith(`ciclo-${ciclo}-`)))
+    throw new ErroPlano(
+      "arvore-sem-ramo-do-ciclo",
+      modo.semRamo
+        ? `a árvore ${arvore} está em ${ramo || "HEAD destacado"}, e ${ciclo} é conduzido sem ramo, no ${modo.principal}: abra a árvore no ${modo.principal} antes da primeira etapa`
+        : `a árvore ${arvore} está em ${ramo || "HEAD destacado"}, não no ramo ciclo-${ciclo}: adote-a antes da primeira etapa (arvore.mjs adotar --ciclo ${ciclo})`,
+    );
   const decl = adaptador.lerAdaptador(repo);
   const etapas = adaptador.codigoDoAdaptador(repo).etapasDoPlanejamento ?? [];
   if (!etapas.length) throw new ErroPlano("sem-etapas", "o código do adaptador não declara etapasDoPlanejamento");
@@ -78,7 +85,9 @@ export function pedidoDaEtapa({ repo, ciclo, etapa, rodada, arvore, ramo }) {
   const arvoreLinhas = [
     `Árvore do ciclo: \`${arvore}\` (ramo \`${ramo}\`), criada por quem te criou. Trabalhe nela por caminho absoluto (\`git -C "${arvore}"\`); não crie outra árvore nem outro ramo.`,
     e.empurra
-      ? `Você é a etapa que empurra: ao terminar, \`git -C "${arvore}" push -u origin ${ramo}\` e, se o ramo ainda não tem proposta, \`gh pr create --draft --head ${ramo}\`; o sha8 do aviso é o empurrado.`
+      ? modo.semRamo
+        ? `Você é a etapa que empurra: ao terminar, \`git -C "${arvore}" push origin ${ramo}\`, sem força e sem proposta (o ciclo é conduzido sem ramo, no ${ramo}); o sha8 do aviso é o empurrado.`
+        : `Você é a etapa que empurra: ao terminar, \`git -C "${arvore}" push -u origin ${ramo}\` e, se o ramo ainda não tem proposta, \`gh pr create --draft --head ${ramo}\`; o sha8 do aviso é o empurrado.`
       : "Commite no ramo e não empurre: quem empurra é a última etapa do planejamento.",
   ].join("\n");
   const pedidoCompleto = `${pedido}\n\n${arvoreLinhas}`;

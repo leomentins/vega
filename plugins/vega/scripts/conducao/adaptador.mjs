@@ -10,7 +10,7 @@
  * versionado `adaptador.schema.json` (T20); este leitor é a mesma regra sem
  * dependência npm (o núcleo não carrega `ajv`):
  *
- *   versao      1 | 2 | 3 | 4 | 5 | 6   — OPCIONAL, default 1: a versão do esquema. A v1 é a
+ *   versao      1 | 2 | 3 | 4 | 5 | 6 | 7 — OPCIONAL, default 1: a versão do esquema. A v1 é a
  *                                         declaração da F2, só de dados, e segue aceita como está;
  *                                         campo novo entra com versão nova, e a anterior segue valendo
  *   codigo      "<arquivo>.mjs" | "<nome>" — a partir da v2, OPCIONAL: o código do adaptador, para o projeto
@@ -72,6 +72,9 @@
  *                                         traz `tetoPonte`. `"codigo"` ⇒ a função `capacidade()` do código
  *                                         do adaptador mede (exige `codigo`); `"padrao"` ⇒ o teto padrão do
  *                                         núcleo (`tetoFilhasPadrao` de `botoes.mjs`)
+ *   semRamo     [{ ciclo, principal? }]  — só na v7, OPCIONAL (hotfix vega-conducao-sem-ramo): os ciclos
+ *                                         conduzidos direto no ramo principal (`principal`, default `main`),
+ *                                         sem `ciclo-<id>` e sem proposta; ausente ⇒ todo ciclo tem ramo
  *
  * Campo desconhecido, em qualquer nível, é recusado: declaração que o leitor
  * não entende não é lida pela metade. Todo caminho que a declaração aponta
@@ -169,7 +172,9 @@ export function caminhoDoEmbutido(nome) {
 
 const CAMPOS = Object.freeze({
   raiz: ["projeto", "operadores", "estado", "log", "pergunta"],
-  opcionais: ["versao", "codigo", "pagina", "conferencia", "ci", "sessao", "publicacao", "verificacao", "guardas", "tiers", "capacidade"],
+  opcionais: ["versao", "codigo", "pagina", "conferencia", "ci", "sessao", "publicacao", "verificacao", "guardas", "tiers", "capacidade", "semRamo"],
+  semRamo: ["ciclo"],
+  semRamoOpcionais: ["principal"],
   sessao: ["modosSemClique"],
   sessaoV5: ["cli", "settings", "variavelDoTrafego", "ponte", "instrucoes"],
   ponte: ["unidade"],
@@ -186,7 +191,7 @@ const CAMPOS = Object.freeze({
 const TOKEN = /^[A-Za-z0-9._-]{1,64}$/;
 
 /** Versões do esquema que este leitor aceita; a anterior segue valendo (T20). */
-export const VERSOES = Object.freeze([1, 2, 3, 4, 5, 6]);
+export const VERSOES = Object.freeze([1, 2, 3, 4, 5, 6, 7]);
 
 /** De onde vem a capacidade da máquina (v6, HN-29 T24); ausente ⇒ o padrão do núcleo. */
 export const FONTES_DE_CAPACIDADE = Object.freeze(["codigo", "padrao"]);
@@ -317,6 +322,7 @@ export function validar(bruto) {
   const guardas = validarGuardas(d.guardas, versao);
   const tiers = validarTiers(d.tiers, versao);
   const capacidade = validarCapacidade(d.capacidade, versao, d.codigo);
+  const semRamo = validarSemRamo(d.semRamo, versao);
   return Object.freeze({
     versao,
     ...(d.codigo === undefined ? {} : { codigo: d.codigo }),
@@ -334,7 +340,55 @@ export function validar(bruto) {
     guardas,
     tiers,
     capacidade,
+    semRamo,
   });
+}
+
+/** O ramo principal de um ciclo sem ramo quando a declaração não o nomeia. */
+export const PRINCIPAL_PADRAO = "main";
+const ID_DE_CICLO = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const NOME_DE_RAMO = /^(?!-)(?!.*\.\.)(?!.*\/\/)(?!.*@\{)[A-Za-z0-9._/-]{1,128}(?<![./])$/;
+
+/**
+ * `semRamo` (v7, hotfix vega-conducao-sem-ramo): os ciclos conduzidos direto no ramo principal,
+ * sem `ciclo-<id>` e sem proposta — `[{ ciclo, principal? }]`, `principal` default `main`.
+ * Ausente ⇒ lista vazia: todo ciclo tem ramo, como antes. Ciclo repetido recusa.
+ */
+function validarSemRamo(v, versao) {
+  if (v === undefined) return Object.freeze([]);
+  if (versao < 7) throw new ErroAdaptador("semRamo: só na versao 7 do esquema");
+  if (!Array.isArray(v)) throw new ErroAdaptador("semRamo: esperada lista");
+  const vistos = new Set();
+  return Object.freeze(
+    v.map((c, i) => {
+      const onde = `semRamo[${i}]`;
+      objeto(c, onde);
+      soCampos(c, CAMPOS.semRamo, onde, CAMPOS.semRamoOpcionais);
+      if (typeof c.ciclo !== "string" || !ID_DE_CICLO.test(c.ciclo)) throw new ErroAdaptador(`${onde}.ciclo: esperado id de ciclo sem espaço`);
+      if (vistos.has(c.ciclo)) throw new ErroAdaptador(`${onde}.ciclo: ${c.ciclo} repetido`);
+      vistos.add(c.ciclo);
+      const principal = c.principal ?? PRINCIPAL_PADRAO;
+      if (typeof principal !== "string" || !NOME_DE_RAMO.test(principal) || principal.startsWith("ciclo-"))
+        throw new ErroAdaptador(`${onde}.principal: esperado nome de ramo (sem ciclo-), veio ${JSON.stringify(c.principal)}`);
+      return Object.freeze({ ciclo: c.ciclo, principal });
+    }),
+  );
+}
+
+/**
+ * O modo do ciclo pela declaração: `{ semRamo: true, principal }` quando o ciclo está em
+ * `semRamo`, senão `{ semRamo: false, principal: null }`. Árvore sem declaração ⇒ sem o modo;
+ * declaração que existe e não se lê ⇒ o erro dela.
+ */
+export function modoDoCiclo(repo, ciclo) {
+  // A declaração mora na raiz da árvore: `--repo` numa subpasta lê a mesma. Declaração que não se lê
+  // lança, como em todo verbo que a lê: cair calado no modo com ramo esconderia o `semRamo` declarado.
+  const r = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd: repo, encoding: "utf8" });
+  const raiz = r.status === 0 && r.stdout.trim() ? r.stdout.trim() : repo;
+  if (!vega.existe(raiz) && !existsSync(path.join(raiz, ARQUIVO))) return Object.freeze({ semRamo: false, principal: null });
+  const decl = lerAdaptador(raiz);
+  const achado = (decl.semRamo ?? []).find((c) => c.ciclo === ciclo);
+  return Object.freeze(achado ? { semRamo: true, principal: achado.principal } : { semRamo: false, principal: null });
 }
 
 /**

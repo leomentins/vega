@@ -39,6 +39,34 @@ export function isValidCns(digits) {
   return sum % 11 === 0;
 }
 
+// Run de dígitos que é pedaço de um hash hexadecimal (chave, sha, nonce, md5). Medido em
+// 25/11/2026: uma `chave` de 24 hex do log da condução do L4 (entre aspas, 4 letras a-f) tinha 15
+// dígitos seguidos com checksum de CNS válido, e a foto do ciclo recusou subir. Só conta como hash
+// o token que cumpre as três condições juntas:
+//   - isolado: o caractere antes e o depois do token não são `[A-Za-z0-9_]` (o `d` de `id`, o `e`
+//     de `paciente` não estendem o token);
+//   - comprimento de hash conhecido: 20, 24, 32, 40 ou 64;
+//   - ao menos 4 letras a-f.
+// O run pode abrir ou fechar o token: na chave medida, os 15 dígitos fecham os 24 hex.
+// Risco aceito (revisão silent-failure-hunter e security-reviewer do hotfix): um CPF/CNS embutido
+// de propósito num token isolado com essa forma (um UUID sem hífen de 32 hex, por exemplo) passa.
+// Descuido não produz essa forma; quem quer esconder o dado tem caminhos mais simples que nenhum
+// detector de texto cobre.
+const HEX = /[0-9a-fA-F]/;
+const PALAVRA = /[A-Za-z0-9_]/;
+const TAMANHOS_DE_HASH = new Set([20, 24, 32, 40, 64]);
+export function dentroDeHashHex(linha, inicio, tamanho) {
+  let a = inicio;
+  let b = inicio + tamanho;
+  while (a > 0 && HEX.test(linha[a - 1])) a--;
+  while (b < linha.length && HEX.test(linha[b])) b++;
+  if (a > 0 && PALAVRA.test(linha[a - 1])) return false;
+  if (b < linha.length && PALAVRA.test(linha[b])) return false;
+  const token = linha.slice(a, b);
+  if (!TAMANHOS_DE_HASH.has(token.length)) return false;
+  return (token.match(/[a-fA-F]/g) ?? []).length >= 4;
+}
+
 // Varre texto → lista de { line, kind }. NUNCA carrega o valor casado.
 export function scanContent(text) {
   const hits = [];
@@ -57,6 +85,7 @@ export function scanContent(text) {
     //    a validação evita false-positive em timestamps de migration (14 dígitos) e IDs.
     for (const m of ln.matchAll(/(?<!\d)\d{11}(?!\d)|(?<!\d)\d{15}(?!\d)/g)) {
       const d = m[0];
+      if (dentroDeHashHex(ln, m.index, d.length)) continue;
       if (d.length === 11 && isValidCpf(d)) hits.push({ line, kind: "cpf-bare" });
       else if (d.length === 15 && isValidCns(d)) hits.push({ line, kind: "cns-bare" });
     }

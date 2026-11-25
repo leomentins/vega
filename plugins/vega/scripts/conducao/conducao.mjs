@@ -121,6 +121,8 @@
  *      task de conferência do operador por pergunta (`(conferencia-do-operador)`, T14): sem `--operador <texto
  *      do operador dizendo sim>` não grava e sai `perguntar conferencia-do-operador` (opções sim · nao)
  *   registrar-conferencia T<k> --manual --sim <texto> --publicacao feita|nao-se-aplica
+ *   registrar-conferencia T<k> --fora <sha> --verificacao verde|vencida|declarada-pos-merge --publicacao nao-se-aplica|feita [--sim <texto>] [--sessao <id>]
+ *     (ciclo sem ramo: a task feita fora da condução, que o proximo emite como reconhecer-feita)
  *   registrar-conferencia T<k> --condutora --verificacao verde|declarada-pos-merge --publicacao feita|nao-se-aplica --sessao <id da condutora>
  *      task de estação condutora feita por quem conduz; `--maestra` é o nome antigo da flag, aceito igual (D-VEGA26-21)
  *   registrar-conferencia T<k> --rodada nao|needs-rework [--operador <texto>] [--sessao <id>]
@@ -516,7 +518,7 @@ export function mudancasDeAlcance(de, para) {
 // `verificacao` e `posMerge` entram porque o `conferir` os lê do plano congelado: trocá-los sem
 // mudar a lista deixava a condução sob o plano velho (percalço 1 da F0 do L4, hotfix
 // conducao-niveis-e-replano).
-const CAMPOS_DO_PLANO = ["fase", "deps", "classe", "outputs", "publicacao", "estacao", "verificacao", "posMerge"];
+const CAMPOS_DO_PLANO = ["fase", "deps", "classe", "outputs", "publicacao", "estacao", "verificacao", "posMerge", "empurraNoMeio", "verificacaoVence"];
 
 /**
  * Tasks cujo plano parseado mudou entre dois planos: as que nasceram, sumiram
@@ -704,7 +706,9 @@ export function empurrarRamo({ repo, ciclo, nonce: n, ...opcoes }) {
   const p = proximo({ repo, ciclo });
   if (p.acao !== "empurrar-ramo" || p.nonce !== n)
     throw new ErroPlano("empurrar-recusado", `o proximo devolve ${p.acao}${p.motivo ? ` ${p.motivo}` : ""} (nonce ${p.nonce}), não empurrar-ramo ${n}`);
-  return { ...gitConducao.empurrarRamo({ repo, ciclo, head: p.head, ...opcoes }), fase: p.fase, nonce: n };
+  // Ciclo sem ramo: o principal sobe sem proposta (o `semRamo` da declaração é a exceção declarada).
+  const semProposta = adaptador.modoDoCiclo(repo, ciclo).semRamo ? { temProposta: false } : {};
+  return { ...gitConducao.empurrarRamo({ repo, ciclo, head: p.head, ...semProposta, ...opcoes }), fase: p.fase, nonce: n };
 }
 
 /** Raiz do plugin que carrega a skill e os verbos da condução (`<raiz>/scripts/conducao/`). */
@@ -822,7 +826,7 @@ export function resumoDaPassagem(repo, ciclo, marcas, { lerPosse = gitConducao.l
   if (aberta && !anexado && aberta.ramo) {
     const ref = `refs/heads/${aberta.ramo}`;
     if (tentarGit(repo, ["rev-parse", "--verify", "-q", ref]).status === 0)
-      confirmadaNoRamo = lerMarcas(repo, ref).some((m) => m.tipo === "confirmada" && m.confirma === aberta.sha);
+      confirmadaNoRamo = lerMarcas(repo, ref, ciclo).some((m) => m.tipo === "confirmada" && m.confirma === aberta.sha);
   }
   // A árvore da anterior só importa a quem tem o ramo: a herdeira, para a confirmação e o desmonte.
   const sha = aberta ? (anexado ? aberta.sha : null) : posse?.estado === "dona" ? ultima.confirma : null;
@@ -875,6 +879,13 @@ export function textoDaHerdeira({ ciclo, fase, sessao, nota, trazer, niveis: arr
 export function ramoDoCiclo(repo, ciclo) {
   const r = tentarGit(repo, ["for-each-ref", "--format=%(refname:short)", "refs/heads/"]);
   if (r.status !== 0) throw new ErroPlano("ramo-ilegivel", `as referências de ${repo} não se leram: ${(r.erro || "sem saída").split(String.fromCharCode(10))[0]}`);
+  // Ciclo sem ramo (declarado em `semRamo`): o ramo do ciclo é o principal, e ciclo-<id> não conta.
+  const modo = adaptador.modoDoCiclo(raizDaArvore(repo), ciclo);
+  if (modo.semRamo) {
+    const tem = (r.saida ?? "").split("\n").some((x) => x.trim() === modo.principal);
+    if (!tem) throw new ErroPlano("ramo-principal-ausente", `${ciclo} é conduzido sem ramo, no ${modo.principal}, e ${repo} não tem refs/heads/${modo.principal}`);
+    return modo.principal;
+  }
   const achados = (r.saida ?? "").split("\n").map((x) => x.trim()).filter((x) => x && ehRamoDoCiclo(x, ciclo));
   if (achados.length !== 1)
     throw new ErroPlano(achados.length ? "ramo-do-ciclo-ambiguo" : "ramo-do-ciclo-ausente", `${achados.length} ramo(s) ciclo-${ciclo} em ${repo}${achados.length ? `: ${achados.join(", ")}` : ""} — passe --repo <árvore do ciclo>`);
@@ -888,7 +899,7 @@ export function ramoDoCiclo(repo, ciclo) {
  * `--linhagem` segue aceito e não muda nada.
  */
 export function lerNiveis({ repo, ciclo }) {
-  const lido = niveisDasMarcas(lerMarcas(repo));
+  const lido = niveisDasMarcas(lerMarcas(repo, "HEAD", ciclo));
   return { acao: "niveis", ciclo, niveis: lido.niveis, origem: lido.origem, sha: lido.sha };
 }
 
@@ -964,12 +975,12 @@ export function maestra({ repo, ciclo, sessao, linhagem, contexto, nonce: n = nu
         nome: criar.nome ?? null,
         detalhe: `o pedido ${n} foi reservado por uma maestra e não tem atendimento: procure por list_sessions a sessão ${criar.nome ?? "da herdeira"}; achada, maestra-atendeu --nonce ${n} --sessao-criada <id>; não achada, o operador decide`,
       });
-    marcas = lerMarcas(repo, lido.base);
+    marcas = lerMarcas(repo, lido.base, ciclo);
   } else {
     const ramo = ramoDoCiclo(repo, ciclo);
     const ref = `refs/heads/${ramo}`;
     head = git(repo, ["rev-parse", ref]).trim();
-    marcas = lerMarcas(repo, ref);
+    marcas = lerMarcas(repo, ref, ciclo);
     // O ramo de planejamento (`ciclo-<id>-plano`, D11b do L4) ainda não tem plano a ler:
     // a primeira condutora dele é a de planejamento, que roda as etapas (planejar.md §3).
     const doPlano = ramo === ramoDePlanejamento(ciclo);
@@ -1004,7 +1015,13 @@ export function maestra({ repo, ciclo, sessao, linhagem, contexto, nonce: n = nu
         sessao: null,
         primeira: true,
         autorizada: alvo.situacao === "fase-aberta",
-        adotar: { slug, migracao: Boolean(reservas?.banda), lane: Boolean(reservas?.lane), conferirReservas: reservas === null },
+        adotar: {
+          slug,
+          migracao: Boolean(reservas?.banda),
+          lane: Boolean(reservas?.lane),
+          conferirReservas: reservas === null,
+          ...(adaptador.modoDoCiclo(repo, ciclo).semRamo ? { principal: ramo } : {}),
+        },
       }),
     };
     ramoDaPrimeira = ramo;
@@ -1156,7 +1173,7 @@ function comAEntradaDoVerbo(acao, arranjo = 2) {
  */
 function acaoConferida({ repo, ciclo, entrada, tipo, nonce: n, verbo }) {
   if (!/^[0-9a-f]{16}$/.test(n ?? "")) throw new ErroPlano("uso", `${verbo} exige --nonce, veio ${JSON.stringify(n ?? null)}`);
-  const campo = campoDoVerbo(verbo, niveisDasMarcas(lerMarcas(repo)).niveis ?? 2);
+  const campo = campoDoVerbo(verbo, niveisDasMarcas(lerMarcas(repo, "HEAD", ciclo)).niveis ?? 2);
   const doCampo = campo ? ` (o campo ${campo} muda a ação)` : "";
   if (entrada == null || typeof entrada !== "object")
     throw new ErroPlano("sem-entrada", `${verbo} exige --entrada, a mesma do proximo que emitiu ${tipo}: o verbo refaz o proximo com ela${doCampo}`);
@@ -1194,7 +1211,7 @@ export function trazerRamo({ repo, ciclo, ramo, passagem, tentativa, nonce: n })
   const ref = `refs/heads/${ramo}`;
   const ponta = tentarGit(repo, ["rev-parse", "--verify", "-q", ref]).saida;
   if (ponta !== passagem) throw new ErroPlano("ponta-diferente", `a ponta de ${ramo} é ${ponta ? ponta.slice(0, 8) : "(ramo ausente)"}, não a passagem ${passagem.slice(0, 8)}`);
-  const aberta = gitConducao.passagemAberta(lerMarcas(repo, ref));
+  const aberta = gitConducao.passagemAberta(lerMarcas(repo, ref, ciclo));
   if (aberta?.sha !== passagem) throw new ErroPlano("sem-passagem", `a ponta de ${ramo} não é uma passagem aberta de ${ciclo}`);
   const sw = tentarGit(repo, ["switch", "--quiet", ramo]);
   if (sw.status !== 0) throw new ErroPlano("ramo-preso", `o ramo ${ramo} não abriu aqui (${sw.erro}) — a anterior ainda o tem anexado?`);
@@ -1326,14 +1343,18 @@ function textoDoPlanejamento(ciclo, verbos) {
  * `adotar` as relê, não reserva outras), depois a posse ali e as reservas
  * atrás dela. O lock da árvore é de cada árvore: nada passa da maestra.
  */
-export function passosDeAdotar(ciclo, { slug = null, migracao = false, lane = false, conferirReservas = false } = {}) {
+export function passosDeAdotar(ciclo, { slug = null, migracao = false, lane = false, conferirReservas = false, principal = null } = {}) {
   const flags = [slug ? ` --slug ${slug}` : "", migracao ? " --migracao" : "", lane ? " --lane" : ""].join("");
+  // Ciclo sem ramo (`semRamo`): não há ramo a adotar; a árvore abre o principal, onde o ciclo é conduzido.
+  const abrir = principal
+    ? `a. git switch ${principal} — ${ciclo} é conduzido sem ramo, no ${principal}, e o ${principal} abre aqui; já aberto em outra árvore (a maestra o soltou, ou outra árvore o tem): PARADA ramo-preso.`
+    : `a. arvore.mjs adotar --ciclo ${ciclo}${flags} — abre o ramo do ciclo aqui${migracao || lane ? "; a banda e a lane do ciclo voltam as mesmas" : ""}. Ramo preso em outra árvore: PARADA ramo-preso.`;
   return [
     `Antes do pré-voo, na <árvore> (cwd), nesta ordem, pelos verbos de árvore e de posse que a página do projeto nomeia com o caminho (campo pagina da declaração); saída ≠ 0 em qualquer passo ⇒ PARADA <motivo> à maestra e parar:`,
     ...(conferirReservas
       ? [`Antes do a: estado.mjs lane ler --eixo migration e --eixo substrato; o ciclo ${ciclo} com banda ⇒ --migracao no adotar, com lane ⇒ --lane (o adotar relê a reserva do ciclo, não cria outra).`]
       : []),
-    `a. arvore.mjs adotar --ciclo ${ciclo}${flags} — abre o ramo do ciclo aqui${migracao || lane ? "; a banda e a lane do ciclo voltam as mesmas" : ""}. Ramo preso em outra árvore: PARADA ramo-preso.`,
+    abrir,
     `b. troca.mjs tomar-posse --ciclo ${ciclo} — a posse do ciclo nesta árvore (exit 4 = posse ocupada por outra árvore: PARADA posse-ocupada, nunca --forcar).`,
     ...(migracao || lane ? [`c. estado.mjs lane transferir --ciclo ${ciclo} — as reservas seguem a posse até esta árvore.`] : []),
   ];
@@ -1424,13 +1445,13 @@ export function encerrarSessao({ repo, ciclo, fase, nonce: n }) {
       copia: { copia: remota.copia, empurrada: false },
       detalhe: `a sessão já estava encerrada: o marcador ${remota.sha.slice(0, 8)} com o nonce ${n} está na cópia remota; nada gravado nem empurrado, e o ramo local não recebeu o marcador (trazer a cópia para cá antes do proximo)`,
     };
-  const ja = lerMarcas(repo).find((m) => m.tipo === "encerrada" && m.fase === fase);
+  const ja = lerMarcas(repo, "HEAD", ciclo).find((m) => m.tipo === "encerrada" && m.fase === fase);
   // A marca passa pela cerca da posse (VEGA-37 T15); a cópia, no `comCopia`, também.
   if (!ja) gitConducao.exigirPosse({ repo, ciclo });
   if (!ja)
     // `Conducao-Depois: passar` (VEGA-37 T16): a fase seguinte nasce pela ordem da troca. Marca antiga, sem o
     // trailer, segue lida como antes — a sessão seguinte já criada autoriza a fase.
-    git(repo, ["commit", "-q", "--allow-empty", "-m", `Conducao: ${fase} sessao encerrada`, "-m", `Conducao-Encerrada: ${fase}\nConducao-Nonce: ${n}${fase === "ciclo" ? "" : "\nConducao-Depois: passar"}`]);
+    git(repo, ["commit", "-q", "--allow-empty", "-m", `Conducao: ${fase} sessao encerrada`, "-m", `Conducao-Encerrada: ${fase}\nConducao-Nonce: ${n}${fase === "ciclo" ? "" : "\nConducao-Depois: passar"}${Object.entries(gitConducao.trailerDoCiclo(repo, ciclo)).map(([k, v]) => `\n${k}: ${v}`).join("")}`]);
   const sha = ja?.sha ?? git(repo, ["rev-parse", "HEAD"]).trim();
   return gitConducao.comCopia(repo, ciclo, { acao: "encerrada", ciclo, fase, nonce: n, sha, jaEstava: !!ja });
 }
@@ -1476,6 +1497,22 @@ function encerradaNaCopiaRemota(repo, ciclo, fase, n) {
 /** Ramo do ciclo, com ou sem slug — a mesma regra do `adotar` (VEGA-26 T7). */
 const ehRamoDoCiclo = (ramo, ciclo) => ramo === `ciclo-${ciclo}` || ramo.startsWith(`ciclo-${ciclo}-`);
 
+/** A raiz da árvore que contém `de` (a declaração mora nela); sem git, o próprio `de`. */
+function raizDaArvore(de) {
+  const r = tentarGit(de, ["rev-parse", "--show-toplevel"]);
+  return r.status === 0 && r.saida ? r.saida.trim() : de;
+}
+
+/**
+ * O ramo que a árvore do ciclo tem aberto: `ciclo-<id>[-<slug>]`, ou, no ciclo declarado sem
+ * ramo (`semRamo`), o ramo principal dele — e aí ciclo-<id> não conta.
+ */
+export function ramoAceitoDoCiclo(repo, ciclo, ramo) {
+  if (!ramo) return false;
+  const modo = adaptador.modoDoCiclo(raizDaArvore(repo), ciclo);
+  return modo.semRamo ? ramo === modo.principal : ehRamoDoCiclo(ramo, ciclo);
+}
+
 /**
  * A árvore que tem o ramo do ciclo aberto, por `git worktree list --porcelain`
  * a partir de `de` (VEGA-26 T10). Só git: o núcleo da condução não importa
@@ -1493,11 +1530,14 @@ export function arvoreDoCiclo(ciclo, de = process.cwd()) {
     // `prunable`: a pasta sumiu e o registro ficou; não é árvore de pé.
     else if (blocos.length && linha.startsWith("prunable")) blocos.at(-1).morta = true;
   }
-  const achadas = blocos.filter((b) => b.ramo && !b.morta && ehRamoDoCiclo(b.ramo, ciclo));
+  const modo = adaptador.modoDoCiclo(raizDaArvore(de), ciclo);
+  const achadas = blocos.filter((b) => b.ramo && !b.morta && ramoAceitoDoCiclo(de, ciclo, b.ramo));
   if (!achadas.length)
     throw new ErroPlano(
       "arvore-do-ciclo-ausente",
-      `nenhuma árvore tem o ramo ciclo-${ciclo} aberto — adote a árvore da sessão para o ciclo pelo verbo do projeto (arvore.mjs adotar --ciclo ${ciclo}) ou passe --repo <árvore>`,
+      modo.semRamo
+        ? `nenhuma árvore tem o ${modo.principal} aberto, e ${ciclo} é conduzido sem ramo, nele — abra a árvore no ${modo.principal} ou passe --repo <árvore>`
+        : `nenhuma árvore tem o ramo ciclo-${ciclo} aberto — adote a árvore da sessão para o ciclo pelo verbo do projeto (arvore.mjs adotar --ciclo ${ciclo}) ou passe --repo <árvore>`,
     );
   if (achadas.length > 1)
     throw new ErroPlano(
@@ -1771,7 +1811,7 @@ export function proximo({ repo, ciclo, entrada = {}, entradaErro = null, reinici
       problemas,
       detalhe: `a entrada do proximo não se lê: ${problemas.join("; ")} — nada foi decidido; refazer a entrada (SKILL §2 passo 1)`,
     });
-  const marcas = lerMarcas(repo);
+  const marcas = lerMarcas(repo, "HEAD", ciclo);
   const autorizacoes = marcas.filter((m) => m.tipo === "autorizada");
   let noHead;
   try {
@@ -1871,6 +1911,15 @@ export function proximo({ repo, ciclo, entrada = {}, entradaErro = null, reinici
     });
   }
   const decl = adaptador.lerAdaptador(repo);
+  // Ciclo sem ramo (`semRamo`): sem proposta, sem CI da proposta — o fechamento da fase empurra o principal e segue.
+  const modo = adaptador.modoDoCiclo(repo, ciclo);
+  const temCi = modo.semRamo ? false : decl.ci;
+  // Ciclo sem ramo: a task feita fora da condução, com o commit dela já no principal, sai como feita
+  // antes de o laço a abrir — só com o plano do HEAD igual ao congelado (plano mudado pergunta antes).
+  if (modo.semRamo && !diffPlano) {
+    const fora = feitaForaDaConducao({ repo, ciclo, head, plano: congelado.plano, marcas, estado, conferencia: decl.conferencia });
+    if (fora) return fora;
+  }
   // O arranjo gravado (`conducao.mjs niveis`); sem a marca, 2 (legado). Em 3, a inscrição na proposta é da maestra (T37).
   const arranjo = niveisDasMarcas(marcas).niveis ?? 2;
   const decidida = decidir({
@@ -1900,7 +1949,7 @@ export function proximo({ repo, ciclo, entrada = {}, entradaErro = null, reinici
     // Casos de conferência do operador que o adaptador declara (T14) e se o
     // projeto tem CI da proposta (T15, 5-a).
     conferencia: decl.conferencia,
-    temCi: decl.ci,
+    temCi,
     // Saídas geradas declaradas não serializam tasks (HN-29 T23).
     geradas: saidasGeradas(repo).map((s) => s.caminho),
     // O mapa tier → modelo: a filha nasce com o do tier da task, senão o da fase.
@@ -1911,11 +1960,53 @@ export function proximo({ repo, ciclo, entrada = {}, entradaErro = null, reinici
     consentimentos: lerConsentimentos(repo, { ciclo }),
   });
   // Os passos do ramo no fechamento (T9) vêm depois da ordem das regras, sobre a ação que ela decidiu.
-  const comRamo = comAEntradaDoVerbo(comPassosDoRamo(decidida, { ramo: gitConducao.ramoNoOrigin(repo), temCi: decl.ci !== false, entrada, niveis: arranjo }), arranjo);
+  const comRamo = comAEntradaDoVerbo(comPassosDoRamo(decidida, { ramo: gitConducao.ramoNoOrigin(repo), temCi: temCi !== false, entrada, niveis: arranjo }), arranjo);
   // Os níveis por último: em 3, quem cria a herdeira é a maestra (pedir-herdeira); em 2, a conta da cadeia.
   const comNiveis = niveis.comNiveis(comRamo, { niveis: arranjo, entrada, perguntar: pergunta.perguntar });
   // A aposentadoria depois de tudo (VEGA-20 T19): a parada que sobrou, com a instância da task do plano.
   return comAposentadoria(comNiveis, { repo, plano: congelado.plano, historico, decl });
+}
+
+/**
+ * Ciclo sem ramo (hotfix vega-conducao-sem-ramo): a primeira task do plano, na ordem dele, sem
+ * marca nenhuma da condução, sem tentativa e com commit no subject dela no HEAD sai como
+ * `reconhecer-feita` — a condutora roda a Verificação (`verificacao: rodar`), salvo quando a task
+ * declara que ela vence (`vencida`) ou é pós-merge, e grava pelo `registrar-conferencia --fora`.
+ * Nenhuma ⇒ `null`, e o laço segue.
+ */
+export function feitaForaDaConducao({ repo, ciclo, head, plano, marcas, estado, conferencia = [] }) {
+  const comMarca = new Set(marcas.filter((m) => m.task).map((m) => m.task));
+  // Só a fase autorizada agora: a de depois espera o sim dela; a conferência do operador e as rodadas seguem pelo laço.
+  const fase = marcas.findLast((m) => m.tipo === "autorizada")?.fase ?? null;
+  let commits = null;
+  for (const t of plano.tasks) {
+    if (t.fase !== fase || t.rodadas || casoDeConferencia(t, conferencia)) continue;
+    if (estado.feitas.has(t.id) || comMarca.has(t.id) || (estado.maxTent.get(t.id) ?? 0) > 0 || estado.emVoo.has(t.id) || estado.trazidas.has(t.id)) continue;
+    commits ??= gitConducao.commitsDesdeOPlano(repo, ciclo);
+    const achados = gitConducao.commitsDaTask(repo, ciclo, t, commits);
+    if (!achados.length) continue;
+    const verificacao = t.verificacaoVence ? "vencida" : t.posMerge ? "declarada-pos-merge" : "rodar";
+    const sha = achados[0].sha;
+    const registrar = `registrar-conferencia ${t.id} --fora ${sha} --verificacao ${verificacao === "rodar" ? "verde" : verificacao} --publicacao ${t.publicacao.length ? "<feita|nao-se-aplica> --sim <texto do operador>" : "nao-se-aplica"}`;
+    return {
+      acao: "reconhecer-feita",
+      nonce: nonce(ciclo, `fora:${t.id}`, 0, head),
+      ciclo,
+      head,
+      fase: t.fase,
+      task: t.id,
+      sha,
+      subject: achados[0].subject,
+      commits: achados.length,
+      verificacao,
+      passos: verificacao === "rodar" ? [`conferir ${t.id}`, registrar] : [registrar],
+      detalhe:
+        verificacao === "rodar"
+          ? `${t.id} foi feita fora da condução (${sha.slice(0, 8)} no principal): rodar a Verificação como o conferir a devolve e, verde, gravar pelo registrar-conferencia --fora; vermelha, ao operador`
+          : `${t.id} foi feita fora da condução (${sha.slice(0, 8)} no principal) e ${verificacao === "vencida" ? "declara que a Verificação vence" : "declara a Verificação pós-merge"}: gravar pelo registrar-conferencia --fora, sem rodá-la`,
+    };
+  }
+  return null;
 }
 
 /**
@@ -1979,7 +2070,7 @@ export function comAposentadoria(saida, { repo, plano, historico = undefined, de
     if (c.veredito !== "aposentado") return saida;
     // Uma aposentadoria por task e motivo: o nonce muda com o HEAD (o próprio commit a muda), e a
     // resposta que abre tentativa nova (o não da conferência) se reaplicaria a cada rodada.
-    if (lerAposentadas(repo).some((x) => x.task === saida.task && x.motivo === saida.motivo))
+    if (lerAposentadas(repo, "HEAD", saida.ciclo ?? null).some((x) => x.task === saida.task && x.motivo === saida.motivo))
       return { ...saida, aposentadaAplicada: true, detalhe: `a resposta constante de ${saida.motivo} já foi aplicada nesta task e a parada voltou: decide o operador` };
     const decisoes = (h?.porMotivo?.get(saida.motivo)?.entradas ?? []).map((e) => e.decisao);
     const a = acaoDaAposentadoria(saida, c, { decisoes });
@@ -2021,8 +2112,8 @@ function historicoDaParada(repo, motivo) {
  * Os commits da aposentadoria do ramo (`aposentar --nonce`, marca `aposentada` de `marcas.mjs`),
  * do mais velho ao mais novo: `{ sha, task, motivo, nonce, resposta, iguais, tentativa }`.
  */
-export function lerAposentadas(repo, ref = "HEAD") {
-  return lerMarcas(repo, ref)
+export function lerAposentadas(repo, ref = "HEAD", ciclo = null) {
+  return lerMarcas(repo, ref, ciclo)
     .filter((m) => m.tipo === "aposentada")
     .map(({ sha, task, motivo, nonce, resposta, iguais, tentativa }) => ({ sha, task, motivo, nonce, resposta, iguais, tentativa }));
 }
@@ -2048,7 +2139,7 @@ function voltasEmTodoProximo(repo, ciclo) {
  * `aposentada` e `rodada`, e os que trazem `This reverts commit` no corpo.
  * `{ sha, subject, corpo, quando }`, `quando` = a data do commit.
  */
-function commitsDoDesfazer(repo, ref = "HEAD") {
+function commitsDoDesfazer(repo, ref = "HEAD", ciclo = null) {
   const bruto = git(repo, [
     "log",
     "--reverse",
@@ -2066,7 +2157,9 @@ function commitsDoDesfazer(repo, ref = "HEAD") {
     .map((r) => {
       const [sha, subject, quando, corpo = ""] = r.split("\x1f");
       return { sha, subject, quando, corpo };
-    });
+    })
+    // A marca de outro ciclo (ciclo sem ramo, no principal) não volta neste.
+    .filter((c) => !gitConducao.deOutroCiclo(c.corpo, ciclo));
 }
 
 /**
@@ -2076,9 +2169,9 @@ function commitsDoDesfazer(repo, ref = "HEAD") {
  * (a chave do log é o conteúdo). Devolve as voltas; erro sobe para quem chama.
  */
 export function registrarVoltasDoRamo(repo, ciclo, decl = null) {
-  const aposentadas = lerAposentadas(repo);
+  const aposentadas = lerAposentadas(repo, "HEAD", ciclo);
   if (!aposentadas.length) return [];
-  const voltas = voltasDoRamo({ aposentadas, commits: commitsDoDesfazer(repo), textoDaCalibracao: TEXTO_DA_CALIBRACAO });
+  const voltas = voltasDoRamo({ aposentadas, commits: commitsDoDesfazer(repo, "HEAD", ciclo), textoDaCalibracao: TEXTO_DA_CALIBRACAO });
   if (!voltas.length) return [];
   const pasta = (decl ?? adaptador.lerAdaptador(repo)).pastaDoLog;
   for (const ev of eventosDaVolta({ ciclo, voltas })) {
@@ -2128,7 +2221,7 @@ export function aposentar({ repo, ciclo, nonce: n, entrada = {}, historico = und
   if (!RE.aposentada.test(subject)) throw new ErroPlano("aposentadoria-recusada", `o sujeito ${JSON.stringify(subject)} não é a marca aposentada`);
   gitConducao.exigirPosse({ repo, ciclo });
   const corpo = [`Seguiu sozinha, pela calibração: ${p.motivo} com a resposta ${p.resposta} (${p.n} iguais, ${p.sequencias} sequências).`];
-  const trailers = [`${TRAILER_DA_APOSENTADA}: ${p.motivo}`, `Conducao-Nonce: ${n}`, `Conducao-Resposta: ${p.resposta}`, `Conducao-Iguais: ${p.n}`, `Conducao-Task: ${p.task}`, ...(Number.isInteger(p.tentativa) ? [`Conducao-Tentativa: ${p.tentativa}`] : [])];
+  const trailers = [`${TRAILER_DA_APOSENTADA}: ${p.motivo}`, `Conducao-Nonce: ${n}`, `Conducao-Resposta: ${p.resposta}`, `Conducao-Iguais: ${p.n}`, `Conducao-Task: ${p.task}`, ...(Number.isInteger(p.tentativa) ? [`Conducao-Tentativa: ${p.tentativa}`] : []), ...Object.entries(gitConducao.trailerDoCiclo(repo, ciclo)).map(([k, v]) => `${k}: ${v}`)];
   git(repo, ["commit", "-q", "--allow-empty", "-m", subject, "-m", corpo.join("\n"), "-m", trailers.join("\n")]);
   const sha = git(repo, ["rev-parse", "HEAD"]).trim();
   return gitConducao.comCopia(repo, ciclo, {
@@ -2343,7 +2436,7 @@ function noPath(nome, repo, PATH = process.env.PATH ?? "") {
  * Verificação crua nunca sai, para não ser trocada à mão em silêncio.
  */
 export function conferir({ repo, ciclo, task }) {
-  const autorizacoes = lerMarcas(repo).filter((m) => m.tipo === "autorizada");
+  const autorizacoes = lerMarcas(repo, "HEAD", ciclo).filter((m) => m.tipo === "autorizada");
   const ultima = autorizacoes.at(-1);
   if (!ultima) throw new ErroPlano("sem-autorizacao", `nenhuma fase de ${ciclo} autorizada — conferir lê só plano congelado`);
   const { blob, plano } = lerPlanoCongelado(repo, ciclo, ultima);
@@ -2486,7 +2579,7 @@ function ghJson(repo, args) {
  * sozinho não é veredito; quem lê o run por dentro é o `ci` do laço. Projeto
  * sem CI (`ci: false`, o mesmo modo da T9) sai com o pulo. Nunca lança.
  */
-export function ciDaProposta({ repo, ramo }) {
+export function ciDaProposta({ repo, ramo, ciclo = null }) {
   let temCi = true;
   try {
     temCi = adaptador.lerAdaptador(repo).ci !== false;
@@ -2494,6 +2587,8 @@ export function ciDaProposta({ repo, ramo }) {
     // declaração ilegível: segue como projeto com CI, e o gh diz o resto.
   }
   if (!temCi) return { pulo: "projeto-sem-ci" };
+  // Ciclo sem ramo (`semRamo`): não há proposta de onde ler CI.
+  if (ciclo && adaptador.modoDoCiclo(repo, ciclo).semRamo) return { pulo: "ciclo-sem-ramo" };
   if (!ramo) return { erro: "HEAD destacado: sem ramo, sem proposta" };
   const pr = ghJson(repo, ["pr", "view", ramo, "--json", "number,state,headRefOid,mergeStateStatus"]);
   if (pr.erro) return { erro: `gh pr view ${ramo}: ${pr.erro}` };
@@ -2524,7 +2619,7 @@ export function retomar({ repo, ciclo, lerCi = ciDaProposta }) {
   } catch {
     ramo = null;
   }
-  const marcas = lerMarcas(repo);
+  const marcas = lerMarcas(repo, "HEAD", ciclo);
   const locais = lerRefsLocais(repo, ciclo);
   const trazidas = gitConducao.lerTrazidas(repo, ciclo);
   const estado = estadoDasTasks(marcas, locais, trazidas);
@@ -2592,7 +2687,7 @@ export function retomar({ repo, ciclo, lerCi = ciDaProposta }) {
     // Relato ilegível nunca vira null calado: cada um nomeia a trazida ou a marca de onde veio.
     avisosDoRelato: avisosDoRelato([...estado.trazidas.values()], relatosConferidos(marcas)),
     // VEGA-20 T19: as paradas que seguiram sozinhas pela calibração, com a linha do relato.
-    aposentadas: lerAposentadas(repo).map((a) => ({ ...a, relato: linhaDaAposentada(a) })),
+    aposentadas: lerAposentadas(repo, "HEAD", ciclo).map((a) => ({ ...a, relato: linhaDaAposentada(a) })),
     falhas: Object.fromEntries([...estado.falhas].sort(([a], [b]) => porNum(a, b))),
     falhasAmbiente: Object.fromEntries([...estado.falhasAmbiente].sort(([a], [b]) => porNum(a, b))),
     falhasPergunta: Object.fromEntries([...estado.falhasPergunta].sort(([a], [b]) => porNum(a, b))),
@@ -2728,7 +2823,7 @@ export function auditar({ repo, nota = null, ciclo: cicloPedido = null, ref: ref
   const ponta = revParse(repo, ref);
   if (!ponta) throw new ErroPlano("ramo-ausente", `${ref} não existe em ${repo}`);
 
-  const marcas = lerMarcas(repo, ref);
+  const marcas = lerMarcas(repo, ref, ciclo);
   const autorizacoes = marcas.filter((m) => m.tipo === "autorizada");
   const conferidas = marcas.filter((m) => m.tipo === "conferida");
   const encerramentos = [...new Set(marcas.filter((m) => m.tipo === "encerrada").map((m) => m.fase))];
@@ -3168,13 +3263,18 @@ function verboDeGit(verbo, resto, { repo, ciclo }) {
         sim: flag(resto, "--sim") ?? null,
         sessao: flag(resto, "--sessao") ?? null,
         operador: flag(resto, "--operador") ?? null,
+        fora: flag(resto, "--fora") ?? null,
       });
     case "recusar-publicacao":
       return gitConducao.recusarPublicacao({ repo, ciclo, task: exigirTask(), motivo: flag(resto, "--motivo") });
     case "reverter-trazido":
       return gitConducao.reverterTrazido({ repo, ciclo, task: exigirTask(), motivo: flag(resto, "--motivo") });
     case "empurrar-copia":
-      return { acao: "copia", ciclo, ...gitConducao.empurrarCopia({ repo, ciclo }) };
+    {
+      const c = gitConducao.empurrarCopia({ repo, ciclo });
+      const aviso = gitConducao.avisoDoPrincipal(c.principal);
+      return { acao: "copia", ciclo, ...c, ...(aviso ? { avisoOperador: [aviso] } : {}) };
+    }
     case "esperar-filha": {
       const numero = (nome) => {
         if (!resto.includes(nome)) return undefined;
@@ -3218,7 +3318,7 @@ function verboDeGit(verbo, resto, { repo, ciclo }) {
       const filhas = Array.isArray(entrada.valor.filhas) ? entrada.valor.filhas : [];
       // Caixa normalizada como no `proximo` (`estadoDaFilha`): `archived` do get_session é arquivada.
       const vivas = filhas.filter((f) => estadoDaFilha(f.estado) !== "ARCHIVED").map((f) => f.sessao ?? f.task ?? "?");
-      const estado = estadoDasTasks(lerMarcas(repo), lerRefsLocais(repo, ciclo), gitConducao.lerTrazidas(repo, ciclo));
+      const estado = estadoDasTasks(lerMarcas(repo, "HEAD", ciclo), lerRefsLocais(repo, ciclo), gitConducao.lerTrazidas(repo, ciclo));
       const r = gitConducao.passar({ repo, ciclo, fase, corpo, emVoo: [...estado.emVoo.values()], trazidas: [...estado.trazidas.values()], vivas });
       // Ao entrar em passagem a anterior desanexa o ramo e fica com a posse (VEGA-37 T16): a herdeira o traz.
       // Falhou o switch ⇒ o proximo emite `desanexar-ramo`; a passagem já está gravada.
@@ -3261,7 +3361,7 @@ function verboDeGit(verbo, resto, { repo, ciclo }) {
     case "desistir-da-passagem":
       return gitConducao.desistirDaPassagem({ repo, ciclo, fase: resto.find((a) => /^F\d{1,2}$/.test(a)), motivo: flag(resto, "--motivo") ?? null });
     case "limpar": {
-      const estado = estadoDasTasks(lerMarcas(repo), lerRefsLocais(repo, ciclo), gitConducao.lerTrazidas(repo, ciclo));
+      const estado = estadoDasTasks(lerMarcas(repo, "HEAD", ciclo), lerRefsLocais(repo, ciclo), gitConducao.lerTrazidas(repo, ciclo));
       return gitConducao.limpar({ repo, ciclo, emVoo: [...estado.emVoo.values()], trazidas: [...estado.trazidas.values()] });
     }
   }

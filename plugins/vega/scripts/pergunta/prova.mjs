@@ -182,7 +182,7 @@ function textoDoEventoDoHub(ev) {
  * real (`user.internal_anthropic_catchall.message`, D-VEGA19-50); a marca de sintetico em qualquer
  * das camadas reprova.
  */
-export function eventoDoHubConfere(ev, { escolhas, abertaEm }) {
+export function eventoDoHubConfere(ev, { escolhas, abertaEm, livre = null }) {
   if (!ev) return "nao-confere";
   const catchall = catchallDoHub(ev);
   const msg = mensagemDoHub(ev);
@@ -193,8 +193,66 @@ export function eventoDoHubConfere(ev, { escolhas, abertaEm }) {
   if (sintetico) return "nao-confere";
   const quando = Date.parse(ev.created_at ?? ev.timestamp ?? catchall?.created_at ?? catchall?.timestamp ?? msg?.created_at ?? "");
   if (!Number.isFinite(quando) || !(quando > Date.parse(abertaEm))) return "nao-confere";
+  // Texto livre do operador no hub (hotfix resposta-livre-maestra, 24/11/2026): `livre === true`,
+  // texto sem numero nem letra de item; `livre` string, o literal gravado. Paridade com a lib.
+  if ((!Array.isArray(escolhas) || escolhas.length === 0) && livre !== null) {
+    const texto = textoDoEventoDoHub(ev);
+    return ehTextoLivre(texto) && (livre === true || textoLivreCasa(texto, livre)) ? null : "nao-confere";
+  }
   return textoCasaEscolhas(textoDoEventoDoHub(ev), escolhas) ? null : "nao-confere";
 }
+
+/** O literal que o `responder` grava no lugar do texto livre de pergunta com dado de paciente (D-VEGA19-12). */
+export const LITERAL_LIVRE_RETIDO = "(texto livre retido: pergunta com dado de paciente)";
+
+/** O texto prova a alternativa livre de literal `livre` (sem numero e letra; espacos e caixa nao contam). Paridade com a lib. */
+export function textoLivreCasa(texto, livre) {
+  const t = String(texto ?? "");
+  if (escolhasDoTexto(t).escolhas.length > 0 || livre === LITERAL_LIVRE_RETIDO) return false;
+  const norm = (x) => String(x ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+  if (!norm(t)) return false;
+  return norm(t) === norm(livre);
+}
+
+/** O texto e alternativa livre: tem conteudo, sem numero e letra de item, e nao e a letra sozinha. Paridade com a lib. */
+export function ehTextoLivre(texto) {
+  const t = String(texto ?? "").trim();
+  if (!t || escolhasDoTexto(t).escolhas.length > 0) return false;
+  // Pergunta de volta nao e resposta; numero de item sem letra (`3`, `D3`, `3-texto`) e do item, nao livre.
+  if (/\?/.test(t) || /^\(?D?\d{1,4}(?![0-9])/i.test(t)) return false;
+  return !/^\(?[a-z]\)?\s*(?:$|[,.;:!—–-])/i.test(t);
+}
+/** A 1a linha do repasse livre: `RESPOSTA <p-…>`, nada mais nela. */
+const CABECALHO_DA_RESPOSTA_LIVRE = /^\s*RESPOSTA\s+(p-[0-9a-f]{16})\s*$/;
+
+/** A pergunta que o repasse nomeia na 1a linha nao vazia, sem escolha no texto; ou `null`. Exportado. */
+export function perguntaDoRepasseLivre(texto) {
+  const s = String(texto ?? "");
+  const primeira = s.split("\n").find((l) => l.trim() !== "") ?? "";
+  const m = CABECALHO_DA_RESPOSTA_LIVRE.exec(primeira);
+  if (!m || escolhasCitadas(s).escolhas.length > 0) return null;
+  return m[1];
+}
+
+/**
+ * O recibo `<sessao> <evento>` esta amarrado a `pergunta_id` no transcript: algum repasse livre
+ * (`RESPOSTA <p-…>` com esse `Recibo:`) nomeia esta pergunta, e nenhum nomeia outra com o mesmo
+ * recibo. Um evento e recibo de uma pergunta so (hotfix resposta-livre-maestra). Exportado.
+ */
+export function reciboAmarrado(entradas, { pergunta_id, recibo }) {
+  const alvo = String(recibo ?? "").trim().split(/\s+/).join(" ");
+  if (!alvo) return false;
+  const donas = new Set();
+  for (const x of entradas ?? []) {
+    const msg = mensagemEntreSessoes(x);
+    if (!msg) continue;
+    const pid = perguntaDoRepasseLivre(msg.texto);
+    const r = pid ? reciboDoTexto(msg.texto) : null;
+    if (r && `${r.sessao} ${r.evento}` === alvo) donas.add(pid);
+  }
+  return donas.size === 1 && donas.has(pergunta_id);
+}
+
 
 /** Le um transcript inteiro como entradas (linha torta pula). `null` se nao existe. */
 export function lerTranscript(arquivo) {
@@ -332,7 +390,7 @@ export function consertoDaOrigem({ abertura, motivo }) {
  *     `uuid` e mensagem entre sessoes daquela origem, de remetente aceito (a do recibo ou hub
  *     declarado), posterior a abertura e com as escolhas no texto.
  */
-export function conferirProva(autoria, { abertura, escolhas, lerEntradas = lerTranscript, achar = acharTranscript, sessoesDeHub = [] }) {
+export function conferirProva(autoria, { abertura, escolhas, livre = null, lerEntradas = lerTranscript, achar = acharTranscript, sessoesDeHub = [] }) {
   const m = PROVA_LIDA.exec(String(autoria?.prova ?? ""));
   if (!m || !abertura?.carimbo || !abertura?.sessao) return "prova-nao-resolve";
   const [, forma, onde, uuid] = m;
@@ -351,7 +409,9 @@ export function conferirProva(autoria, { abertura, escolhas, lerEntradas = lerTr
   const e = entradas.find((x) => x?.uuid === uuid);
   if (!e || e.sessionId !== ancora.sessao) return "prova-nao-resolve";
   if (ancora.daAutoria && !blocoMostradoAntes(entradas, { sessao: ancora.sessao, pergunta_id: abertura.pergunta_id, ate: Date.parse(e.timestamp ?? "") })) return "prova-nao-resolve";
+  const semEscolha = !Array.isArray(escolhas) || escolhas.length === 0;
   if (forma === "transcript") {
+    if (semEscolha && livre !== null) return ehMensagemHumana(e) && depois(e) && textoLivreCasa(textoHumanoDe(e), livre) ? null : "prova-nao-resolve";
     return ehMensagemHumana(e) && depois(e) && textoCasaEscolhas(textoHumanoDe(e), escolhas, { itemUnico }) ? null : "prova-nao-resolve";
   }
   if (forma === "entre-sessoes") {
@@ -366,7 +426,9 @@ export function conferirProva(autoria, { abertura, escolhas, lerEntradas = lerTr
   if (recibo.length !== 2 || recibo[0] !== onde) return "prova-nao-resolve";
   const r = resultadoDoGetEvent(e, chamadasDeGetEvent(entradas));
   if (!r || r.erro || r.chamada.sessao !== recibo[0] || r.chamada.evento !== recibo[1]) return "prova-nao-resolve";
-  return eventoDoHubConfere(r.evento, { escolhas, abertaEm: abertura.carimbo }) === null ? null : "prova-nao-resolve";
+  // O texto livre nao se amarra a pergunta pelo conteudo: amarra-se pelo repasse que a nomeia.
+  if (semEscolha && livre !== null && !reciboAmarrado(entradas, { pergunta_id: abertura.pergunta_id, recibo: autoria.recibo })) return "prova-nao-resolve";
+  return eventoDoHubConfere(r.evento, { escolhas, abertaEm: abertura.carimbo, livre: semEscolha ? livre : null }) === null ? null : "prova-nao-resolve";
 }
 
 /**
@@ -391,9 +453,11 @@ export function origemEfetiva(pergunta_id, { eventos, lerEntradas = lerTranscrip
   const doAgente = (motivo) => ({ origem: "agente", ...nulos, mandato: resposta.mandato ?? null, recibo: resposta.recibo ?? null, prova: null, motivo, autorias: autorias.length });
   if (autorias.length === 0) return doAgente("sem-autoria");
   const escolhas = escolhasDaResposta(resposta);
+  // A alternativa livre gravada pelo `responder` (sem escolha) prova pelo texto do operador.
+  const livre = escolhas.length === 0 && resposta.alternativa_livre === true ? String(resposta.resposta_literal ?? "") : null;
   const ordenadas = [...autorias].sort((a, b) => FORCA_DAS_ORIGENS.indexOf(a.origem_resposta) - FORCA_DAS_ORIGENS.indexOf(b.origem_resposta));
   for (const a of ordenadas) {
-    if (conferirProva(a, { abertura, escolhas, lerEntradas, achar, sessoesDeHub }) === null) {
+    if (conferirProva(a, { abertura, escolhas, livre, lerEntradas, achar, sessoesDeHub }) === null) {
       return {
         origem: a.origem_resposta,
         quem: a.quem ?? null,

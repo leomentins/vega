@@ -52,12 +52,22 @@ export function ehMarcadorDe(subject, task, nonce) {
  * Marcas de uma saída de `git log --format=%H%x1f%s%x1f%(trailers:only=true,unfold=true)%x1e`,
  * na ordem da saída. Sem git: o teste de tabela entra por aqui.
  */
-export function marcasDoLog(bruto) {
+/**
+ * O trailer que diz de que ciclo é a marca (hotfix vega-conducao-sem-ramo). Só o ciclo conduzido
+ * sem ramo o grava: as marcas dele moram no ramo principal, junto com as de outros ciclos, e a
+ * leitura de um ciclo descarta a marca de outro. Marca sem o trailer vale para quem a lê, como antes.
+ */
+export const TRAILER_DO_CICLO = "Conducao-Ciclo-Id";
+
+export function marcasDoLog(bruto, ciclo = null) {
   const marcas = [];
   for (const reg of bruto.split("\x1e")) {
     const [sha, subject, bloco = ""] = reg.replace(/^\n/, "").split("\x1f");
     if (!sha || !subject) continue;
     const tr = trailers(bloco);
+    // Marca de outro ciclo (o trailer diz qual): nunca é deste. Sem `ciclo` pedido, a leitura é a de antes.
+    const deQual = tr["Conducao-Ciclo-Id"];
+    if (ciclo !== null && deQual !== undefined && deQual !== ciclo) continue;
     let m;
     if ((m = RE.autorizada.exec(subject)))
       marcas.push({
@@ -130,7 +140,7 @@ export function marcasDoLog(bruto) {
  * subject de uma task NUNCA é prova de "feita" (§2.2#24): uma task tem vários
  * commits, e feita é só o commit de conferência da maestra.
  */
-export function lerMarcas(repo, ref = "HEAD") {
+export function lerMarcas(repo, ref = "HEAD", ciclo = null) {
   return marcasDoLog(
     git(repo, [
       "log",
@@ -141,6 +151,7 @@ export function lerMarcas(repo, ref = "HEAD") {
       "--format=%H%x1f%s%x1f%(trailers:only=true,unfold=true)%x1e",
       ref,
     ]),
+    ciclo,
   );
 }
 

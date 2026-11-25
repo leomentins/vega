@@ -39,6 +39,10 @@
  *   **Marcas:** <marca>, …                          — as marcas do núcleo
  *                                                     (`fechamento-de-fase`, `conferencia-do-operador`)
  *   **Independente:** sim · **Prazo:** <n> min · **Verificação pós-merge:** sim
+ *   **Empurra no meio:** sim                        — OPCIONAL, só em ciclo sem ramo: a operária empurra ao
+ *                                                     ramo principal dentro da tarefa
+ *   **Verificação vence:** sim                      — OPCIONAL, só em ciclo sem ramo: feita fora da condução,
+ *                                                     a tarefa é reconhecida sem rodar a Verificação
  *   **Commit:** <subject>                           — OPCIONAL: sem ela, o `-m "…"` do `git commit`
  *   **Tier:** <tier>                                — OPCIONAL: o tier da tarefa, acima do da fase
  *
@@ -110,7 +114,7 @@ function valor(bruto) {
 }
 
 /** As chaves de anotação que o adaptador lê; `Estacao` e `estação` são `Estação`. */
-const CHAVES = Object.freeze(["Estação", "Publicação", "Sensível", "Verificação", "Verificação pós-merge", "Marcas", "Independente", "Prazo", "Commit", "Tier", "Arquivos", "Files"]);
+const CHAVES = Object.freeze(["Estação", "Publicação", "Sensível", "Verificação", "Verificação pós-merge", "Verificação vence", "Empurra no meio", "Marcas", "Independente", "Prazo", "Commit", "Tier", "Arquivos", "Files"]);
 const semAcento = (x) => x.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
 const PELA_FORMA = new Map(CHAVES.map((c) => [semAcento(c), c]));
 function chave(campo) {
@@ -357,6 +361,9 @@ export function lerPlanoPublico(texto) {
     };
     opcional("Independente", (v) => v === "sim" && (d.independente = true));
     opcional("Verificação pós-merge", (v) => v === "sim" && (d.verificacaoPosMerge = true));
+    // Ciclo sem ramo (hotfix vega-conducao-sem-ramo): só `sim` liga; fora disso, a perguntar.
+    opcional("Empurra no meio", (v) => v === "sim" && (d.empurraNoMeio = true));
+    opcional("Verificação vence", (v) => v === "sim" && (d.verificacaoVence = true));
     opcional("Prazo", (v) => PRAZO_RE.test(v) && (d.prazoMin = Number(PRAZO_RE.exec(v)[1])));
     if (estacao === "condutora" && /\bfechamento-de-fase\b/.test(a.get("Marcas") ?? ""))
       invalidas.push({ campo: "Estação", valor: `${a.get("Estação")} (fechamento de fase roda pela filha)`, task: t.id });

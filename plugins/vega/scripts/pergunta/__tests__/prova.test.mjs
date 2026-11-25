@@ -75,7 +75,40 @@ const getEvent = (evento) => [
   { uuid: "a-1", sessionId: SESSAO, type: "assistant", timestamp: DEPOIS, message: { content: [{ type: "tool_use", id: "tu-1", name: "mcp__hub__get_event", input: { session_id: "hub-1", event_uuid: "ev-1" } }] } },
   { uuid: "u-1", sessionId: SESSAO, type: "user", timestamp: DEPOIS, message: { content: [{ type: "tool_result", tool_use_id: "tu-1", content: JSON.stringify(evento) }] } },
 ];
+const LIVRE = "uai, se só a tela for ficar fora do ar, nao precisa de replano";
+/** O repasse livre da maestra que nomeia a pergunta, com o recibo (a amarra do texto livre). */
+const repasseLivre = (pid = ID, recibo = "hub-1 ev-1") => ({ uuid: "x-1", sessionId: SESSAO, type: "user", timestamp: DEPOIS, message: { content: `<cross-session-message from-session="hub-1">RESPOSTA ${pid}\nRecibo: ${recibo}</cross-session-message>` } });
 const CASOS_DA_AUTORIA = [
+  [
+    "3 níveis: texto livre digitado no hub prova pelo literal que o responder gravou (D30 do L4)",
+    [abertura(), resposta(LIVRE, { alternativa_livre: true }), autoria({ origem_resposta: "digitado-no-hub-conferido", prova: "get_event:hub-1#u-1", recibo: "hub-1 ev-1" })],
+    [repasseLivre(), ...getEvent({ role: "user", created_at: DEPOIS, content: LIVRE })],
+    { origem: "digitado-no-hub-conferido", quem: null, mandato: null, em_nome_de: null, recibo: "hub-1 ev-1" },
+  ],
+  [
+    "3 níveis: texto livre no hub sem o repasse que nomeia a pergunta não prova",
+    [abertura(), resposta(LIVRE, { alternativa_livre: true }), autoria({ origem_resposta: "digitado-no-hub-conferido", prova: "get_event:hub-1#u-1", recibo: "hub-1 ev-1" })],
+    getEvent({ role: "user", created_at: DEPOIS, content: LIVRE }),
+    { origem: "agente", quem: null, mandato: null, em_nome_de: null, recibo: null },
+  ],
+  [
+    "3 níveis: o mesmo recibo repassado para outra pergunta não prova nenhuma das duas pela releitura",
+    [abertura(), resposta(LIVRE, { alternativa_livre: true }), autoria({ origem_resposta: "digitado-no-hub-conferido", prova: "get_event:hub-1#u-1", recibo: "hub-1 ev-1" })],
+    [repasseLivre(), { ...repasseLivre("p-00000000000000b2"), uuid: "x-2" }, ...getEvent({ role: "user", created_at: DEPOIS, content: LIVRE })],
+    { origem: "agente", quem: null, mandato: null, em_nome_de: null, recibo: null },
+  ],
+  [
+    "3 níveis: pergunta de volta digitada no hub não é texto livre que prova",
+    [abertura(), resposta("o que muda se eu for pela outra?", { alternativa_livre: true }), autoria({ origem_resposta: "digitado-no-hub-conferido", prova: "get_event:hub-1#u-1", recibo: "hub-1 ev-1" })],
+    [repasseLivre(), ...getEvent({ role: "user", created_at: DEPOIS, content: "o que muda se eu for pela outra?" })],
+    { origem: "agente", quem: null, mandato: null, em_nome_de: null, recibo: null },
+  ],
+  [
+    "3 níveis: texto livre no hub com literal gravado diferente não prova",
+    [abertura(), resposta("pode replanejar", { alternativa_livre: true }), autoria({ origem_resposta: "digitado-no-hub-conferido", prova: "get_event:hub-1#u-1", recibo: "hub-1 ev-1" })],
+    getEvent({ role: "user", created_at: DEPOIS, content: LIVRE }),
+    { origem: "agente", quem: null, mandato: null, em_nome_de: null, recibo: null },
+  ],
   [
     "digitado leva quem e mandato da autoria",
     [abertura(), resposta(), autoria({ quem: "pessoa", mandato: "engenharia" })],

@@ -33,10 +33,10 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { codigoDoAdaptador, lerAdaptador, nomeDoOperador, paginaDoProjeto, posseDoProjeto } from "./adaptador.mjs";
+import { codigoDoAdaptador, lerAdaptador, modoDoCiclo, nomeDoOperador, paginaDoProjeto, posseDoProjeto } from "./adaptador.mjs";
 import { ENV_GIT, PRAZO_REDE_MS, git as rodar, tentarGit as tentar } from "./git-exec.mjs";
 import { ErroPlano, caminhoDoCanonico, lerPlanoCongelado, lerPlanoNoCommit } from "./ler-plano.mjs";
-import { RE, lerMarcas, niveisDasMarcas, trailers as lerTrailers, ultimaAutorizacao } from "./marcas.mjs";
+import { RE, TRAILER_DO_CICLO, lerMarcas, niveisDasMarcas, trailers as lerTrailers, ultimaAutorizacao } from "./marcas.mjs";
 import {
   CASOS,
   settingsMudaAParada,
@@ -147,10 +147,25 @@ function commitVazio(repo, ciclo, subject, { corpo, trailers = {} } = {}) {
   exigirPosse({ repo, ciclo });
   const args = ["commit", "-q", "--allow-empty", "-m", subject];
   if (corpo && corpo.trim()) args.push("-m", corpo.trim());
-  const linhas = Object.entries(trailers).map(([k, v]) => `${k}: ${v}`);
+  const linhas = Object.entries({ ...trailers, ...trailerDoCiclo(repo, ciclo) }).map(([k, v]) => `${k}: ${v}`);
   if (linhas.length) args.push("-m", linhas.join("\n"));
   rodar(repo, args);
   return rodar(repo, ["rev-parse", "HEAD"]);
+}
+
+/** A marca lida pelo subject (`git log --grep`) é de outro ciclo: o bloco de trailers (ou o corpo) diz outro `Conducao-Ciclo-Id`. */
+export function deOutroCiclo(bloco, ciclo) {
+  if (!ciclo) return false;
+  const m = new RegExp(`^${TRAILER_DO_CICLO}:\\s*(\\S+)\\s*$`, "m").exec(String(bloco ?? ""));
+  return m !== null && m[1] !== ciclo;
+}
+
+/**
+ * O trailer de ciclo da marca (`Conducao-Ciclo-Id`), só no ciclo sem ramo: as marcas dele moram no
+ * principal, ao lado das de outros ciclos, e cada leitura descarta as alheias. Fora do modo, nada.
+ */
+export function trailerDoCiclo(repo, ciclo) {
+  return ciclo && modoDoCiclo(repo, ciclo).semRamo ? { [TRAILER_DO_CICLO]: ciclo } : {};
 }
 
 // ── cerca do par da posse (VEGA-37 T15, D-VEGA37-17) ─────────────────────────
@@ -221,8 +236,8 @@ export function passagemAberta(marcas) {
   return ultima?.tipo === "passagem" ? ultima : null;
 }
 
-function exigirForaDaPassagem(repo, oQue) {
-  const p = passagemAberta(lerMarcas(repo));
+function exigirForaDaPassagem(repo, oQue, ciclo = null) {
+  const p = passagemAberta(lerMarcas(repo, "HEAD", ciclo));
   exigir(
     !p,
     "em-passagem",
@@ -272,7 +287,7 @@ function idDoCanonico(repo, caminho) {
  */
 export function passar({ repo, ciclo, fase, corpo, emVoo = [], trazidas = [], vivas = [], posse = undefined }) {
   exigir(FASE_RE.test(fase ?? ""), "uso", `passar exige a fase F<n>, veio ${JSON.stringify(fase ?? null)}`);
-  exigirForaDaPassagem(repo, "uma passagem nova");
+  exigirForaDaPassagem(repo, "uma passagem nova", ciclo);
   const sujas = [
     ...emVoo.map((r) => `${r.task}/${r.tentativa} em voo`),
     ...trazidas.map((r) => `${r.task}/${r.tentativa} trazida sem conferência`),
@@ -321,6 +336,7 @@ export function passar({ repo, ciclo, fase, corpo, emVoo = [], trazidas = [], vi
     "Conducao-Ponta": ponta,
     ...(par.lock_id ? { "Conducao-Lock": par.lock_id } : {}),
     ...(ramo ? { "Conducao-Ramo": ramo } : {}),
+    ...trailerDoCiclo(repo, ciclo),
   };
   rodar(repo, ["commit", "-q", "-m", `Conducao: ${fase} em passagem`, "-m", Object.entries(trailers).map(([c, v]) => `${c}: ${v}`).join("\n")]);
   const sha = rodar(repo, ["rev-parse", "HEAD"]);
@@ -345,7 +361,7 @@ export function passar({ repo, ciclo, fase, corpo, emVoo = [], trazidas = [], vi
  */
 export function desistirDaPassagem({ repo, ciclo, fase, motivo = null }) {
   exigir(FASE_RE.test(fase ?? ""), "uso", `desistir-da-passagem exige a fase F<n>, veio ${JSON.stringify(fase ?? null)}`);
-  const p = passagemAberta(lerMarcas(repo));
+  const p = passagemAberta(lerMarcas(repo, "HEAD", ciclo));
   exigir(p, "sem-passagem", "não há passagem aberta para desistir");
   exigir(p.fase === fase, "fase-da-passagem", `a passagem aberta é de ${p.fase}, não de ${fase}`);
   const sha = commitVazio(repo, ciclo, `Conducao: ${fase} passagem desistida`, { corpo: motivo, trailers: { "Conducao-Passagem": fase, "Conducao-Desistida": p.sha } });
@@ -361,7 +377,7 @@ export function desistirDaPassagem({ repo, ciclo, fase, motivo = null }) {
  * posse, como toda marca; a cópia sobe.
  */
 export function confirmarPassagem({ repo, ciclo, passagem, epoca, arvoreSuja = null }) {
-  const p = passagemAberta(lerMarcas(repo));
+  const p = passagemAberta(lerMarcas(repo, "HEAD", ciclo));
   exigir(p, "sem-passagem", "não há passagem aberta para confirmar");
   exigir(p.sha === passagem, "passagem-trocada", `a passagem aberta é ${p.sha.slice(0, 8)}, não ${String(passagem ?? "").slice(0, 8)}`);
   exigir(Number.isSafeInteger(epoca) && epoca > Number(p.epoca), "epoca-parada", `a época da posse (${epoca}) não subiu da época da nota (${p.epoca}): sem o passar-posse a herdeira não confirma`);
@@ -380,6 +396,31 @@ export function confirmarPassagem({ repo, ciclo, passagem, epoca, arvoreSuja = n
  */
 export function empurrarCopia({ repo, ciclo }) {
   exigirPosse({ repo, ciclo });
+  const copia = empurrarSoACopia({ repo, ciclo });
+  // Ciclo sem ramo (`semRamo`): depois da cópia, a marca vai ao principal do origin. A recusa do
+  // principal não desfaz nem barra a cópia: sai em `principal` (com `levado: false`) e no aviso ao
+  // operador; o próximo verbo tenta de novo. A mescla com o origin muda o HEAD: a cópia o segue.
+  const modo = modoDoCiclo(repo, ciclo);
+  if (!modo.semRamo) return copia;
+  let principal;
+  try {
+    principal = levarAoPrincipal({ repo, ciclo, principal: modo.principal });
+  } catch (e) {
+    // A mescla presa (MERGE_HEAD) não vira aviso: o próximo commit de marca a fecharia calado.
+    if (!(e instanceof ErroPlano) || e.codigo === "principal-mescla-presa") throw e;
+    principal = { levado: false, porque: e.codigo, detalhe: e.message };
+  }
+  const depois = principal.mesclado ? empurrarSoACopia({ repo, ciclo }) : copia;
+  return { ...depois, principal };
+}
+
+/** A linha ao operador quando o principal não subiu por motivo que pede olho (a trazida por conferir é o esperado). */
+export function avisoDoPrincipal(principal) {
+  if (!principal || principal.levado || principal.porque === "trazida-sem-conferencia") return null;
+  return `o principal não subiu ao origin (${principal.porque}${principal.ramo ? `: árvore em ${principal.ramo}` : ""})${principal.detalhe ? ` — ${principal.detalhe}` : ""}; o que foi gravado fica, e o próximo verbo tenta de novo (ou empurrar-copia)`;
+}
+
+function empurrarSoACopia({ repo, ciclo }) {
   const head = rodar(repo, ["rev-parse", "HEAD"]);
   const anterior = revOuNull(repo, refs.copiaLocal(ciclo));
   if (anterior === head) return { copia: head, anterior, empurrada: false };
@@ -407,6 +448,50 @@ export function empurrarCopia({ repo, ciclo }) {
   }
   rodar(repo, ["update-ref", refs.copiaLocal(ciclo), head, ...(anterior ? [anterior] : [])]);
   return { copia: head, anterior, empurrada: true };
+}
+
+/**
+ * Ciclo sem ramo (`semRamo` da declaração; hotfix vega-conducao-sem-ramo): leva o HEAD ao
+ * `principal` do origin, sem força. Só da árvore que tem o principal aberto (fora dela, ou com
+ * HEAD destacado, não leva: a árvore dele leva no próximo verbo) e só sem trazida por conferir
+ * (a tentativa chega ao principal depois da conferência; quem empurra no meio já está lá).
+ * Origin à frente ⇒ busca e mescla (nunca rebase: as marcas e as tentativas apontam os shas)
+ * e tenta mais uma vez; mescla com conflito aborta e sai `principal-diverge`.
+ */
+export function levarAoPrincipal({ repo, ciclo, principal }) {
+  const ramo = tentar(repo, ["symbolic-ref", "--short", "-q", "HEAD"]).saida;
+  if (ramo !== principal) return { levado: false, porque: "fora-do-principal", ramo: ramo || null };
+  const pendentes = lerTrazidas(repo, ciclo);
+  if (pendentes.length) return { levado: false, porque: "trazida-sem-conferencia", tasks: pendentes.map((r) => r.task) };
+  const empurrar = (sha) => tentar(repo, ["push", "--porcelain", "origin", `${sha}:refs/heads/${principal}`], { rede: true });
+  let sha = rodar(repo, ["rev-parse", "HEAD"]);
+  let push = empurrar(sha);
+  let mesclado = null;
+  if (push.status !== 0) {
+    const rastreio = `refs/remotes/origin/${principal}`;
+    const f = tentar(repo, ["fetch", "--no-tags", "--quiet", "origin", `+refs/heads/${principal}:${rastreio}`], { rede: true });
+    exigir(f.status === 0, "principal-push-recusado", `push de ${principal} recusado (${push.erro.split("\n").at(-1)}) e o fetch dele falhou: ${f.erro.split("\n").at(-1)} — nada foi forçado; rode empurrar-copia de novo`);
+    const doOrigin = revOuNull(repo, rastreio);
+    if (doOrigin && ancestral(repo, doOrigin, sha) !== true) {
+      const m = tentar(repo, ["merge", "--no-edit", "--quiet", doOrigin]);
+      if (m.status !== 0) {
+        const ab = tentar(repo, ["merge", "--abort"]);
+        // Abort que não limpou deixa MERGE_HEAD: o próximo commit de marca fecharia a mescla calado.
+        if (revOuNull(repo, "MERGE_HEAD"))
+          throw new ErroPlano("principal-mescla-presa", `a mescla do ${principal} do origin falhou e o abort não a desfez (${(ab.erro || "sem saída").split("\n").at(-1)}): MERGE_HEAD segue na árvore ${repo}. Ao operador: resolver à mão antes de qualquer verbo`);
+        throw new ErroPlano(
+          "principal-diverge",
+          `o ${principal} do origin andou (${doOrigin.slice(0, 8)}) e não se mescla limpo no HEAD ${sha.slice(0, 8)}: ${m.erro.split("\n").slice(-2).join(" | ")} — a mescla foi abortada e nada foi empurrado; o que já foi gravado fica. Ao operador: mesclar à mão e rodar empurrar-copia`,
+        );
+      }
+      mesclado = doOrigin;
+      sha = rodar(repo, ["rev-parse", "HEAD"]);
+    }
+    push = empurrar(sha);
+    exigir(push.status === 0, "principal-push-recusado", `push de ${principal} recusado: ${push.erro.split("\n").slice(-3).join(" | ")} — nada foi forçado; o que já foi gravado fica; rode empurrar-copia de novo`);
+  }
+  tentar(repo, ["update-ref", `refs/remotes/origin/${principal}`, sha]);
+  return { levado: true, ramo: principal, sha, ...(mesclado ? { mesclado } : {}) };
 }
 
 // ── ramo do ciclo (VEGA-37 T9) ───────────────────────────────────────────────
@@ -490,7 +575,9 @@ export const DESFECHO_SEM_COPIA = "registrado-sem-copia";
  */
 export function comCopia(repo, ciclo, saida) {
   try {
-    const r = { ...saida, copia: empurrarCopia({ repo, ciclo }) };
+    const copia = empurrarCopia({ repo, ciclo });
+    const aviso = avisoDoPrincipal(copia.principal);
+    const r = { ...saida, copia, ...(aviso ? { avisoOperador: [...(saida.avisoOperador ?? []), aviso] } : {}) };
     // A parada copiada volta pelo construtor: sem ele, sai sem ponteiro e o log recusa o evento tipado.
     return saida.acao === "perguntar" ? construirPergunta(r) : r;
   } catch (e) {
@@ -548,7 +635,7 @@ export function autorizarFase({ repo, ciclo, fase, sim, doCiclo = false, pergunt
     // 3 níveis: o operador responde na sessão da maestra, e o repasse dela só vale com o recibo
     // conferido (`repasse-hub`, que fica de pé só com o texto da mensagem, recusa). Com a marca de
     // 3 níveis no ramo, `--maestra` é obrigatório: pular a conferência não cai na regra de 2 níveis.
-    if (maestra === null) exigir(niveisDasMarcas(lerMarcas(repo)).niveis !== 3, "maestra-ausente", `${verbo} em 3 níveis exige --maestra <a maestra da entrada>: a resposta tem de ser do operador nesta sessão ou na da maestra, com o recibo conferido`);
+    if (maestra === null) exigir(niveisDasMarcas(lerMarcas(repo, "HEAD", ciclo)).niveis !== 3, "maestra-ausente", `${verbo} em 3 níveis exige --maestra <a maestra da entrada>: a resposta tem de ser do operador nesta sessão ou na da maestra, com o recibo conferido`);
     else exigirRespostaDaMaestra({ perguntas: registroDoConsentimento(pc, pergunta), pergunta_id: pergunta, maestra });
   } else exigir(maestra === null, "uso", `${verbo}: --maestra só com --pergunta`);
   const { blob, plano } = lerPlanoNoCommit(repo, "HEAD", ciclo);
@@ -560,6 +647,10 @@ export function autorizarFase({ repo, ciclo, fase, sim, doCiclo = false, pergunt
     ...(pergunta ? { [TRAILER_DA_PERGUNTA]: pergunta } : {}),
     ...(daParada ? { [TRAILER_PERGUNTA_DA_PARADA]: "sim" } : {}),
   };
+  // Ciclo sem ramo: sem o `criar-ramo`, ninguém grava a marca de 3 níveis; sem ela, a primeira
+  // autorização faria o ciclo ser lido como legado de 2. A marca vem antes, uma vez.
+  if (modoDoCiclo(repo, ciclo).semRamo && !lerMarcas(repo, "HEAD", ciclo).some((m) => m.tipo === "niveis"))
+    commitVazio(repo, ciclo, "Conducao: ciclo niveis 3", { corpo: "Ciclo sem ramo (semRamo): a condução é em 3 níveis.", trailers: { "Conducao-Niveis": "3" } });
   const sha = commitVazio(repo, ciclo, `Conducao: ${fase} autorizada`, { corpo: simAparado, trailers });
   return comCopia(repo, ciclo, { acao: "autorizada", ciclo, fase, sha, plano: blob, ...(doCiclo ? { doCiclo: true } : {}), ...(pergunta ? { pergunta } : {}) });
 }
@@ -570,7 +661,7 @@ export function autorizarFase({ repo, ciclo, fase, sim, doCiclo = false, pergunt
  * pergunta em `Replano-Pergunta`; senão null (fase nunca autorizada, git que falha, citação que falta).
  */
 function replanoCitaAPergunta(repo, ciclo, fase, pergunta) {
-  const ultima = lerMarcas(repo).filter((m) => m.tipo === "autorizada" && m.fase === fase).at(-1);
+  const ultima = lerMarcas(repo, "HEAD", ciclo).filter((m) => m.tipo === "autorizada" && m.fase === fase).at(-1);
   if (!ultima?.sha) return null;
   let caminho;
   try {
@@ -909,7 +1000,7 @@ export function abrir({ repo, ciclo, task, tentativa, nonce, falhou = null }) {
   exigir(Number.isInteger(tentativa) && tentativa > 0, "uso", `tentativa inválida: ${tentativa}`);
   exigir(NONCE_RE.test(nonce ?? ""), "uso", `nonce inválido: ${nonce}`);
   // Em passagem não abre operária (VEGA-37 T15); o marcador é marca: passa pela cerca da posse.
-  exigirForaDaPassagem(repo, "o abrir");
+  exigirForaDaPassagem(repo, "o abrir", ciclo);
   exigirPosse({ repo, ciclo });
   // O mesmo abrir repetido (mesmo nonce) sai antes de tudo, sem regravar a falha: o marcador só
   // nasce depois dela, então ela já está no ramo (hotfix conducao-corta-paradas-de-regra).
@@ -949,7 +1040,8 @@ export function abrir({ repo, ciclo, task, tentativa, nonce, falhou = null }) {
   if (!partida) return perguntar("brief-sem-contrato", { ciclo, task, tentativa, detalhe: "cabeçalho do contrato ou passo 1 não achado no brief" });
 
   const tree = rodar(repo, ["rev-parse", "HEAD^{tree}"]);
-  const marcador = rodar(repo, ["commit-tree", tree, "-p", head, "-m", `Conducao: abrir ${task} tentativa ${tentativa} nonce ${nonce}`]);
+  const doEste = Object.entries(trailerDoCiclo(repo, ciclo)).map(([k, v]) => `${k}: ${v}`);
+  const marcador = rodar(repo, ["commit-tree", tree, "-p", head, "-m", `Conducao: abrir ${task} tentativa ${tentativa} nonce ${nonce}`, ...(doEste.length ? ["-m", doEste.join("\n")] : [])]);
   // Commit do brief: filho do marcador, mesma árvore, mensagem pelo stdin (o `commit-tree` a
   // grava sem limpeza). Sem o `\n` final, que o `git log --format=%b` da filha devolve.
   const commitBrief = rodar(repo, ["commit-tree", tree, "-p", marcador], {
@@ -1040,7 +1132,7 @@ export function gerarBrief({ repo, ciclo, task, nonce, ref, tentativa = 1 }) {
     codigo = codigoDoAdaptador(repo);
     pagina = paginaDoProjeto(repo);
     caminho = caminhoDoCanonico(repo, "HEAD", ciclo, codigo);
-    nao = naoDoOperador(repo, task, tentativa);
+    nao = naoDoOperador(repo, task, tentativa, ciclo);
   } catch (e) {
     // O código tipado do erro (`entrada-invalida` do adaptador, o do `ErroPlano`) é o motivo; sem código, o genérico.
     return { ok: false, motivo: typeof e.codigo === "string" && e.codigo ? e.codigo : "brief-indisponivel", detalhe: e.message };
@@ -1058,7 +1150,17 @@ export function gerarBrief({ repo, ciclo, task, nonce, ref, tentativa = 1 }) {
   );
   if (r.status !== 0 || !r.stdout)
     return { ok: false, motivo: "brief-indisponivel", detalhe: `task-brief exit ${r.status ?? r.error?.code}: ${(r.stderr ?? "").trim().split("\n").slice(-3).join(" | ")}` };
-  return { ok: true, brief: anexarAoBrief(r.stdout, { pagina, nao }) };
+  return { ok: true, brief: anexarAoBrief(r.stdout, { pagina, nao, empurraNoMeio: empurraNoMeioDaTask(repo, ciclo, task) }) };
+}
+
+/**
+ * O principal a que a operária empurra no meio da task: só em ciclo sem ramo e com a task
+ * declarando `**Empurra no meio:** sim` no plano do HEAD (o que a filha recebe). Fora disso, `null`.
+ */
+function empurraNoMeioDaTask(repo, ciclo, task) {
+  const modo = modoDoCiclo(repo, ciclo);
+  if (!modo.semRamo) return null;
+  return lerPlanoNoCommit(repo, "HEAD", ciclo).plano.porId.get(task)?.empurraNoMeio ? modo.principal : null;
 }
 
 const PREFIXO_DO_NAO = "Não, pelo operador: ";
@@ -1070,13 +1172,13 @@ const PREFIXO_DO_NAO = "Não, pelo operador: ";
  * tentativa, sem a marca, ou marca do caso por arquivo (só trailers: o brief segue o rito
  * pelo git) ⇒ `null`. Marca com corpo sem o prefixo ⇒ `nao-ilegivel`, nunca o não sumido.
  */
-export function naoDoOperador(repo, task, tentativa) {
+export function naoDoOperador(repo, task, tentativa, ciclo = null) {
   if (!Number.isInteger(tentativa) || tentativa < 2) return null;
   const assunto = `Conducao: ${task} tentativa ${tentativa - 1} rodada`;
-  const sha = rodar(repo, ["log", "--format=%H%x1f%s", "--fixed-strings", `--grep=${assunto}`, "HEAD"])
-    .split("\n")
-    .map((l) => l.split("\x1f"))
-    .find(([, s]) => s === assunto)?.[0];
+  const sha = rodar(repo, ["log", "--format=%H%x1f%s%x1f%(trailers:only=true,unfold=true)%x1e", "--fixed-strings", `--grep=${assunto}`, "HEAD"])
+    .split("\x1e")
+    .map((l) => l.replace(/^\n/, "").split("\x1f"))
+    .find(([, s, tr]) => s === assunto && !deOutroCiclo(tr, ciclo))?.[0];
   if (!sha) return null;
   const paragrafos = rodar(repo, ["log", "-1", "--format=%b", sha], { cru: true }).replace(/\n+$/, "").split("\n\n");
   // Os trailers são o último parágrafo (`commitVazio`); o resto é o corpo, como foi gravado.
@@ -1092,8 +1194,16 @@ export function naoDoOperador(repo, task, tentativa) {
  * e a do não do operador da rodada anterior, verbatim, numa cerca mais longa que qualquer
  * sequência de crases do texto. Sem nenhum dos dois, o brief volta byte a byte.
  */
-export function anexarAoBrief(brief, { pagina = null, nao = null } = {}) {
+export function anexarAoBrief(brief, { pagina = null, nao = null, empurraNoMeio = null } = {}) {
   const secoes = [];
+  if (empurraNoMeio)
+    secoes.push(
+      "## empurrar ao principal no meio da task",
+      `> O ciclo é conduzido sem ramo, no \`${empurraNoMeio}\`, e esta task declara \`**Empurra no meio:** sim\`: é a exceção à regra "empurrar só para a referência da tentativa".`,
+      `- Quando um Step precisa do commit já no \`${empurraNoMeio}\` do origin, empurre o seu HEAD para ele, sem força: \`git push origin HEAD:refs/heads/${empurraNoMeio}\`. Recusado por não ser avanço rápido ⇒ \`git fetch origin ${empurraNoMeio}\` e \`git merge origin/${empurraNoMeio}\`, nunca rebase nem força, e empurre de novo.`,
+      "- No fim, siga os passos 5 e 6 do contrato como sempre: a referência da tentativa aponta o mesmo commit que você deixou no principal, e a condutora o confere por ele.",
+      "",
+    );
   if (pagina)
     secoes.push(
       "## página do projeto",
@@ -1191,7 +1301,7 @@ export function registrarFalha({ repo, ciclo, task, tentativa, coberta, motivo =
   const ja = rodar(repo, ["log", "--fixed-strings", `--grep=${subjectFalha}`, "--format=%H%x1f%s%x1f%(trailers:only=true,unfold=true)%x1e", "HEAD"])
     .split("\x1e")
     .map((l) => l.replace(/^\n/, "").split("\x1f"))
-    .find(([, s]) => s === subjectFalha);
+    .find(([, s, tr]) => s === subjectFalha && !deOutroCiclo(tr, ciclo));
   if (ja) {
     const gravada = cobertaDaMarca(lerTrailers(ja[2] ?? ""));
     if (gravada !== coberta) return perguntar("coberta-diverge-da-marca", { ciclo, task, tentativa, sha: ja[0], gravada, pedida: coberta });
@@ -1277,8 +1387,9 @@ function apagarBusca(repo, ciclo, task, n) {
  * e diz o erro da busca.
  */
 function buscarMain(repo, ciclo) {
-  // O ramo base é do projeto (`ci.ramoBase` do adaptador); sem CI declarado, `main`.
-  const ramo = codigoDoAdaptador(repo).ci?.ramoBase ?? "main";
+  // O ramo base é do projeto (`ci.ramoBase` do adaptador); sem CI declarado, `main`. Ciclo sem ramo: o principal dele.
+  const modo = modoDoCiclo(repo, ciclo);
+  const ramo = modo.semRamo ? modo.principal : (codigoDoAdaptador(repo).ci?.ramoBase ?? "main");
   const busca = `refs/conducao-busca/${ciclo}/main`;
   const f = tentar(repo, ["fetch", "--no-tags", "--quiet", "origin", `+refs/heads/${ramo}:${busca}`], { rede: true });
   const sha = f.status === 0 ? revOuNull(repo, busca) : null;
@@ -1379,7 +1490,7 @@ export function trazer({ repo, ciclo, task, tentativa, shaAvisado = null, sessao
     baseComum: () => rodar(repo, ["merge-base", marcador, doMain]),
     blob: (rev, p) => blobOuNull(repo, rev, p),
   });
-  const autorizacao = ultimaAutorizacao(lerMarcas(repo));
+  const autorizacao = ultimaAutorizacao(lerMarcas(repo, "HEAD", ciclo));
   exigir(autorizacao, "sem-autorizacao", `nenhuma fase de ${ciclo} autorizada — trazer lê o plano congelado`);
   const { plano } = lerPlanoCongelado(repo, ciclo, autorizacao);
   const t = plano.porId.get(task);
@@ -1424,6 +1535,15 @@ export function trazer({ repo, ciclo, task, tentativa, shaAvisado = null, sessao
   if (semAprovacao) return semAprovacao;
 
   const modo = verbos.modoDeTrazer({ head, paiMarcador });
+  // Ciclo sem ramo, task que empurra no meio: o trabalho já está no principal do origin, e só o
+  // avanço rápido o traz sem duplicar; com o HEAD andado, a cereja repetiria os commits (gate).
+  if (t.empurraNoMeio && modo !== "fast-forward" && modoDoCiclo(repo, ciclo).semRamo)
+    return perguntar("empurra-no-meio-sem-avanco-rapido", {
+      ...base,
+      head,
+      paiMarcador,
+      detalhe: `${task} empurra ao principal no meio, e o HEAD ${head.slice(0, 8)} andou desde a abertura (${paiMarcador.slice(0, 8)}): trazer por cereja duplicaria no principal o que a operária já pôs lá. Ao operador: mesclar a ponta à mão (git merge ${ponta.slice(0, 8)}) e decidir, ou reabrir a task sem tarefa em paralelo`,
+    });
   let regeneradas = [];
   let puladas = [];
   if (modo === "fast-forward") {
@@ -1963,7 +2083,7 @@ export function conferirCarimbo({ repo, ciclo, task }) {
 }
 
 function taskDoPlano(repo, ciclo, task) {
-  const autorizacao = ultimaAutorizacao(lerMarcas(repo));
+  const autorizacao = ultimaAutorizacao(lerMarcas(repo, "HEAD", ciclo));
   exigir(autorizacao, "sem-autorizacao", `nenhuma fase de ${ciclo} autorizada`);
   const { plano } = lerPlanoCongelado(repo, ciclo, autorizacao);
   const t = plano.porId.get(task);
@@ -1991,10 +2111,11 @@ function casoDaTask(repo, t) {
  * publicação contra o plano congelado, o sim do operador — é
  * `verbos.politicaDaConferencia`.
  */
-export function registrarConferencia({ repo, ciclo, task, verificacao, publicacao, manual = false, maestra = false, sim = null, sessao = null, operador = null }) {
+export function registrarConferencia({ repo, ciclo, task, verificacao, publicacao, manual = false, maestra = false, sim = null, sessao = null, operador = null, fora = null }) {
+  if (fora !== null) return registrarFeitaFora({ repo, ciclo, task, sha: fora, verificacao, publicacao, sim, sessao, manual, maestra, operador });
   verbos.exigirUsoDaConferencia({ task, manual, maestra, publicacao });
   // Em passagem a condutora não publica (VEGA-37 T15): a conferência que registra publicação feita recusa.
-  if (publicacao === "feita") exigirForaDaPassagem(repo, "a publicação");
+  if (publicacao === "feita") exigirForaDaPassagem(repo, "a publicação", ciclo);
   const t = taskDoPlano(repo, ciclo, task);
   const caso = casoDaTask(repo, t);
   const p = verbos.politicaDaConferencia({
@@ -2053,6 +2174,102 @@ export function registrarConferencia({ repo, ciclo, task, verificacao, publicaca
   const casoGravado = casoDaPublicacao({ repo, ciclo, task, p, sim, sha });
   if (casoGravado.acao === "perguntar") return casoGravado;
   return comCopia(repo, ciclo, { acao: "conferida", ciclo, task, tentativa: r.tentativa, nonce: r.nonce, sha, ...p.saida, ...casoGravado });
+}
+
+// ── tarefa feita fora da condução (ciclo sem ramo) ──────────────────────────
+
+/** O subject de um commit é da task `t` do ciclo: o `**Commit:**` dela, exato, ou `<ciclo>-F<n>/T<k> — …` (barra ou ponto). */
+export function subjectDaTask(subjectDoCommit, ciclo, t) {
+  const s = String(subjectDoCommit ?? "").trim();
+  if (!s || /^Conducao: /.test(s)) return false;
+  if (t.commit && s === t.commit) return true;
+  const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^${esc(ciclo)}-${esc(t.fase)}[/.]${esc(t.id)} — `).test(s);
+}
+
+/**
+ * Os commits do HEAD posteriores ao último commit que mexeu no plano do ciclo, do mais novo ao
+ * mais velho: `[{ sha, subject }]`. Commit anterior ao plano vigente não é task dele (nem o
+ * `**Commit:**` genérico que já existia, nem a task renumerada por re-plano). Uma leitura por chamada.
+ */
+export function commitsDesdeOPlano(repo, ciclo, ref = "HEAD") {
+  const caminho = caminhoDoCanonico(repo, ref, ciclo);
+  // O último commit que mexeu no plano: re-plano que renumera tasks não deixa commit velho valer
+  // pela task nova. Conservador: plano editado depois da task feita fora a faz abrir pelo laço.
+  const ultimo = linhas(rodar(repo, ["log", "-1", "--format=%H", ref, "--", caminho]))[0];
+  const faixa = ultimo ? `${ultimo}..${ref}` : ref;
+  return linhas(rodar(repo, ["log", "--format=%H%x1f%s", faixa]))
+    .map((l) => {
+      const [sha, subject] = l.split("\x1f");
+      return { sha, subject };
+    })
+    .filter((c) => c.sha);
+}
+
+/**
+ * Os commits com o subject da task (`subjectDaTask`) entre os `commits` (de `commitsDesdeOPlano`).
+ * É a prova de task feita fora da condução — só em ciclo sem ramo e só para task sem marca
+ * nenhuma da condução (quem chama confere); fora disso, o subject de uma task nunca é prova de
+ * feita (§2.2#24).
+ */
+export function commitsDaTask(repo, ciclo, t, commits = commitsDesdeOPlano(repo, ciclo)) {
+  return commits.filter((c) => subjectDaTask(c.subject, ciclo, t));
+}
+
+/**
+ * `registrar-conferencia T<k> --fora <sha> --verificacao verde|vencida|declarada-pos-merge
+ * --publicacao nao-se-aplica|feita [--sim <texto>] [--sessao <id>]` (ciclo sem ramo): a task
+ * feita antes de a condução a abrir, com o commit no subject dela já no HEAD, entra como
+ * feita — a marca `conferida` com `Conducao-Fora: <sha>`. A Verificação roda na abertura
+ * (`verde`, ou `declarada-pos-merge` se o plano a declara assim) ou fica dispensada quando a
+ * task declara `**Verificação vence:** sim` (`vencida`). Task que cita publicação pede o
+ * `--sim` do operador, num turno dele, dizendo o que houve com ela.
+ */
+function registrarFeitaFora({ repo, ciclo, task, sha, verificacao, publicacao, sim, sessao, manual, maestra, operador }) {
+  exigir(TASK_RE.test(task ?? ""), "uso", `task inválida: ${task}`);
+  exigir(!manual && !maestra && !operador, "uso", "--fora não combina com --manual, --condutora nem --operador");
+  exigir(modoDoCiclo(repo, ciclo).semRamo, "fora-sem-modo", `${ciclo} não é conduzido sem ramo: task feita fora da condução só se reconhece no ciclo declarado em semRamo`);
+  exigir(publicacao === "nao-se-aplica" || publicacao === "feita", "uso", `--publicacao feita|nao-se-aplica (veio ${publicacao})`);
+  const t = taskDoPlano(repo, ciclo, task);
+  const marcas = lerMarcas(repo, "HEAD", ciclo);
+  const fase = ultimaAutorizacao(marcas)?.fase ?? null;
+  exigir(t.fase === fase, "fora-de-outra-fase", `${task} é da ${t.fase}, e a fase autorizada é ${fase ?? "nenhuma"}: a task feita fora se reconhece na fase dela`);
+  exigir(
+    !verbos.casoDeConferencia(t, lerAdaptador(repo).conferencia) && !t.rodadas,
+    "fora-com-conferencia-do-operador",
+    `${task} tem conferência do operador ou rodadas: feita fora, segue pelo laço (o resultado é do operador)`,
+  );
+  if (publicacao === "feita") exigirForaDaPassagem(repo, "a publicação", ciclo);
+  const commit = revOuNull(repo, sha ?? "");
+  exigir(commit, "fora-sem-commit", `--fora ${sha}: não é commit deste repositório`);
+  exigir(ancestral(repo, commit, "HEAD") === true, "fora-fora-do-head", `${commit.slice(0, 8)} não está no HEAD: a task feita fora tem de estar no principal`);
+  exigir(subjectDaTask(subject(repo, commit), ciclo, t), "fora-subject-de-outra", `o subject de ${commit.slice(0, 8)} não é o da ${task} (${t.commit ?? `${ciclo}-${t.fase}/${task} — …`})`);
+  exigir(
+    commitsDesdeOPlano(repo, ciclo).some((c) => c.sha === commit),
+    "fora-antes-do-plano",
+    `${commit.slice(0, 8)} é anterior ao plano vigente de ${ciclo} (o último commit que mexeu nele): não é prova de task dele`,
+  );
+  const daTask = marcas.filter((m) => m.task === task);
+  exigir(!daTask.length, "fora-com-marca", `${task} já tem ${daTask.length} marca(s) da condução: não foi feita fora dela`);
+  const esperada = t.verificacaoVence ? "vencida" : t.posMerge ? "declarada-pos-merge" : "verde";
+  exigir(
+    verificacao === esperada || (verificacao === "verde" && t.verificacaoVence),
+    "verificacao-diverge-do-plano",
+    `${task} feita fora pede --verificacao ${esperada}${t.verificacaoVence ? " (ou verde, se rodou)" : ""}, veio ${verificacao}`,
+  );
+  const temPublicacao = t.publicacao.length > 0;
+  exigir(!temPublicacao || (sim && sim.trim()), "sim-ausente", `${task} cita publicação (${t.publicacao.join(", ")}): feita fora, só com --sim <texto de ${nomeDoOperador(repo)} dizendo o que houve com ela>`);
+  exigir(temPublicacao || publicacao === "nao-se-aplica", "publicacao-fora-do-plano", `${task} não cita publicação no plano congelado`);
+  const corpo = [`Feita fora da condução: ${commit.slice(0, 8)} ${subject(repo, commit)}`, sim && sim.trim() ? `Sim do operador: ${sim.trim()}` : null].filter(Boolean).join("\n\n");
+  const trailers = {
+    "Conducao-Task": task,
+    "Conducao-Fora": commit,
+    "Conducao-Verificacao": verificacao,
+    "Conducao-Publicacao": publicacao,
+    ...(sessao ? { "Conducao-Sessao-Maestra": sessao } : {}),
+  };
+  const marca = commitVazio(repo, ciclo, `Conducao: ${task} conferida`, { corpo, trailers });
+  return comCopia(repo, ciclo, { acao: "conferida", ciclo, task, sha: marca, fora: commit, verificacao, publicacao });
 }
 
 /**
@@ -2120,13 +2337,13 @@ function caminhoDoApproval(repo, ciclo, arquivo) {
  * da mais nova à mais velha: `{ sha, replanoB }` (`replanoB` = valor do
  * trailer da B por re-plano, ou null). Contar: `verbos.rodadasDasMarcas`.
  */
-function marcasDeRodada(repo, task) {
-  const formato = `%H%x1f%s%x1f%(trailers:key=${verbos.TRAILER_RODADA_B_REPLANO},valueonly=true,unfold=true)%x1e`;
+function marcasDeRodada(repo, task, ciclo = null) {
+  const formato = `%H%x1f%s%x1f%(trailers:key=${verbos.TRAILER_RODADA_B_REPLANO},valueonly=true,unfold=true)%x1f%(trailers:only=true,unfold=true)%x1e`;
   // `--topo-order`: a primeira é a última marca da linha, não a de data mais nova (a janela da B começa nela).
   return rodar(repo, ["log", "--topo-order", `--format=${formato}`, `--grep=^Conducao: ${task} tentativa `, "HEAD"])
     .split("\x1e")
     .map((reg) => reg.replace(/^\n/, "").split("\x1f"))
-    .filter(([sha, subject]) => sha && RE.rodada.exec(subject ?? "")?.[1] === task)
+    .filter(([sha, subject, , tr]) => sha && RE.rodada.exec(subject ?? "")?.[1] === task && !deOutroCiclo(tr, ciclo))
     .map(([sha, , replanoB = ""]) => ({ sha, replanoB: replanoB.trim() || null }));
 }
 
@@ -2203,7 +2420,7 @@ export function registrarRodada({ repo, ciclo, task, rodada, sessao = null, oper
   const a = approvalNoHead(repo, approval);
   verbos.exigirApprovalDeRodada({ caminho: approval, a, caso });
   if (rodada === "carimbo") return registrarRodadaDeCarimbo({ repo, ciclo, task, r, sessao, approval, rodadaDoApproval: a.rodada });
-  const marcas = marcasDeRodada(repo, task);
+  const marcas = marcasDeRodada(repo, task, ciclo);
   const anteriores = verbos.rodadasDasMarcas(marcas);
   const base = { ciclo, task, tentativa: r.tentativa, nonce: r.nonce, approval, rodadaDoApproval: a.rodada, rodadasRegistradas: anteriores };
   const decisao = verbos.conferirRodada({
@@ -2226,7 +2443,7 @@ export function registrarRodada({ repo, ciclo, task, rodada, sessao = null, oper
 
 /** O não por pergunta: o texto do operador vai no corpo da marca `rodada`. */
 function registrarRodadaPorPergunta({ repo, ciclo, task, r, sessao, rodada, operador }) {
-  const anteriores = verbos.rodadasDasMarcas(marcasDeRodada(repo, task));
+  const anteriores = verbos.rodadasDasMarcas(marcasDeRodada(repo, task, ciclo));
   const base = { ciclo, task, tentativa: r.tentativa, nonce: r.nonce, rodadasRegistradas: anteriores };
   const fora = verbos.conferirRodadaPorPergunta({ base, anteriores, ref: r.ref });
   if (fora) return fora;

@@ -25,6 +25,8 @@ O núcleo decide abrir sessão, trazer, publicar e perguntar pelo que o plano **
 | `Independente` | `sim` | a tarefa não depende da anterior (§Dependência de dado e dependência de ordem) |
 | `Prazo` | `<n> min` | o prazo da sessão filha; ausente ⇒ o padrão do núcleo |
 | `Verificação pós-merge` | `sim` | a Verificação só fica verde depois do merge do ramo |
+| `Empurra no meio` | `sim` | só em ciclo sem ramo ([`sem-ramo.md`](sem-ramo.md)): a operária pode empurrar ao ramo principal dentro da tarefa, quando um passo precisa do commit já lá; a tarefa roda sem outra em paralelo |
+| `Verificação vence` | `sim` | só em ciclo sem ramo ([`sem-ramo.md`](sem-ramo.md)): feita fora da condução, a tarefa é reconhecida sem rodar a Verificação |
 | `Tier` | `mecanico` · `parecer` · `critico` · `inherit` | o tier da tarefa, acima do da fase; ausente ⇒ o da fase, e sem ele `inherit`. O adaptador mapeia tier → modelo, e a filha nasce com ele (sem mapa ou `inherit` ⇒ o `Modelo` da fase); o pré-voo avisa a tarefa de julgamento (fechamento, gate, conferência do operador, sensível) em `mecanico` |
 
 No topo do plano: `Fase` (`F<n>`, default `F1`), `Modelo`, `Tier` (o da fase) e `Largura do ciclo` (quantas tarefas correm ao mesmo tempo; ausente ⇒ o padrão do núcleo).

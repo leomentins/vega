@@ -101,6 +101,11 @@ function tierDeclarado(valor) {
   return v || null;
 }
 
+/** Bullet de sim/não da task: só `sim` (sem crase, ponto nem caixa) liga. */
+function bulletSim(valor) {
+  return typeof valor === "string" && /^sim\.?$/i.test(valor.replaceAll("`", "").trim());
+}
+
 /** Glob dos botões → RegExp: `**` qualquer profundidade, `*` um segmento. */
 export function globParaRegex(glob) {
   let re = "";
@@ -218,6 +223,14 @@ export function lerPlano(texto, codigo = codigoDoNucleo()) {
       independente: d.independente,
       estacao: normalizarEstacao(d.estacao),
       posMerge: d.verificacaoPosMerge,
+      // Ciclo sem ramo (`semRamo`, hotfix vega-conducao-sem-ramo): a operária empurra ao principal
+      // dentro da task (`**Empurra no meio:** sim`), e a Verificação de task feita fora da condução
+      // é dispensada quando ela vence (`**Verificação vence:** sim`). Ausente ⇒ false.
+      // O adaptador que não as lê nas declarações as acha no bullet da task (`- **Empurra no meio:** sim`).
+      empurraNoMeio: d.empurraNoMeio === true || bulletSim(t.bullets.get("Empurra no meio")),
+      verificacaoVence: d.verificacaoVence === true || bulletSim(t.bullets.get("Verificação vence")),
+      // O subject de commit da task (`**Commit:**`), quando o plano o declara: a task feita fora da condução se acha por ele.
+      commit: (t.bullets.get("Commit") ?? "").trim() || null,
       prazoMin: d.prazoMin ?? BOTOES.prazoPadraoMin,
       outputs,
       // Caminhos entre crases dos Steps: o `trazer` lê neles os segmentos de tela que a task muda (P21/P24).
