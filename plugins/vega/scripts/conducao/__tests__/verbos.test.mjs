@@ -253,93 +253,27 @@ test("rito de rodadas: uso, task do gate e approval que pede rodada", () => {
   v.exigirApprovalDeRodada({ caminho: "a.md", a: { verdict: "NEEDS_REWORK", rodada: 2 }, caso: GATE });
 });
 
-test("conferirRodada: floor(k/2)+1 contra o approval, com teto em 3 pelas marcas", () => {
+test("conferirRodada: sem teto; o approval só não pode recuar abaixo do último registrado", () => {
   const b = { ciclo: "X-1", task: "T3" };
-  assert.equal(v.conferirRodada({ base: b, anteriores: 0, rodadaDoApproval: 1, ref: "r" }), null);
-  assert.equal(v.conferirRodada({ base: b, anteriores: 2, rodadaDoApproval: 2, ref: "r" }), null);
-  const fora = v.conferirRodada({ base: b, anteriores: 2, rodadaDoApproval: 1, ref: "r" });
+  // Sem marca com número: qualquer approval grava, inclusive o que já começa alto.
+  assert.equal(v.conferirRodada({ base: b, rodadaDoApproval: 1, ref: "r" }), null);
+  assert.equal(v.conferirRodada({ base: b, rodadaDoApproval: 7, ref: "r" }), null);
+  // Repetir é a B (ou outra passada de máquina); subir é a C, mesmo pulando a B; sem teto em 3, 4, 10.
+  for (const n of [2, 3, 4, 10]) assert.equal(v.conferirRodada({ base: b, rodadaDoApproval: n, ultimaRodadaDoApproval: 2, ref: "r" }), null);
+  // Recuar é approval velho no HEAD: pergunta, dizendo o mínimo.
+  const fora = v.conferirRodada({ base: b, rodadaDoApproval: 1, ultimaRodadaDoApproval: 2, ref: "r" });
+  assert.equal(fora.acao, "perguntar");
   assert.equal(fora.motivo, "approval-fora-do-rito");
-  assert.equal(fora.rodadaEsperada, 2);
-  assert.equal(v.conferirRodada({ base: b, anteriores: 0, rodadaDoApproval: 3, ref: "r" }).motivo, "teto-de-rodadas");
-  const teto = v.conferirRodada({ base: b, anteriores: 4, rodadaDoApproval: 1, ref: "r" });
-  assert.equal(teto.motivo, "teto-de-rodadas");
-  assert.equal(teto.teto, v.TETO_RODADAS_GATE);
+  assert.equal(fora.rodadaMinima, 2);
+  assert.equal(v.TETO_RODADAS_GATE, undefined);
 });
 
-test("conferirRodada: a B por re-plano só destrava approval que pulou a B, e só é lida quando a regra estrita recusa", () => {
-  const b = { ciclo: "X-1", task: "T3" };
-  const achado = { replano: { sha: "abc", ruling: "D-X1-2", novas: ["T9"], por: "dependencia", dependidas: ["T9"] }, vistos: [] };
-  let lidas = 0;
-  const replanoB = () => (lidas++, achado);
-  // Regra estrita passa: o git nem é lido.
-  assert.equal(v.conferirRodada({ base: b, anteriores: 1, rodadaDoApproval: 1, ref: "r", replanoB }), null);
-  assert.equal(lidas, 0);
-  // B pendente (1 marca) e approval já na C (2): o re-plano grava a rodada.
-  assert.deepEqual(v.conferirRodada({ base: b, anteriores: 1, rodadaDoApproval: 2, ref: "r", replanoB }), { acao: "gravar-rodada", replano: achado.replano });
-  assert.equal(lidas, 1);
-  // Sem B pendente (k par) o re-plano não afrouxa: approval que recuou segue recusando, sem ler o git.
-  const recuou = v.conferirRodada({ base: b, anteriores: 2, rodadaDoApproval: 1, ref: "r", replanoB });
-  assert.equal(recuou.motivo, "approval-fora-do-rito");
-  assert.equal(recuou.destrava, undefined);
-  // Approval no teto segue no teto, com ou sem re-plano.
-  assert.equal(v.conferirRodada({ base: b, anteriores: 1, rodadaDoApproval: 3, ref: "r", replanoB }).motivo, "teto-de-rodadas");
-  assert.equal(v.conferirRodada({ base: b, anteriores: 3, rodadaDoApproval: 3, ref: "r", replanoB }).motivo, "teto-de-rodadas");
-  assert.equal(lidas, 1);
-  // Sem re-plano achado: a recusa de sempre, com o que destravaria e o que foi visto.
-  const sem = v.conferirRodada({ base: b, anteriores: 1, rodadaDoApproval: 2, ref: "r", replanoB: () => ({ replano: null, vistos: [{ sha: "s", motivo: "sem-task-nova" }], aviso: "x" }) });
-  assert.equal(sem.motivo, "approval-fora-do-rito");
-  assert.equal(sem.rodadaEsperada, 1);
-  assert.match(sem.destrava, /T3/);
-  assert.deepEqual(sem.replanosVistos, [{ sha: "s", motivo: "sem-task-nova" }]);
-  assert.equal(sem.aviso, "x");
-  // Sem leitor injetado: recusa igual.
-  assert.equal(v.conferirRodada({ base: b, anteriores: 1, rodadaDoApproval: 2, ref: "r" }).motivo, "approval-fora-do-rito");
-});
-
-test("replanoDaRodadaB: conta o primeiro re-plano de ruling com task nova de que o gate depende, ou que cita o gate", () => {
-  const C = "X-1-teste";
-  const ruling = (n, resto) => `${C}-F1/D-X1-${n} — re-plano de ${resto}`;
-  const c = (sha, subject, novas, depsDoGate, corpo = "") => ({ sha, subject, corpo, novas, depsDoGate });
-  const r = v.replanoDaRodadaB({
-    task: "T2",
-    ciclo: C,
-    replanos: [
-      c("a", `${C}-F1/T5 — task comum`, [], []),
-      c("b", ruling(1, "F1: só dependência"), [], ["T1"]),
-      c("d", ruling(2, "F1: T7 sem relação, T20 também"), ["T7"], ["T1"]),
-      c("e", ruling(3, "F1: consertos em T8"), ["T8", "T9"], ["T1", "T9"]),
-    ],
-  });
-  assert.deepEqual(r.replano, { sha: "e", ruling: "D-X1-3", novas: ["T8", "T9"], por: "dependencia", dependidas: ["T9"] });
-  assert.deepEqual(r.vistos, [
-    { sha: "a", motivo: "nao-e-replano-de-ruling" },
-    { sha: "b", ruling: "D-X1-1", motivo: "sem-task-nova" },
-    { sha: "d", ruling: "D-X1-2", motivo: "T2-nao-depende-nem-e-citada" },
-  ]);
-  // Plano ilegível num re-plano não conta e é dito; o seguinte ainda conta.
-  const ileg = v.replanoDaRodadaB({
-    task: "T2",
-    ciclo: C,
-    replanos: [{ ...c("x", ruling(8, "F1: x"), [], []), ilegivel: "declaracao-invalida: y" }, c("z", ruling(9, "F1: x"), ["T7"], ["T7"])],
-  });
-  assert.equal(ileg.replano.sha, "z");
-  assert.deepEqual(ileg.vistos, [{ sha: "x", ruling: "D-X1-8", motivo: "plano-ilegivel", detalhe: "declaracao-invalida: y" }]);
-  // Citação no corpo vale; T20 não é T2.
-  const cita = v.replanoDaRodadaB({ task: "T2", ciclo: C, replanos: [c("f", ruling(4, "F1: x"), ["T7"], [], "A rodada B da T2 sai na T7.")] });
-  assert.equal(cita.replano.por, "citacao");
-  const t20 = v.replanoDaRodadaB({ task: "T2", ciclo: C, replanos: [c("g", ruling(5, "F1: T20 e T21"), ["T7"], [])] });
-  assert.equal(t20.replano, null);
-  // Re-plano de outro ciclo, ou com o reconhecedor desligado (contraprova), não conta.
-  assert.equal(v.replanoDaRodadaB({ task: "T2", ciclo: "Y-2-outro", replanos: [c("h", ruling(6, "F1: x"), ["T7"], ["T7"])] }).replano, null);
-  assert.equal(v.replanoDaRodadaB({ task: "T2", ciclo: C, replanos: [c("i", ruling(7, "F1: x"), ["T7"], ["T7"])], reconhecer: () => null }).replano, null);
-});
-
-test("rodadasDasMarcas: a marca da B por re-plano conta duas; trailer da B só quando há re-plano", () => {
+test("rodadasDasMarcas: a marca antiga da B por re-plano conta duas; a marca nova não grava esse trailer", () => {
   assert.equal(v.rodadasDasMarcas([]), 0);
   assert.equal(v.rodadasDasMarcas([{ sha: "a", replanoB: null }, { sha: "b", replanoB: "x" }]), 3);
   const r = { ponta: "p", nonce: "n" };
   assert.equal(v.trailersDaRodada({ task: "T1", r, sessaoFilha: "s", rodada: "nao", rodadaDoApproval: 2 })[v.TRAILER_RODADA_B_REPLANO], undefined);
-  assert.equal(v.trailersDaRodada({ task: "T1", r, sessaoFilha: "s", rodada: "nao", rodadaDoApproval: 2, replanoB: { sha: "x" } })[v.TRAILER_RODADA_B_REPLANO], "x");
+  assert.equal(v.trailersDaRodada({ task: "T1", r, sessaoFilha: "s", rodada: "nao", rodadaDoApproval: 2 })["Conducao-Rodada-Approval"], "2");
 });
 
 test("lerApproval: verdict e rodada do frontmatter, rodada ausente conta 1", () => {

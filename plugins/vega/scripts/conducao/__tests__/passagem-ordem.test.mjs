@@ -150,7 +150,7 @@ test("a ordem completa da troca segue o esboço, na fronteira e no meio da fase"
   // No meio da fase: a herdeira leva o ordinal dentro dela, nunca a época.
   const meio = regraPassagem(ctxDe({ passagem: { ...base, aberta: { ...MARCA, fase: "F2" }, posse: DONA1, anexado: false, noMeio: new Map([["F2", 1]]) }, encerradas: ["F1"] }));
   assert.deepEqual([meio.acao, meio.nome, meio.ordinal, meio.fase], ["criar-condutora", nomeDaCondutora(CICLO, "F2", 3), 3, "F2"]);
-  assert.equal(meio.nome, `${CICLO} · F2 · 3`);
+  assert.equal(meio.nome, `${CICLO} · F2 · h3`);
 
   // Sem época legível a ordem não anda: pergunta.
   assert.equal(passo({ posse: { estado: "nao-li", motivo: "banco fora" }, anexado: false }, {}).motivo, "passagem-sem-posse");
@@ -281,7 +281,7 @@ test("sem confirmação e época parada a anterior segue dona", (t) => {
   // A anterior cria a herdeira, que traz o ramo e não chega a tomar a posse.
   const criar = a.px(a.anterior, { sessaoMaestra: "session_anterior" });
   assert.equal(criar.acao, "criar-condutora", JSON.stringify(criar));
-  assert.equal(criar.nome, `${CICLO} · F1 · 2`);
+  assert.equal(criar.nome, `${CICLO} · F1 · h2`);
   recusa(() => trazerRamo({ repo: a.herdeira, ciclo: CICLO, ...criar.trazer, nonce: "0".repeat(16) }), "trazer-ramo-recusado");
   const trazido = trazerRamo({ repo: a.herdeira, ciclo: CICLO, ...criar.trazer });
   assert.equal(trazido.ponta, em.sha, "a herdeira confere a árvore na ponta do ramo");

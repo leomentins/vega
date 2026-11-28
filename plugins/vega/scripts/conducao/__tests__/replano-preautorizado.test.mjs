@@ -114,15 +114,22 @@ function novoRepo(t, texto = PADRAO()) {
 }
 
 const T3_PUBLICA = ["- **Steps:** faz\n- **Verificação:** `echo verificacao-T3`", "- **Steps:** publica com `vercel --prod`\n- **Verificação:** `echo verificacao-T3`"];
+const T1_PUBLICA = ["- **Steps:** faz\n- **Verificação:** `echo verificacao-T1`", "- **Steps:** publica com `vercel --prod`\n- **Verificação:** `echo verificacao-T1`"];
+const T1_ADITIVA = ["- **Steps:** faz\n- **Verificação:** `echo verificacao-T1`", "- **Steps:** aplica a migration com `db-publish.mjs … db push`\n- **Publicação:** sim, aditiva\n- **Verificação:** `echo verificacao-T1`"];
 
-/** Confere a herança preautorizada e a grava pelo verbo; devolve a saída do verbo. */
-function herdarPreautorizado(r, fase, sha) {
-  const h = r.proximo();
+/** A decisão do `proximo` sobre a herança pré-autorizada, sem gravar nada. */
+function conferirHeranca(h, fase, sha) {
   assert.equal(h.acao, "herdar-autorizacao", JSON.stringify(h));
   assert.equal(h.origem, "preautorizado", JSON.stringify(h));
   assert.equal(h.fase, fase);
   assert.equal(h.ponteiro, `replano:${sha.slice(0, 8)}`);
   assert.match(h.aviso, /pré-autoriza/);
+}
+
+/** Confere a herança preautorizada e a grava pelo verbo; devolve a saída do verbo. */
+function herdarPreautorizado(r, fase, sha) {
+  const h = r.proximo();
+  conferirHeranca(h, fase, sha);
   const v = r.cli("herdar-autorizacao", fase, "--nonce", h.nonce);
   assert.equal(v.status, 0, v.stderr);
   const out = JSON.parse(v.stdout.trim());
@@ -137,60 +144,118 @@ function herdarPreautorizado(r, fase, sha) {
   return out;
 }
 
-test("re-plano que muda a classe de uma task na fase em curso reautoriza sozinho e só avisa", (t) => {
+/** O canonico com cada par `[de, para]` trocado, num commit só. */
+function replanejarVarios(r, pares, subject = `${CICLO}-F1/T3 — ajusta a T3`) {
+  let texto = readFileSync(path.join(r.dir, CAMINHO), "utf8");
+  for (const [de, para] of pares) {
+    assert.ok(texto.includes(de), de);
+    texto = texto.replace(de, para);
+  }
+  writeFileSync(path.join(r.dir, CAMINHO), texto);
+  r.g("commit", "-q", "-am", subject);
+  return r.g("rev-parse", "HEAD");
+}
+
+test("re-plano que muda a classe de uma task na fase em curso reautoriza sozinho, só avisa, e a task sensível sem sim próprio abre coberta pelo sim do ciclo", (t) => {
   const r = novoRepo(t);
   r.autorizarCiclo("F1");
-  const sha = r.replanejar(...T3_PUBLICA);
+  // A T3 passa a publicar alterando (muda de classe); a T1 passa a publicar aditiva (sensível, sem sim próprio).
+  const sha = replanejarVarios(r, [T3_PUBLICA, T1_ADITIVA]);
   herdarPreautorizado(r, "F1", sha);
   const a = r.proximo();
   assert.notEqual(a.motivo, "plano-mudou", JSON.stringify(a));
   assert.equal(a.acao, "abrir", JSON.stringify(a));
+  assert.deepEqual(a.tarefas.map((x) => [x.task, x.classe]), [["T1", "sensivel"]]);
+  assert.equal(a.cobertasPelaFase, undefined, JSON.stringify(a));
+  assert.deepEqual(a.cobertasPeloCiclo?.tasks, ["T1"]);
 });
 
-test("re-plano que acrescenta task na fase em curso reautoriza sozinho", (t) => {
-  const r = novoRepo(t);
+test("re-plano pré-autorizado: o que herda e o que segue perguntando, por tabela de casos", (t) => {
+  // Cada caso: o canonico de partida, se há sim do ciclo, o re-plano, e a decisão do `proximo`
+  // (a gravação da herança pelo verbo é a mesma em todos; prova ponta a ponta no teste acima).
+  const casos = [
+    {
+      caso: "re-plano que acrescenta task na fase em curso reautoriza sozinho",
+      replano: (r) => r.replanejar(task("T3"), task("T3") + task("T5")),
+      espera: (p, sha) => conferirHeranca(p, "F1", sha),
+    },
+    {
+      caso: "re-plano que só troca a Verificação reautoriza sozinho, sem Replano-Pergunta",
+      replano: (r) => r.replanejar("`echo verificacao-T2`", "`echo verificacao-T2-nova`"),
+      espera: (p, sha) => conferirHeranca(p, "F1", sha),
+    },
+    {
+      caso: "fase nova depois de re-plano que muda classe herda pela pré-autorização, sem autorizar-ciclo",
+      replano: (r) => {
+        for (const id of ["T1", "T2", "T3"]) r.vazio(`Conducao: ${id} conferida`, `Conducao-Task: ${id}`);
+        const sha = r.replanejar("- **Steps:** faz\n- **Verificação:** `echo verificacao-T4`", "- **Steps:** publica com `vercel --prod`\n- **Verificação:** `echo verificacao-T4`", `${CICLO}-F2/T4 — ajusta a T4`);
+        r.vazio("Conducao: F1 encerrada");
+        return sha;
+      },
+      espera: (p, sha) => conferirHeranca(p, "F2", sha),
+    },
+    {
+      caso: "sem sim do ciclo nenhum, a primeira pergunta autorizar-ciclo segue",
+      semSim: true,
+      replano: (r) => r.replanejar(...T3_PUBLICA),
+      espera: (p) => {
+        assert.equal(p.acao, "perguntar");
+        assert.equal(p.motivo, "autorizar-ciclo");
+      },
+    },
+    {
+      caso: "a restrição `replano` → pergunta do canonico devolve o re-plano à pergunta plano-mudou",
+      consentimentos: "`replano` → pergunta",
+      replano: (r) => r.replanejar(...T3_PUBLICA),
+      espera: (p) => {
+        assert.equal(p.acao, "perguntar", JSON.stringify(p));
+        assert.equal(p.motivo, "plano-mudou");
+      },
+    },
+    {
+      caso: "o re-plano que apaga a própria restrição `replano` → pergunta segue perguntando",
+      consentimentos: "`replano` → pergunta",
+      replano: (r) => {
+        r.replanejar("**Consentimentos:** `replano` → pergunta", "**Consentimentos:** `replano-sozinho` → pergunta");
+        return r.replanejar(...T3_PUBLICA);
+      },
+      espera: (p) => {
+        assert.equal(p.acao, "perguntar", JSON.stringify(p));
+        assert.equal(p.motivo, "plano-mudou");
+      },
+    },
+    {
+      caso: "tentativa trazida e não conferida na fase: o re-plano segue perguntando, com a trazida listada",
+      replano: (r) => {
+        const reg = r.g("commit-tree", r.g("rev-parse", "HEAD^{tree}"), "-p", r.g("rev-parse", "HEAD"), "-m", "Conducao: T2 tentativa 1 trazida", "-m", "Conducao-Nonce: n-traz\nConducao-Sha-Filha: 1234567");
+        r.g("update-ref", `refs/conducao-local/${CICLO}/trazida/T2/1`, reg);
+        return r.replanejar(...T3_PUBLICA);
+      },
+      espera: (p) => {
+        assert.equal(p.acao, "perguntar", JSON.stringify(p));
+        assert.equal(p.motivo, "plano-mudou");
+        assert.deepEqual(p.trazidas.map((x) => x.task), ["T2"]);
+      },
+    },
+  ];
+  assert.equal(casos.length, 7);
+  for (const c of casos) {
+    const r = novoRepo(t, PADRAO(c.consentimentos ?? null));
+    if (!c.semSim) r.autorizarCiclo("F1");
+    const sha = c.replano(r);
+    const p = r.proximo();
+    try {
+      c.espera(p, sha);
+    } catch (e) {
+      throw new Error(c.caso, { cause: e });
+    }
+  }
+});
+
+test("depois da pré-autorização a task com sim próprio pede o dela (D18a), também depois de herança de ruling gravada em cima", (t) => {
+  const r = novoRepo(t, canonico([{ id: "F1", tasks: [task("T1"), task("T2")] }]));
   r.autorizarCiclo("F1");
-  const sha = r.replanejar(task("T3"), task("T3") + task("T5"));
-  herdarPreautorizado(r, "F1", sha);
-});
-
-test("re-plano que só troca a Verificação reautoriza sozinho, sem Replano-Pergunta", (t) => {
-  const r = novoRepo(t);
-  r.autorizarCiclo("F1");
-  const sha = r.replanejar("`echo verificacao-T2`", "`echo verificacao-T2-nova`");
-  herdarPreautorizado(r, "F1", sha);
-});
-
-test("fase nova depois de re-plano que muda classe herda pela pré-autorização, sem autorizar-ciclo", (t) => {
-  const r = novoRepo(t);
-  r.autorizarCiclo("F1");
-  for (const id of ["T1", "T2", "T3"]) r.vazio(`Conducao: ${id} conferida`, `Conducao-Task: ${id}`);
-  const sha = r.replanejar("- **Steps:** faz\n- **Verificação:** `echo verificacao-T4`", "- **Steps:** publica com `vercel --prod`\n- **Verificação:** `echo verificacao-T4`", `${CICLO}-F2/T4 — ajusta a T4`);
-  r.vazio("Conducao: F1 encerrada");
-  herdarPreautorizado(r, "F2", sha);
-});
-
-test("sem sim do ciclo nenhum, a primeira pergunta autorizar-ciclo segue", (t) => {
-  const r = novoRepo(t);
-  r.replanejar(...T3_PUBLICA);
-  const p = r.proximo();
-  assert.equal(p.acao, "perguntar");
-  assert.equal(p.motivo, "autorizar-ciclo");
-});
-
-test("a restrição `replano` → pergunta do canonico devolve o re-plano à pergunta plano-mudou", (t) => {
-  const r = novoRepo(t, PADRAO("`replano` → pergunta"));
-  r.autorizarCiclo("F1");
-  r.replanejar(...T3_PUBLICA);
-  const p = r.proximo();
-  assert.equal(p.acao, "perguntar", JSON.stringify(p));
-  assert.equal(p.motivo, "plano-mudou");
-});
-
-test("depois da pré-autorização a task que passou a publicar alterando o existente pede o sim dela (D18a)", (t) => {
-  const r = novoRepo(t, canonico([{ id: "F1", tasks: [task("T1")] }]));
-  r.autorizarCiclo("F1");
-  const sha = r.replanejar("- **Steps:** faz\n- **Verificação:** `echo verificacao-T1`", "- **Steps:** publica com `vercel --prod`\n- **Verificação:** `echo verificacao-T1`", `${CICLO}-F1/T1 — ajusta a T1`);
+  const sha = r.replanejar(...T1_PUBLICA, `${CICLO}-F1/T1 — ajusta a T1`);
   herdarPreautorizado(r, "F1", sha);
   // A herança pré-autorizada cobre como o sim do ciclo, não como o da fase: a task com sim próprio
   // (publicação que altera) segue pedindo o dela, uma vez por task.
@@ -198,51 +263,6 @@ test("depois da pré-autorização a task que passou a publicar alterando o exis
   assert.equal(p.acao, "perguntar", JSON.stringify(p));
   assert.equal(p.motivo, "task-sensivel");
   assert.equal(p.porque, "publicacao-que-altera");
-});
-
-test("depois da pré-autorização a task sensível sem sim próprio abre coberta pelo sim do ciclo", (t) => {
-  const r = novoRepo(t, canonico([{ id: "F1", tasks: [task("T1")] }]));
-  r.autorizarCiclo("F1");
-  const sha = r.replanejar("- **Steps:** faz\n- **Verificação:** `echo verificacao-T1`", "- **Steps:** aplica a migration com `db-publish.mjs … db push`\n- **Publicação:** sim, aditiva\n- **Verificação:** `echo verificacao-T1`", `${CICLO}-F1/T1 — ajusta a T1`);
-  herdarPreautorizado(r, "F1", sha);
-  const a = r.proximo();
-  assert.equal(a.acao, "abrir", JSON.stringify(a));
-  assert.deepEqual(a.tarefas.map((x) => [x.task, x.classe]), [["T1", "sensivel"]]);
-  assert.equal(a.cobertasPelaFase, undefined, JSON.stringify(a));
-  assert.deepEqual(a.cobertasPeloCiclo?.tasks, ["T1"]);
-});
-
-// ── achados da revisão (silent-failure-hunter, typescript-reviewer) ─────────
-
-test("o re-plano que apaga a própria restrição `replano` → pergunta segue perguntando", (t) => {
-  const r = novoRepo(t, PADRAO("`replano` → pergunta"));
-  r.autorizarCiclo("F1");
-  r.replanejar("**Consentimentos:** `replano` → pergunta", "**Consentimentos:** `replano-sozinho` → pergunta");
-  const atual = readFileSync(path.join(r.dir, CAMINHO), "utf8");
-  writeFileSync(path.join(r.dir, CAMINHO), atual.replace(T3_PUBLICA[0], T3_PUBLICA[1]));
-  r.g("commit", "-q", "-am", `${CICLO}-F1/T3 — ajusta a T3`);
-  const p = r.proximo();
-  assert.equal(p.acao, "perguntar", JSON.stringify(p));
-  assert.equal(p.motivo, "plano-mudou");
-});
-
-test("tentativa trazida e não conferida na fase: o re-plano segue perguntando, com a trazida listada", (t) => {
-  const r = novoRepo(t);
-  r.autorizarCiclo("F1");
-  const reg = r.g("commit-tree", r.g("rev-parse", "HEAD^{tree}"), "-p", r.g("rev-parse", "HEAD"), "-m", "Conducao: T2 tentativa 1 trazida", "-m", "Conducao-Nonce: n-traz\nConducao-Sha-Filha: 1234567");
-  r.g("update-ref", `refs/conducao-local/${CICLO}/trazida/T2/1`, reg);
-  r.replanejar(...T3_PUBLICA);
-  const p = r.proximo();
-  assert.equal(p.acao, "perguntar", JSON.stringify(p));
-  assert.equal(p.motivo, "plano-mudou");
-  assert.deepEqual(p.trazidas.map((x) => x.task), ["T2"]);
-});
-
-test("herança sozinha ou de ruling gravada depois da pré-autorizada não devolve a cobertura da fase", (t) => {
-  const r = novoRepo(t, canonico([{ id: "F1", tasks: [task("T1"), task("T2")] }]));
-  r.autorizarCiclo("F1");
-  const sha = r.replanejar("- **Steps:** faz\n- **Verificação:** `echo verificacao-T1`", "- **Steps:** publica com `vercel --prod`\n- **Verificação:** `echo verificacao-T1`", `${CICLO}-F1/T1 — ajusta a T1`);
-  herdarPreautorizado(r, "F1", sha);
   // Re-plano de ruling que não muda classe: herda pelo ruling, apontando o mesmo sim do ciclo.
   r.replanejar("- **Inputs:** `README.md`\n- **Outputs:** `src/t2.mjs`", "- **Inputs:** T1\n- **Outputs:** `src/t2.mjs`", `${CICLO}-F1/D-TESTE1-7 — re-plano de T2: depende da T1`);
   const h = r.proximo();
@@ -250,7 +270,8 @@ test("herança sozinha ou de ruling gravada depois da pré-autorizada não devol
   assert.equal(h.origem, "replano", "a segunda herança é a do ruling, apontando o mesmo sim");
   const v = r.cli("herdar-autorizacao", "F1", "--nonce", h.nonce);
   assert.equal(v.status, 0, v.stderr);
-  const p = r.proximo();
-  assert.equal(p.acao, "perguntar", JSON.stringify(p));
-  assert.equal(p.motivo, "task-sensivel", "a T1 de sim próprio, nascida no re-plano pré-autorizado, segue pedindo o dela");
+  // A herança de ruling gravada depois da pré-autorizada não devolve a cobertura da fase.
+  const q = r.proximo();
+  assert.equal(q.acao, "perguntar", JSON.stringify(q));
+  assert.equal(q.motivo, "task-sensivel", "a T1 de sim próprio, nascida no re-plano pré-autorizado, segue pedindo o dela");
 });

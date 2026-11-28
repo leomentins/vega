@@ -245,22 +245,17 @@ test("um não seguido de um sim: o não abre a rodada nova, o sim fecha pela con
   assert.notEqual(a.proximo().task, "T1");
 });
 
-test("o 3º não pergunta ao operador e não abre a 4ª rodada", (t) => {
+test("sem teto: o 3º não e os seguintes gravam rodada, e o laço abre a tentativa seguinte", (t) => {
   const a = ambiente(t, [CELULAR]);
   a.ok("autorizar-ciclo", "F1", "--sim", "sim", "--pergunta", "p-00000000000000a1");
-  for (const n of [1, 2]) {
+  for (const n of [1, 2, 3, 4]) {
     a.abrirPeloProximo("T1", n);
     a.maquina("T1", n, { "src/t1.mjs": `export const t1 = ${n};\n` });
     a.ok("registrar-conferencia", "T1", "--rodada", "nao", "--operador", `não, rodada ${n}`);
   }
-  a.abrirPeloProximo("T1", 3);
-  a.maquina("T1", 3, { "src/t1.mjs": "export const t1 = 3;\n" });
-  const teto = a.pergunta("registrar-conferencia", "T1", "--rodada", "nao", "--operador", "não de novo");
-  assert.equal(teto.motivo, "teto-de-rodadas");
-  assert.equal(teto.rodadasRegistradas, 2);
-  assert.equal(a.marcas().filter((m) => /rodada$/.test(m)).length, 2);
-  // O laço não abre a 4ª: a trazida segue esperando o operador.
-  assert.equal(a.proximo().motivo, "conferencia-do-operador");
+  assert.equal(a.marcas().filter((m) => /rodada$/.test(m)).length, 4);
+  // A 5ª abre: o gate segue até o operador dizer sim.
+  a.abrirPeloProximo("T1", 5);
 });
 
 test("o caso do /gate-de-ux passa pelo mesmo caminho: o não do approval abre rodada por --rodada nao, o sim fecha", (t) => {

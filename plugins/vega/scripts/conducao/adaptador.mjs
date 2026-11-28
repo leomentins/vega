@@ -93,6 +93,7 @@ import { createRequire } from "node:module";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { tentarGit } from "./git-exec.mjs";
 import * as logEventos from "./log-eventos.mjs";
 import * as vega from "../vega/declaracao.mjs";
 
@@ -391,8 +392,9 @@ export const ramoDaConducao = (ciclo) => `conducao/${ciclo}`;
 export function modoDoCiclo(repo, ciclo) {
   // A declaração mora na raiz da árvore: `--repo` numa subpasta lê a mesma. Declaração que não se lê
   // lança, como em todo verbo que a lê: cair calado no modo com ramo esconderia o `semRamo` declarado.
-  const r = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd: repo, encoding: "utf8" });
-  const raiz = r.status === 0 && r.stdout.trim() ? r.stdout.trim() : repo;
+  // Pelo executor (memoria por processo, D4a): a raiz nao muda enquanto o comando roda.
+  const r = tentarGit(repo, ["rev-parse", "--show-toplevel"]);
+  const raiz = r.status === 0 && r.saida ? r.saida : repo;
   if (!vega.existe(raiz) && !existsSync(path.join(raiz, ARQUIVO))) return Object.freeze({ semRamo: false, principal: null, ramo: null });
   const decl = lerAdaptador(raiz);
   const achado = (decl.semRamo ?? []).find((c) => c.ciclo === ciclo);
@@ -707,7 +709,7 @@ function funcao(v, onde) {
 }
 
 const OBRIGATORIOS_DO_CODIGO = Object.freeze(["plano", "publicacao", "caminhosProtegidos", "telasProtegidasDosSteps", "foraDasTelasDosSteps", "carimbo", "ci"]);
-const OPCIONAIS_DO_CODIGO = Object.freeze(["marcasDeRodadas", "alcanceDosHooks", "fechamentoDoCiclo", "capacidade", "esperandoAVez", "caminhosQuePerguntam", "respostasDasParadas", "definemAParada", "etapasDoPlanejamento"]);
+const OPCIONAIS_DO_CODIGO = Object.freeze(["marcasDeRodadas", "alcanceDosHooks", "fechamentoDoCiclo", "capacidade", "esperandoAVez", "caminhosQuePerguntam", "respostasDasParadas", "definemAParada", "etapasDoPlanejamento", "derivadoDaTask"]);
 // Nome antigo → nome novo (HN-29 T41): lido até a migração dos adaptadores na F5.
 const NOMES_ANTIGOS_DO_CODIGO = Object.freeze([
   ["caminhosClinicos", "caminhosProtegidos"],
@@ -760,7 +762,12 @@ function comNomesNovos(c, onde) {
  * `define-a-parada`); `etapasDoPlanejamento` (hotfix conducao-pedido-da-etapa,
  * 23/11/2026: as etapas do planejamento que nascem cada uma na sua sessão,
  * em ordem, `[{ id, comando, tier, saida, rodadas? }]` — o verbo `etapa`
- * monta o pedido de nascimento delas; default `[]`, e o verbo recusa).
+ * monta o pedido de nascimento delas; default `[]`, e o verbo recusa);
+ * `derivadoDaTask` (hotfix vega-digital-do-mapa-de-telas, 27/11/2026: a
+ * função `({ repo, caminho, antes, depois, caminhos }) => boolean` que diz se
+ * um caminho clínico trazido fora dos Outputs só acompanha o que a faixa
+ * mudou — `true` e o `trazer` não pergunta por ele; default `null`, e todo
+ * caminho clínico fora dos Outputs pergunta).
  * Ausente vale o default; presente com tipo errado recusa.
  * Nome antigo de campo (`NOMES_ANTIGOS_DO_CODIGO`) carrega com aviso (`comNomesNovos`).
  */
@@ -799,6 +806,7 @@ export function validarCodigo(bruto, onde = "código do adaptador") {
   const esperandoAVez = c.esperandoAVez === undefined ? null : funcao(c.esperandoAVez, `${onde}.esperandoAVez`);
   const respostasDasParadas = c.respostasDasParadas === undefined ? null : funcao(c.respostasDasParadas, `${onde}.respostasDasParadas`);
   const definemAParada = c.definemAParada === undefined ? null : lista(c.definemAParada, `${onde}.definemAParada`);
+  const derivadoDaTask = c.derivadoDaTask === undefined ? null : funcao(c.derivadoDaTask, `${onde}.derivadoDaTask`);
   const etapasDoPlanejamento = c.etapasDoPlanejamento === undefined ? Object.freeze([]) : etapas(c.etapasDoPlanejamento, `${onde}.etapasDoPlanejamento`);
   const caminhosProtegidos = lista(c.caminhosProtegidos, `${onde}.caminhosProtegidos`);
   const caminhosQuePerguntam = c.caminhosQuePerguntam === undefined ? caminhosProtegidos : lista(c.caminhosQuePerguntam, `${onde}.caminhosQuePerguntam`);
@@ -819,6 +827,7 @@ export function validarCodigo(bruto, onde = "código do adaptador") {
     respostasDasParadas,
     definemAParada,
     etapasDoPlanejamento,
+    derivadoDaTask,
   });
 }
 

@@ -6,7 +6,8 @@
  * gerada não ocupa vaga no `proximo`, e no `trazer` o conflito só nela vira
  * regeneração pelo comando declarado e commit. Plano e repositório de mentira: origin
  * bare, árvore da maestra no ramo do ciclo com a declaração do projeto de teste levada
- * para o `.vega/`, e o clone da filha; hooks desligados (core.hooksPath=/dev/null).
+ * para o `.vega/`, e o clone da filha; hooks desligados (core.hooksPath=/dev/null). Os casos
+ * do `trazer` rodam cada um numa cópia de uma base já autorizada, com as duas abertas e a T1 trazida (D3a).
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -80,6 +81,7 @@ function canonico(tasks) {
 }
 
 const TASKS = [task("T1", ["src/t1.mjs", GERADA]), task("T2", ["src/t2.mjs", GERADA])];
+const SAIDAS = [{ caminho: GERADA, comando: "node gerar.mjs" }];
 
 /** A declaração do projeto de teste no `.vega/` do repositório, com as saídas geradas pedidas. */
 function declarar(dir, saidas) {
@@ -116,12 +118,10 @@ function escreverEm(dir, arquivos) {
   }
 }
 
-function ambiente(t, { saidas = [{ caminho: GERADA, comando: "node gerar.mjs" }] } = {}) {
-  const raiz = pastaTemporaria("conducao-geradas-");
-  t.after(() => rmSync(raiz, { recursive: true, force: true }));
+/** Origin bare, maestra no ramo do ciclo com a declaração pedida, e o clone da filha, sob `raiz`. */
+function montar(raiz, saidas) {
   const origin = path.join(raiz, "origin.git");
   execFileSync("git", ["init", "-q", "--bare", origin]);
-
   const maestra = path.join(raiz, "maestra");
   mkdirSync(maestra);
   const g = gitEm(maestra);
@@ -142,12 +142,17 @@ function ambiente(t, { saidas = [{ caminho: GERADA, comando: "node gerar.mjs" }]
   // Ciclo de 2 níveis declarado: sem a marca, o núcleo roda em 3 (D10c do L4).
   g("commit", "-q", "--allow-empty", "-m", "Conducao: ciclo niveis 2", "-m", "Conducao-Niveis: 2");
   g("push", "-q", "origin", "ciclo-teste");
-
   const filha = path.join(raiz, "filha");
   execFileSync("git", ["clone", "-q", origin, filha]);
-  const f = gitEm(filha);
-  configurar(f);
+  configurar(gitEm(filha));
+}
 
+/** Os verbos sobre o repositório já montado em `raiz` (o original ou uma cópia). */
+function operar(raiz) {
+  const maestra = path.join(raiz, "maestra");
+  const filha = path.join(raiz, "filha");
+  const g = gitEm(maestra);
+  const f = gitEm(filha);
   const cli = (...args) => {
     const r = spawnSync(process.execPath, [SCRIPT, ...args, "--repo", maestra, "--ciclo", CICLO], {
       encoding: "utf8",
@@ -175,18 +180,39 @@ function ambiente(t, { saidas = [{ caminho: GERADA, comando: "node gerar.mjs" }]
     f("push", "-q", "origin", `HEAD:${ref}`);
     return f("rev-parse", "HEAD");
   };
-
-  ok("autorizar-ciclo", "F1", "--sim", "sim, pode tocar a F1", "--pergunta", "p-00000000000000a1");
   return { maestra, g, cli, ok, filhaTrabalha };
 }
 
-/** As duas tasks abertas, cada filha mexendo na própria fonte e na saída gerada. */
-function duasEmConflitoNaGerada(a, { extraT2 = {} } = {}) {
-  a.ok("abrir", "T1", "--tentativa", "1", "--nonce", "nonceT11", "--modo-maestra", "auto");
-  a.ok("abrir", "T2", "--tentativa", "1", "--nonce", "nonceT21", "--modo-maestra", "auto");
-  a.filhaTrabalha("T1", { "src/t1.mjs": "export const t1 = 1;\n", [GERADA]: "à mão pela T1\n" });
-  a.filhaTrabalha("T2", { "src/t2.mjs": "export const t2 = 2;\n", [GERADA]: "à mão pela T2\n", ...extraT2 });
-  a.ok("trazer", "T1", "--tentativa", "1", "--sessao", "s1");
+function ambiente(t, { saidas = SAIDAS } = {}) {
+  const raiz = pastaTemporaria("conducao-geradas-");
+  t.after(() => rmSync(raiz, { recursive: true, force: true }));
+  montar(raiz, saidas);
+  const a = operar(raiz);
+  a.ok("autorizar-ciclo", "F1", "--sim", "sim, pode tocar a F1", "--pergunta", "p-00000000000000a1");
+  return { ...a, raiz };
+}
+
+/**
+ * Cópia do repositório da `base` (origin, maestra e filha) para um caso da tabela: o origin vai
+ * com caminho absoluto na config da maestra e da filha, e é reapontado para o da cópia.
+ */
+function copiar(t, base) {
+  const raiz = pastaTemporaria("conducao-geradas-caso-");
+  t.after(() => rmSync(raiz, { recursive: true, force: true }));
+  execFileSync("cp", ["-a", `${base.raiz}/.`, raiz]);
+  const origin = path.join(raiz, "origin.git");
+  for (const d of ["maestra", "filha"]) gitEm(path.join(raiz, d))("remote", "set-url", "origin", origin);
+  return operar(raiz);
+}
+
+/** A maestra troca as `saidas_geradas` da declaração num commit seu (`null` tira o campo). */
+function redeclarar(a, saidas) {
+  const arq = path.join(a.maestra, ".vega", "declaracao.json");
+  const decl = JSON.parse(readFileSync(arq, "utf8"));
+  if (saidas) decl.saidas_geradas = saidas;
+  else delete decl.saidas_geradas;
+  writeFileSync(arq, `${JSON.stringify(decl, null, 2)}\n`);
+  a.g("commit", "-q", "-am", "declaracao do caso");
 }
 
 // ── a decisão pura ──────────────────────────────────────────────────────────
@@ -205,13 +231,6 @@ test("conflitoSoEmGeradas: só quando todo caminho em conflito é saída gerada 
 
 // ── vaga ────────────────────────────────────────────────────────────────────
 
-test("proximo abre juntas as tasks que só dividem saída gerada declarada", (t) => {
-  const a = ambiente(t);
-  const p = a.ok("proximo", "--entrada", "{}");
-  assert.equal(p.acao, "abrir", JSON.stringify(p));
-  assert.deepEqual(p.tarefas.map((x) => x.task), ["T1", "T2"]);
-});
-
 test("contraprova: sem a saída declarada, o Output em comum serializa as tasks", (t) => {
   const a = ambiente(t, { saidas: null });
   const p = a.ok("proximo", "--entrada", "{}");
@@ -219,123 +238,146 @@ test("contraprova: sem a saída declarada, o Output em comum serializa as tasks"
   assert.deepEqual(p.tarefas.map((x) => x.task), ["T1"]);
 });
 
-test("a saída gerada em voo não ocupa a vaga da pronta", (t) => {
-  const a = ambiente(t);
-  a.ok("abrir", "T1", "--tentativa", "1", "--nonce", "nonceT11", "--modo-maestra", "auto");
-  const p = a.ok("proximo", "--entrada", JSON.stringify({ filhas: [{ sessao: "s1", task: "T1", tentativa: 1, nonce: "nonceT11", estado: "RUNNING" }] }));
-  assert.equal(p.acao, "abrir", JSON.stringify(p));
-  assert.deepEqual(p.tarefas.map((x) => x.task), ["T2"]);
-});
+// ── trazer, por tabela de casos sobre uma base ─────────────────────────────
 
-// ── trazer ──────────────────────────────────────────────────────────────────
+// A saída que a T1 deixa é a regerada das fontes depois dela: um commit da T2 que só mexa na
+// saída regera igual ao HEAD e sai vazio. O README da T1 é o "outro caminho" de um caso.
+const GERADA_DA_T1 = "gerado\nexport const t1 = 1;\nexport const t2 = 0;\n";
 
-test("trazer: conflito só na saída gerada é regerado pelo comando declarado e vira commit", (t) => {
-  const a = ambiente(t);
-  duasEmConflitoNaGerada(a);
-  const antes = a.g("rev-parse", "HEAD");
-  const s = a.ok("trazer", "T2", "--tentativa", "1", "--sessao", "s2");
-  assert.equal(s.acao, "trazida", JSON.stringify(s));
-  assert.equal(s.modo, "cherry-pick");
-  assert.deepEqual(s.regeneradas, [{ caminho: GERADA, comando: "node gerar.mjs" }]);
-  assert.equal(a.g("rev-parse", "HEAD^"), antes, "um commit, o da T2");
-  assert.match(a.g("log", "-1", "--format=%s"), /T2 — trabalho/);
-  assert.equal(a.g("show", `HEAD:${GERADA}`), "gerado\nexport const t1 = 1;\nexport const t2 = 2;");
-  assert.equal(a.g("show", "HEAD:src/t2.mjs"), "export const t2 = 2;");
-  assert.equal(a.g("status", "--porcelain"), "");
-});
+/**
+ * Cada caso parte de uma cópia da base (as duas tasks abertas, a T1 trazida), troca as
+ * `saidas_geradas` da maestra se pedir (`saidas`, `null` tira o campo), deixa a T2 trabalhar
+ * (`t2`: um objeto por commit) e traz a T2. `espera(a, r, head)` recebe o retorno do `trazer` e o
+ * HEAD de antes dele.
+ */
+const CASOS = [
+  {
+    nome: "conflito só na saída gerada é regerado pelo comando declarado e vira commit",
+    t2: () => [{ "src/t2.mjs": "export const t2 = 2;\n", [GERADA]: "à mão pela T2\n" }],
+    espera: (a, r, head) => {
+      assert.equal(r.status, 0, r.linhas.join("\n"));
+      const s = r.saida;
+      assert.equal(s.acao, "trazida", JSON.stringify(s));
+      assert.equal(s.modo, "cherry-pick");
+      assert.deepEqual(s.regeneradas, [{ caminho: GERADA, comando: "node gerar.mjs" }]);
+      assert.equal(a.g("rev-parse", "HEAD^"), head, "um commit, o da T2");
+      assert.match(a.g("log", "-1", "--format=%s"), /T2 — trabalho/);
+      assert.equal(a.g("show", `HEAD:${GERADA}`), "gerado\nexport const t1 = 1;\nexport const t2 = 2;");
+      assert.equal(a.g("show", "HEAD:src/t2.mjs"), "export const t2 = 2;");
+      assert.equal(a.g("status", "--porcelain"), "");
+    },
+  },
+  {
+    nome: "conflito na saída gerada e em outro caminho segue sendo pergunta",
+    t2: () => [{ "src/t2.mjs": "export const t2 = 2;\n", [GERADA]: "T2\n", "README.md": "T2\n" }],
+    espera: (a, r, head) => {
+      assert.equal(r.status, 1, r.linhas.join("\n"));
+      assert.equal(r.saida.motivo, "conflito");
+      assert.deepEqual([...r.saida.conflitos].sort(), ["README.md", GERADA].sort());
+      assert.equal(r.saida.abortado, true);
+      assert.equal(a.g("rev-parse", "HEAD"), head);
+      assert.equal(a.g("status", "--porcelain"), "");
+    },
+  },
+  {
+    nome: "comando de regeneração que falha aborta e pergunta",
+    saidas: [{ caminho: GERADA, comando: "node -e 'process.exit(3)'" }],
+    t2: () => [{ "src/t2.mjs": "export const t2 = 2;\n", [GERADA]: "à mão pela T2\n" }],
+    espera: (a, r, head) => {
+      assert.equal(r.status, 1, r.linhas.join("\n"));
+      assert.equal(r.saida.motivo, "conflito");
+      assert.match(r.saida.detalhe, /saiu 3/);
+      assert.equal(a.g("rev-parse", "HEAD"), head);
+      assert.equal(a.g("status", "--porcelain"), "");
+    },
+  },
+  {
+    nome: "faixa de dois commits em conflito na gerada regera cada um e segue o cherry-pick",
+    t2: () => [
+      { "src/t2.mjs": "export const t2 = 2;\n", [GERADA]: "T2 a\n" },
+      { "src/t2.mjs": "export const t2 = 3;\n", [GERADA]: "T2 b\n" },
+    ],
+    espera: (a, r, head) => {
+      assert.equal(r.status, 0, r.linhas.join("\n"));
+      assert.deepEqual(r.saida.regeneradas, [{ caminho: GERADA, comando: "node gerar.mjs" }]);
+      assert.equal(a.g("rev-parse", "HEAD~2"), head, "os dois commits da T2");
+      assert.equal(a.g("show", `HEAD~1:${GERADA}`), "gerado\nexport const t1 = 1;\nexport const t2 = 2;");
+      assert.equal(a.g("show", `HEAD:${GERADA}`), "gerado\nexport const t1 = 1;\nexport const t2 = 3;");
+      assert.equal(a.g("status", "--porcelain"), "");
+    },
+  },
+  {
+    nome: "regeneração igual ao HEAD esvazia o commit, que sai da faixa (puladas)",
+    t2: () => [{ [GERADA]: "à mão pela T2\n" }],
+    espera: (a, r, head) => {
+      assert.equal(r.status, 0, r.linhas.join("\n"));
+      assert.deepEqual(r.saida.regeneradas, [{ caminho: GERADA, comando: "node gerar.mjs" }]);
+      assert.equal(r.saida.puladas.length, 1, "o commit da T2 ficou vazio e saiu da faixa");
+      assert.equal(a.g("rev-parse", "HEAD"), head);
+      assert.equal(a.g("status", "--porcelain"), "");
+    },
+  },
+  {
+    nome: "gerador que suja outro arquivo aborta e pergunta, nomeando o arquivo",
+    saidas: [{ caminho: GERADA, comando: "node gerar.mjs && echo sujo > README.md" }],
+    t2: () => [{ "src/t2.mjs": "export const t2 = 2;\n", [GERADA]: "à mão pela T2\n" }],
+    espera: (a, r, head) => {
+      assert.equal(r.status, 1, r.linhas.join("\n"));
+      assert.equal(r.saida.motivo, "conflito");
+      assert.match(r.saida.detalhe, /fora do índice: README\.md/);
+      assert.equal(a.g("rev-parse", "HEAD"), head);
+    },
+  },
+  {
+    nome: "o comando é o da declaração do HEAD da maestra, não o que a filha trouxe",
+    // A filha tocou o `.vega/` (superfície de instrução): o trazer pede o sim pelo sha, e com ele traz.
+    aprovar: true,
+    t2: (a) => {
+      const decl = JSON.parse(readFileSync(path.join(a.maestra, ".vega", "declaracao.json"), "utf8"));
+      decl.saidas_geradas = [{ caminho: GERADA, comando: "node -e 'process.exit(7)'" }];
+      return [{ ".vega/declaracao.json": JSON.stringify(decl), "src/t2.mjs": "export const t2 = 2;\n", [GERADA]: "T2\n" }];
+    },
+    espera: (a, r) => {
+      assert.equal(r.status, 0, r.linhas.join("\n"));
+      assert.deepEqual(r.saida.regeneradas, [{ caminho: GERADA, comando: "node gerar.mjs" }]);
+    },
+  },
+  {
+    nome: "contraprova: sem a saída declarada, o conflito nela é pergunta",
+    saidas: null,
+    t2: () => [{ "src/t2.mjs": "export const t2 = 2;\n", [GERADA]: "à mão pela T2\n" }],
+    espera: (a, r) => {
+      assert.equal(r.status, 1, r.linhas.join("\n"));
+      assert.equal(r.saida.motivo, "conflito");
+    },
+  },
+];
 
-test("trazer: conflito na saída gerada e em outro caminho segue sendo pergunta", (t) => {
-  const a = ambiente(t);
-  a.ok("abrir", "T1", "--tentativa", "1", "--nonce", "nonceT11", "--modo-maestra", "auto");
-  a.ok("abrir", "T2", "--tentativa", "1", "--nonce", "nonceT21", "--modo-maestra", "auto");
-  a.filhaTrabalha("T1", { "src/t1.mjs": "export const t1 = 1;\n", [GERADA]: "T1\n", "README.md": "T1\n" });
-  a.filhaTrabalha("T2", { "src/t2.mjs": "export const t2 = 2;\n", [GERADA]: "T2\n", "README.md": "T2\n" });
-  a.ok("trazer", "T1", "--tentativa", "1", "--sessao", "s1");
-  const head = a.g("rev-parse", "HEAD");
-  const r = a.cli("trazer", "T2", "--tentativa", "1", "--sessao", "s2");
-  assert.equal(r.status, 1, r.linhas.join("\n"));
-  assert.equal(r.saida.motivo, "conflito");
-  assert.deepEqual([...r.saida.conflitos].sort(), ["README.md", GERADA].sort());
-  assert.equal(r.saida.abortado, true);
-  assert.equal(a.g("rev-parse", "HEAD"), head);
-  assert.equal(a.g("status", "--porcelain"), "");
-});
+test("saída gerada: a vaga e o trazer, por tabela de casos sobre uma base", async (t) => {
+  const base = ambiente(t);
+  await t.test("vaga: proximo abre juntas as tasks que só dividem saída gerada declarada", () => {
+    const p = base.ok("proximo", "--entrada", "{}");
+    assert.equal(p.acao, "abrir", JSON.stringify(p));
+    assert.deepEqual(p.tarefas.map((x) => x.task), ["T1", "T2"]);
+  });
+  base.ok("abrir", "T1", "--tentativa", "1", "--nonce", "nonceT11", "--modo-maestra", "auto");
+  await t.test("vaga: a saída gerada em voo não ocupa a vaga da pronta", () => {
+    const p = base.ok("proximo", "--entrada", JSON.stringify({ filhas: [{ sessao: "s1", task: "T1", tentativa: 1, nonce: "nonceT11", estado: "RUNNING" }] }));
+    assert.equal(p.acao, "abrir", JSON.stringify(p));
+    assert.deepEqual(p.tarefas.map((x) => x.task), ["T2"]);
+  });
+  base.ok("abrir", "T2", "--tentativa", "1", "--nonce", "nonceT21", "--modo-maestra", "auto");
+  base.filhaTrabalha("T1", { "src/t1.mjs": "export const t1 = 1;\n", [GERADA]: GERADA_DA_T1, "README.md": "T1\n" });
+  base.ok("trazer", "T1", "--tentativa", "1", "--sessao", "s1");
 
-test("trazer: comando de regeneração que falha aborta e pergunta", (t) => {
-  const a = ambiente(t, { saidas: [{ caminho: GERADA, comando: "node -e 'process.exit(3)'" }] });
-  duasEmConflitoNaGerada(a);
-  const head = a.g("rev-parse", "HEAD");
-  const r = a.cli("trazer", "T2", "--tentativa", "1", "--sessao", "s2");
-  assert.equal(r.status, 1, r.linhas.join("\n"));
-  assert.equal(r.saida.motivo, "conflito");
-  assert.match(r.saida.detalhe, /saiu 3/);
-  assert.equal(a.g("rev-parse", "HEAD"), head);
-  assert.equal(a.g("status", "--porcelain"), "");
-});
-
-test("trazer: faixa de dois commits em conflito na gerada regera cada um e segue o cherry-pick", (t) => {
-  const a = ambiente(t);
-  a.ok("abrir", "T1", "--tentativa", "1", "--nonce", "nonceT11", "--modo-maestra", "auto");
-  a.ok("abrir", "T2", "--tentativa", "1", "--nonce", "nonceT21", "--modo-maestra", "auto");
-  a.filhaTrabalha("T1", [{ "src/t1.mjs": "export const t1 = 1;\n", [GERADA]: "T1\n" }]);
-  a.filhaTrabalha("T2", [
-    { "src/t2.mjs": "export const t2 = 2;\n", [GERADA]: "T2 a\n" },
-    { "src/t2.mjs": "export const t2 = 3;\n", [GERADA]: "T2 b\n" },
-  ]);
-  a.ok("trazer", "T1", "--tentativa", "1", "--sessao", "s1");
-  const antes = a.g("rev-parse", "HEAD");
-  const s = a.ok("trazer", "T2", "--tentativa", "1", "--sessao", "s2");
-  assert.deepEqual(s.regeneradas, [{ caminho: GERADA, comando: "node gerar.mjs" }]);
-  assert.equal(a.g("rev-parse", "HEAD~2"), antes, "os dois commits da T2");
-  assert.equal(a.g("show", `HEAD~1:${GERADA}`), "gerado\nexport const t1 = 1;\nexport const t2 = 2;");
-  assert.equal(a.g("show", `HEAD:${GERADA}`), "gerado\nexport const t1 = 1;\nexport const t2 = 3;");
-  assert.equal(a.g("status", "--porcelain"), "");
-});
-
-test("trazer: regeneração igual ao HEAD esvazia o commit, que sai da faixa (puladas)", (t) => {
-  const a = ambiente(t);
-  a.ok("abrir", "T1", "--tentativa", "1", "--nonce", "nonceT11", "--modo-maestra", "auto");
-  a.ok("abrir", "T2", "--tentativa", "1", "--nonce", "nonceT21", "--modo-maestra", "auto");
-  a.filhaTrabalha("T1", [{ [GERADA]: "gerado\nexport const t1 = 0;\nexport const t2 = 0;\n" }]);
-  a.filhaTrabalha("T2", [{ [GERADA]: "à mão pela T2\n" }]);
-  a.ok("trazer", "T1", "--tentativa", "1", "--sessao", "s1");
-  const antes = a.g("rev-parse", "HEAD");
-  const s = a.ok("trazer", "T2", "--tentativa", "1", "--sessao", "s2");
-  assert.deepEqual(s.regeneradas, [{ caminho: GERADA, comando: "node gerar.mjs" }]);
-  assert.equal(s.puladas.length, 1, "o commit da T2 ficou vazio e saiu da faixa");
-  assert.equal(a.g("rev-parse", "HEAD"), antes);
-  assert.equal(a.g("status", "--porcelain"), "");
-});
-
-test("trazer: gerador que suja outro arquivo aborta e pergunta, nomeando o arquivo", (t) => {
-  const a = ambiente(t, { saidas: [{ caminho: GERADA, comando: "node gerar.mjs && echo sujo > README.md" }] });
-  duasEmConflitoNaGerada(a);
-  const head = a.g("rev-parse", "HEAD");
-  const r = a.cli("trazer", "T2", "--tentativa", "1", "--sessao", "s2");
-  assert.equal(r.status, 1, r.linhas.join("\n"));
-  assert.equal(r.saida.motivo, "conflito");
-  assert.match(r.saida.detalhe, /fora do índice: README\.md/);
-  assert.equal(a.g("rev-parse", "HEAD"), head);
-});
-
-test("trazer: o comando é o da declaração do HEAD da maestra, não o que a filha trouxe", (t) => {
-  const a = ambiente(t);
-  a.ok("abrir", "T1", "--tentativa", "1", "--nonce", "nonceT11", "--modo-maestra", "auto");
-  a.ok("abrir", "T2", "--tentativa", "1", "--nonce", "nonceT21", "--modo-maestra", "auto");
-  a.filhaTrabalha("T1", [{ "src/t1.mjs": "export const t1 = 1;\n", [GERADA]: "T1\n" }]);
-  const decl = JSON.parse(readFileSync(path.join(a.maestra, ".vega", "declaracao.json"), "utf8"));
-  decl.saidas_geradas = [{ caminho: GERADA, comando: "node -e 'process.exit(7)'" }];
-  const ponta = a.filhaTrabalha("T2", [{ ".vega/declaracao.json": JSON.stringify(decl), "src/t2.mjs": "export const t2 = 2;\n", [GERADA]: "T2\n" }]);
-  a.ok("trazer", "T1", "--tentativa", "1", "--sessao", "s1");
-  // A filha tocou o `.vega/` (superfície de instrução): o trazer pede o sim pelo sha, e com ele traz.
-  const s = a.ok("trazer", "T2", "--tentativa", "1", "--sessao", "s2", "--aprovado", ponta);
-  assert.deepEqual(s.regeneradas, [{ caminho: GERADA, comando: "node gerar.mjs" }]);
-});
-
-test("contraprova: sem a saída declarada, o conflito nela é pergunta", (t) => {
-  const a = ambiente(t, { saidas: null });
-  duasEmConflitoNaGerada(a);
-  const r = a.cli("trazer", "T2", "--tentativa", "1", "--sessao", "s2");
-  assert.equal(r.status, 1, r.linhas.join("\n"));
-  assert.equal(r.saida.motivo, "conflito");
+  for (const caso of CASOS) {
+    await t.test(`trazer: ${caso.nome}`, (tt) => {
+      const a = copiar(tt, base);
+      if (caso.saidas !== undefined) redeclarar(a, caso.saidas);
+      const ponta = a.filhaTrabalha("T2", caso.t2(a));
+      const head = a.g("rev-parse", "HEAD");
+      const r = a.cli("trazer", "T2", "--tentativa", "1", "--sessao", "s2", ...(caso.aprovar ? ["--aprovado", ponta] : []));
+      caso.espera(a, r, head);
+    });
+  }
 });

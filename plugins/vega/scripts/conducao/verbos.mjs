@@ -209,8 +209,12 @@ export function ehDadoDeFixture(caminho) {
  * gate de publicação (a casca lê o diff; sem ela, nenhum registra). O que
  * define a parada é a união do motor com o `definemAParada` do `codigo`;
  * `codigo` sem a lista para a faixa inteira, com o porquê no stderr.
+ * `derivadoDaTask(caminho)` diz se um caminho clínico fora dos Outputs só
+ * acompanha o que a própria faixa mudou (o `derivadoDaTask` do adaptador, que
+ * a casca chama com o antes e o depois do arquivo): ele deixa de perguntar e
+ * vai ao relato (`foraDosOutputs`) e a `derivados`. Erro nele ⇒ pergunta.
  */
-export function decidirNoTrazer({ caminhos, canonico, outputs, passos = [], codigo = codigoDoNucleo(), consentimentos = [], ciclo = null, fase = null, registraAParada = () => false }) {
+export function decidirNoTrazer({ caminhos, canonico, outputs, passos = [], codigo = codigoDoNucleo(), consentimentos = [], ciclo = null, fase = null, registraAParada = () => false, derivadoDaTask = () => false }) {
   const motivos = [];
   const consentidos = [];
   // D-VEGA20-26: o que define as paradas que ficam conta como publicação, mesmo declarado nos Outputs.
@@ -235,8 +239,10 @@ export function decidirNoTrazer({ caminhos, canonico, outputs, passos = [], codi
   const foraDeclarados = foraDosOutputs(caminhos.filter((c) => casaAlgum(c, codigo.caminhosProtegidos)), outputs);
   const daTela = (c) =>
     casaAlgum(c, codigo.telasProtegidasDosSteps) && !casaAlgum(c, codigo.foraDasTelasDosSteps) && segmentos.some((s) => c.startsWith(`${s}/`));
-  const clinicos = foraDeclarados.filter((c) => !daTela(c));
   const pelaTela = foraDeclarados.filter(daTela);
+  // Derivado da faixa (hotfix vega-digital-do-mapa-de-telas): o adaptador confere o conteúdo; falha ⇒ pergunta.
+  const derivados = foraDeclarados.filter((c) => !daTela(c) && derivadoSemErro(derivadoDaTask, c));
+  const clinicos = foraDeclarados.filter((c) => !daTela(c) && !derivados.includes(c));
   if (pelaTela.length) consentidos.push({ caso: CASOS.telaDosSteps, motivo: "caminho-clinico-fora-dos-outputs", caminhos: pelaTela });
   if (clinicos.length) motivos.push({ motivo: "caminho-clinico-fora-dos-outputs", caminhos: clinicos });
   // Pergunta repetida: o mesmo motivo do `trazer` já respondido pelo operador nesta fase.
@@ -252,7 +258,18 @@ export function decidirNoTrazer({ caminhos, canonico, outputs, passos = [], codi
     consentidos,
     foraDosOutputs: foraDosOutputs(caminhos, outputs).filter((c) => c !== canonico),
     canonicoAlterado: caminhos.includes(canonico),
+    derivados,
   };
+}
+
+/** `derivadoDaTask(c) === true`, e só isso: exceção ou outro valor ⇒ não é derivado, com o porquê no stderr. */
+function derivadoSemErro(derivadoDaTask, c) {
+  try {
+    return derivadoDaTask(c) === true;
+  } catch (e) {
+    process.stderr.write(`conducao: derivadoDaTask(${c}) falhou (${e?.message ?? e}) — o caminho pergunta\n`);
+    return false;
+  }
 }
 
 export const SHA_PREFIXO_RE = /^[0-9a-f]{7,40}$/;
@@ -656,8 +673,8 @@ export function perguntaDaConferencia({ task, marca, ...campos }) {
 
 /** `nao` é o não do operador; `needs-rework` é o mesmo não, no nome do `/live-ux-gate`; `carimbo` fecha a B só de carimbo. */
 export const RODADAS = new Set(["nao", "needs-rework", "carimbo"]);
-/** Teto de rodadas (task-brief.mjs `contratoDeRodadas`): o 3º não escala ao operador, nunca abre a 4ª. */
-export const TETO_RODADAS_GATE = 3;
+// Sem teto de rodadas: o gate segue até o operador aprovar. Um teto travava o gate na passada só de
+// máquina que consertava dentro da tentativa e na rodada do operador que ainda pedia conserto.
 
 /**
  * Frontmatter do `live-ux-gate-approval.md`: `verdict` e `rodada` (ausente
@@ -706,8 +723,8 @@ export function exigirApprovalDeRodada({ caminho, a, caso }) {
 
 /**
  * Trailer da marca `rodada` cuja rodada B foi feita fora da task, por re-plano
- * de decisão registrada (valor: o sha do re-plano). A marca conta como duas
- * (`anteriores`): a B do re-plano e a própria.
+ * de decisão registrada (valor: o sha do re-plano). Só se lê hoje, nas marcas
+ * gravadas até 25/11/2026: a marca que o traz conta como duas (`anteriores`).
  */
 export const TRAILER_RODADA_B_REPLANO = "Conducao-Rodada-B-Replano";
 
@@ -717,92 +734,23 @@ export function rodadasDasMarcas(marcas) {
 }
 
 /**
- * A rodada B feita fora da task do gate: consertos da rodada A em tasks novas
- * criadas por re-plano de decisão registrada. `replanos` são os commits que
- * mexeram no canonico entre a marca `rodada` anterior e a abertura da
- * tentativa atual, cada um `{ sha, subject, corpo, novas, depsDoGate }`
- * (`novas`: tasks que o commit criou no plano; `depsDoGate`: as dependências
- * da task do gate no plano do commit). Conta o primeiro que é re-plano de
- * ruling, cria task(s) e (a task do gate passa a depender de uma delas, ou o
- * re-plano cita a task do gate). `vistos` diz por que cada um não contou.
- */
-export function replanoDaRodadaB({ task, ciclo, replanos, reconhecer = parsePhaseCommit }) {
-  const vistos = [];
-  const citaGate = new RegExp(`(^|[^A-Za-z0-9_])${task}(?![0-9])`);
-  for (const c of replanos) {
-    const ruling = rulingDoReplano(c.subject, ciclo, reconhecer);
-    if (!ruling) {
-      vistos.push({ sha: c.sha, motivo: "nao-e-replano-de-ruling" });
-      continue;
-    }
-    if (c.ilegivel) {
-      vistos.push({ sha: c.sha, ruling, motivo: "plano-ilegivel", detalhe: c.ilegivel });
-      continue;
-    }
-    if (!c.novas.length) {
-      vistos.push({ sha: c.sha, ruling, motivo: "sem-task-nova" });
-      continue;
-    }
-    const dependidas = c.novas.filter((id) => c.depsDoGate.includes(id));
-    if (dependidas.length) return { replano: { sha: c.sha, ruling, novas: c.novas, por: "dependencia", dependidas }, vistos };
-    if (citaGate.test(`${c.subject}\n${c.corpo ?? ""}`)) return { replano: { sha: c.sha, ruling, novas: c.novas, por: "citacao", dependidas: [] }, vistos };
-    vistos.push({ sha: c.sha, ruling, motivo: `${task}-nao-depende-nem-e-citada` });
-  }
-  return { replano: null, vistos };
-}
-
-/** O que destrava a recusa de approval que pulou a B: dito na pergunta, nunca feito pelo script. */
-function destravaPorReplano(task) {
-  return `um re-plano de decisão registrada (\`<ciclo>-F<n>/D-<…> — re-plano de …\`), commitado entre a marca \`rodada\` anterior de ${task} e a abertura desta tentativa, que crie task(s) de que ${task} passe a depender (ou que cite ${task}), conta como a rodada B e destravaria esta rodada`;
-}
-
-/**
- * `needs-rework` contra o rito: contador independente do approval — A e C
- * emitem rodada, B não; depois de k rodadas contadas pelas marcas `rodada`
- * da task (`anteriores`, `rodadasDasMarcas`), o approval da vez tem de dizer
- * floor(k/2)+1. Approval que não andou (C sem regravar) ou que recuou pergunta
- * ao operador, e o teto conta pelas marcas mesmo se o approval mentir.
+ * `needs-rework` contra o rito: o approval da vez não pode recuar abaixo do
+ * último que se registrou (`ultimaRodadaDoApproval`, o trailer
+ * `Conducao-Rodada-Approval` da marca `rodada` mais nova; null sem marca com ele).
+ * Repetir o número é a B (conserto sem approval novo, ou passada de máquina);
+ * subir é a C, e subir mais de um é a B feita dentro da tentativa — as duas
+ * valem, sem re-plano e sem teto. Approval que recuou é approval velho no HEAD:
+ * pergunta ao operador.
  *
- * Única folga: com a B pendente (k ímpar), approval já na rodada seguinte
- * (a C) vale se a B foi feita fora da task, por re-plano de decisão
- * registrada — `replanoB()` (lazy: só lê o git quando a regra estrita já
- * recusou) devolve `{ replano, vistos }` de `replanoDaRodadaB`. Sem esse
- * re-plano, a recusa é a mesma de sempre e diz o que a destravaria.
- *
- * null ⇒ a rodada se grava; `{ acao: "gravar-rodada", replano }` ⇒ grava
- * com a B por re-plano; senão, a pergunta.
+ * null ⇒ a rodada se grava; senão, a pergunta.
  */
-export function conferirRodada({ base, anteriores, rodadaDoApproval, ref, replanoB = null }) {
-  const esperada = Math.floor(anteriores / 2) + 1;
-  if (rodadaDoApproval >= TETO_RODADAS_GATE || esperada >= TETO_RODADAS_GATE)
-    return perguntar("teto-de-rodadas", { ...base, teto: TETO_RODADAS_GATE, ref });
-  if (rodadaDoApproval === esperada) return null;
-  // Abaixo do teto de 3 isso só acontece com k = 1 e approval 2; a forma geral fica para teto maior.
-  const pulouB = anteriores % 2 === 1 && rodadaDoApproval === esperada + 1;
-  if (!pulouB) return perguntar("approval-fora-do-rito", { ...base, rodadaEsperada: esperada, ref });
-  const achado = replanoB ? replanoB() : { replano: null, vistos: [] };
-  if (achado.replano) return { acao: "gravar-rodada", replano: achado.replano };
-  return perguntar("approval-fora-do-rito", {
-    ...base,
-    rodadaEsperada: esperada,
-    ref,
-    destrava: destravaPorReplano(base.task),
-    replanosVistos: achado.vistos,
-    ...(achado.aviso ? { aviso: achado.aviso } : {}),
-  });
-}
-
-/**
- * Rodada por pergunta: cada não é uma rodada, contada pelas marcas
- * (`anteriores`). O não que seria o 3º pergunta ao operador e não abre a 4ª.
- */
-export function conferirRodadaPorPergunta({ base, anteriores, ref }) {
-  if (anteriores + 1 >= TETO_RODADAS_GATE) return perguntar("teto-de-rodadas", { ...base, teto: TETO_RODADAS_GATE, ref });
-  return null;
+export function conferirRodada({ base, rodadaDoApproval, ultimaRodadaDoApproval = null, ref }) {
+  if (ultimaRodadaDoApproval == null || rodadaDoApproval >= ultimaRodadaDoApproval) return null;
+  return perguntar("approval-fora-do-rito", { ...base, rodadaMinima: ultimaRodadaDoApproval, ref });
 }
 
 /** Trailers da marca `Conducao: T<k> tentativa <n> rodada|carimbo`; sem arquivo (por pergunta), sem `Conducao-Rodada-Approval`. */
-export function trailersDaRodada({ task, r, sessaoFilha, rodada, rodadaDoApproval, replanoB = null }) {
+export function trailersDaRodada({ task, r, sessaoFilha, rodada, rodadaDoApproval }) {
   return {
     "Conducao-Task": task,
     "Conducao-Sha-Filha": r.ponta,
@@ -810,7 +758,6 @@ export function trailersDaRodada({ task, r, sessaoFilha, rodada, rodadaDoApprova
     "Conducao-Nonce": r.nonce,
     "Conducao-Rodada": rodada,
     ...(rodadaDoApproval === undefined ? {} : { "Conducao-Rodada-Approval": String(rodadaDoApproval) }),
-    ...(replanoB ? { [TRAILER_RODADA_B_REPLANO]: replanoB.sha } : {}),
   };
 }
 

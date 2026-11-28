@@ -20,7 +20,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { MOTIVO_SEM_NIVEL, proximo } from "../conducao.mjs";
-import { nomeDaCondutora } from "../regras.mjs";
+import { nomeDaCondutora, nomeDaOperaria } from "../regras.mjs";
 import { ErroPlano } from "../ler-plano.mjs";
 import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
@@ -175,6 +175,9 @@ test("fechamento vermelho ou sem veredito não cria condutora", (t) => {
 test("nome da condutora segue a fase e o ordinal da herdeira", () => {
   assert.equal(nomeDaCondutora("C-1", "F1"), "C-1 · F1");
   assert.equal(nomeDaCondutora("C-1", "F3", 1), "C-1 · F3");
-  assert.equal(nomeDaCondutora("C-1", "F3", 2), "C-1 · F3 · 2");
+  assert.equal(nomeDaCondutora("C-1", "F3", 2), "C-1 · F3 · h2");
   assert.equal(nomeDaCondutora("C-1", "fechamento"), "C-1 · fechamento");
+  assert.equal(nomeDaOperaria("C-1", "F3", "T39", 1), "C-1 · F3 · T39 · t1");
+  assert.equal(nomeDaOperaria("C-1", "F3", "T39", 2), "C-1 · F3 · T39 · t2");
+  assert.equal(nomeDaOperaria("C-1", null, "T39", 1), "C-1 · T39 · t1");
 });

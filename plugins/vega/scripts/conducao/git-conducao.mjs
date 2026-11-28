@@ -58,6 +58,7 @@ import {
   simDoCorpo,
 } from "./consentimento.mjs";
 import { perguntar as construirPergunta } from "./pergunta.mjs";
+import { nomeDaOperaria } from "./regras.mjs";
 import * as verbos from "./verbos.mjs";
 import { saidasGeradas } from "../vega/declaracao.mjs";
 
@@ -68,7 +69,7 @@ const { TASK_RE, SHA_PREFIXO_RE, exigir, perguntar, shaDoCherryPick } = verbos;
 
 // A política dos verbos mora em `verbos.mjs` (VEGA-29 T8); daqui saem só os
 // nomes que o CLI e os testes já importavam deste módulo.
-export { lerApproval, segmentosDosSteps, TETO_RODADAS_GATE, vereditoAprova } from "./verbos.mjs";
+export { lerApproval, segmentosDosSteps, vereditoAprova } from "./verbos.mjs";
 
 /**
  * O caminho do `contrato.md` da condução relativo à raiz do repositório que
@@ -1148,8 +1149,26 @@ export function abrir({ repo, ciclo, task, tentativa, nonce, falhou = null }) {
     base: head,
     brief: { ref: refBrief, commit: commitBrief, linhas: b.brief.replace(/\n$/, "").split("\n").length },
     partida,
+    nome: nomeDaOperariaNoHead(repo, ciclo, task, tentativa),
     ...(falha ? { falha } : {}),
   };
+}
+
+/**
+ * O `nome` da saída `aberta`, o título do `create_session` da operária: a fase
+ * vem do plano do HEAD, o mesmo de que o brief nasce. Plano ilegível
+ * (`ErroPlano`) não impede a abertura; o nome só perde a casa da fase.
+ */
+function nomeDaOperariaNoHead(repo, ciclo, task, tentativa) {
+  let fase = null;
+  try {
+    fase = lerPlanoNoCommit(repo, "HEAD", ciclo).plano.porId.get(task)?.fase ?? null;
+  } catch (e) {
+    // Só o plano ilegível derruba a casa da fase; outro erro é defeito e sobe.
+    if (!(e instanceof ErroPlano)) throw e;
+    fase = null;
+  }
+  return nomeDaOperaria(ciclo, fase, task, tentativa);
 }
 
 /**
@@ -1186,6 +1205,7 @@ function mesmaAbertura({ repo, ciclo, task, tentativa, nonce, marcador, refLocal
     base: revOuNull(repo, `${marcador}^`),
     brief: { ref: refBrief, commit: commitBrief, linhas: brief.replace(/\n$/, "").split("\n").length },
     partida,
+    nome: nomeDaOperariaNoHead(repo, ciclo, task, tentativa),
     jaAberta: true,
     aviso: `${task} tentativa ${tentativa} já estava aberta com este nonce: a partida é a mesma. Criar a operária só se nenhuma sessão desta tentativa existir (list_sessions children); senão, seguir com a que existe.`,
   };
@@ -1479,6 +1499,12 @@ function blobOuNull(repo, rev, caminho) {
   return r.status === 0 && r.saida ? r.saida : null;
 }
 
+/** O conteúdo de `caminho` em `rev`, ou null (ausente nele). */
+function textoOuNull(repo, rev, caminho) {
+  const r = tentar(repo, ["show", `${rev}:${caminho}`]);
+  return r.status === 0 ? r.saida : null;
+}
+
 const linhas = (s) => s.split("\n").filter(Boolean);
 // Saída `-z` do git: caminho separado por NUL, nunca entre aspas. Mesmo com
 // `core.quotePath=false` o git cita o nome com aspas, barra invertida ou
@@ -1577,17 +1603,22 @@ export function trazer({ repo, ciclo, task, tentativa, shaAvisado = null, sessao
   // (D-VEGA37-34/35) ou, na pergunta repetida, o corpo da marca de origem; sem ele, o caso pergunta.
   // D-VEGA20-26: o trazer para só no caminho clínico fora dos Outputs e no que define a parada;
   // hook, superfície de instrução e canonico vão ao relato (`foraDosOutputs`, `canonicoAlterado`).
+  const codigo = codigoDoAdaptador(repo);
   const decidido = verbos.decidirNoTrazer({
     caminhos,
     canonico,
     outputs: t.outputs,
     passos: t.passos ?? [],
-    codigo: codigoDoAdaptador(repo),
+    codigo,
     consentimentos: lerConsentimentos(repo, { ciclo }),
     ciclo,
     fase: t.fase,
     // O `settings*.json` define a parada só quando o diff da faixa toca o registro do gate de publicação.
     registraAParada: (c) => diffRegistraAParada(repo, marcador, ponta, c),
+    // O adaptador confere se o caminho só acompanha o que a faixa mudou (o mapa de telas na Sistoli).
+    derivadoDaTask: (c) =>
+      typeof codigo.derivadoDaTask === "function" &&
+      codigo.derivadoDaTask({ repo, caminho: c, antes: textoOuNull(repo, marcador, c), depois: textoOuNull(repo, ponta, c), caminhos }),
   });
   const doCanonico = tentar(repo, ["show", `HEAD:${canonico}`]);
   const textoDoCanonico = doCanonico.status === 0 ? doCanonico.saida : "";
@@ -2409,68 +2440,21 @@ function caminhoDoApproval(repo, ciclo, arquivo) {
 
 /**
  * Marcas `Conducao: T<k> tentativa <n> rodada` da task no HEAD (pelo subject),
- * da mais nova à mais velha: `{ sha, replanoB }` (`replanoB` = valor do
- * trailer da B por re-plano, ou null). Contar: `verbos.rodadasDasMarcas`.
+ * da mais nova à mais velha: `{ sha, replanoB, rodadaDoApproval }` (`replanoB` = valor do
+ * trailer da B por re-plano das marcas antigas, ou null; `rodadaDoApproval` = o
+ * `Conducao-Rodada-Approval`, ou null na marca por pergunta). Contar: `verbos.rodadasDasMarcas`.
  */
 function marcasDeRodada(repo, task, ciclo = null) {
   const formato = `%H%x1f%s%x1f%(trailers:key=${verbos.TRAILER_RODADA_B_REPLANO},valueonly=true,unfold=true)%x1f%(trailers:only=true,unfold=true)%x1e`;
-  // `--topo-order`: a primeira é a última marca da linha, não a de data mais nova (a janela da B começa nela).
+  // `--topo-order`: a primeira é a última marca da linha, não a de data mais nova (o piso do approval sai dela).
   return rodar(repo, ["log", "--topo-order", `--format=${formato}`, `--grep=^Conducao: ${task} tentativa `, "HEAD"])
     .split("\x1e")
     .map((reg) => reg.replace(/^\n/, "").split("\x1f"))
     .filter(([sha, subject, , tr]) => sha && RE.rodada.exec(subject ?? "")?.[1] === task && !deOutroCiclo(tr, ciclo))
-    .map(([sha, , replanoB = ""]) => ({ sha, replanoB: replanoB.trim() || null }));
-}
-
-/**
- * A rodada B feita fora da task (casca de `verbos.replanoDaRodadaB`): os
- * commits que mexeram no canonico, pela linha do ciclo (`--first-parent`),
- * entre a última marca `rodada` da task e a abertura da tentativa atual (o
- * pai do marcador dela), com as tasks que cada um criou e as dependências da
- * task do gate no plano dele. Janela que não se fecha (sem marca anterior, sem
- * marcador, marca fora da linha do marcador) não acha re-plano, e diz por quê.
- */
-function replanoDaRodadaB({ repo, ciclo, task, r, ultima }) {
-  const nada = (aviso) => ({ replano: null, vistos: [], aviso });
-  if (!ultima) return nada(`${task} sem marca \`rodada\` anterior — não há rodada B pendente`);
-  if (!r.marcador) return nada(`registro ${r.ref} sem Conducao-Marcador — a abertura da tentativa não se lê`);
-  const fim = `${r.marcador}^`;
-  const naLinha = ancestral(repo, ultima, fim);
-  if (naLinha === null) return nada(`git não respondeu se a marca \`rodada\` ${ultima.slice(0, 8)} antecede ${fim} (objeto ausente?)`);
-  if (!naLinha)
-    return nada(`a marca \`rodada\` ${ultima.slice(0, 8)} não está na linha da abertura da tentativa ${r.tentativa} (${r.marcador.slice(0, 8)})`);
-  const canonico = caminhoDoCanonico(repo, "HEAD", ciclo);
-  const ids = (commit) => {
-    try {
-      return new Set(lerPlanoNoCommit(repo, commit, ciclo).plano.porId.keys());
-    } catch (e) {
-      // Canonico que nasceu no próprio commit: toda task dele é nova.
-      if (e instanceof ErroPlano && e.codigo === "canonico-ausente") return new Set();
-      throw e;
-    }
-  };
-  // Só sha e subject no log (subject não tem quebra); o corpo, livre, sai por sha — separador nenhum o corta.
-  const replanos = rodar(repo, ["log", "--first-parent", "--reverse", "--format=%H %s", `${ultima}..${fim}`, "--", canonico])
-    .split("\n")
-    .filter(Boolean)
-    .map((l) => ({ sha: l.slice(0, l.indexOf(" ")), subject: l.slice(l.indexOf(" ") + 1) }));
-  return verbos.replanoDaRodadaB({
-    task,
-    ciclo,
-    // Plano e corpo só de quem é re-plano de ruling: os outros não contam e não pagam a leitura.
-    replanos: replanos.map((c) => {
-      if (!verbos.rulingDoReplano(c.subject, ciclo)) return { ...c, corpo: "", novas: [], depsDoGate: [] };
-      try {
-        const { plano } = lerPlanoNoCommit(repo, c.sha, ciclo);
-        const antes = ids(`${c.sha}^`);
-        const corpo = rodar(repo, ["log", "-1", "--format=%b", c.sha]);
-        return { ...c, corpo, novas: [...plano.porId.keys()].filter((id) => !antes.has(id)), depsDoGate: plano.porId.get(task)?.deps ?? [] };
-      } catch (e) {
-        // Plano ilegível num re-plano da janela não derruba o verbo: não conta como B, e a recusa diz qual e por quê.
-        return { ...c, corpo: "", novas: [], depsDoGate: [], ilegivel: e instanceof ErroPlano ? `${e.codigo}: ${e.message}` : String(e.message ?? e).split("\n")[0] };
-      }
-    }),
-  });
+    .map(([sha, , replanoB = "", tr = ""]) => {
+      const n = /^Conducao-Rodada-Approval:\s*(\d+)\s*$/m.exec(tr)?.[1];
+      return { sha, replanoB: replanoB.trim() || null, rodadaDoApproval: n === undefined ? null : Number(n) };
+    });
 }
 
 /**
@@ -2480,8 +2464,8 @@ function replanoDaRodadaB({ repo, ciclo, task, r, ultima }) {
  * `trazida` e mantém o trabalho trazido; o `proximo` abre a tentativa n+1.
  * Por pergunta, o não é o texto do operador (`--operador`, no corpo); por
  * arquivo (por exemplo um gate de UX), é o arquivo lido no HEAD, e o brief
- * entrega a rodada B ou C pelo estado do git. O teto não abre rodada além
- * dele: `perguntar teto-de-rodadas`. A política é `verbos.mjs`.
+ * entrega a rodada B ou C pelo estado do git. Sem teto: approval que recua
+ * abaixo do último registrado pergunta (`approval-fora-do-rito`). A política é `verbos.mjs`.
  */
 export function registrarRodada({ repo, ciclo, task, rodada, sessao = null, operador = null }) {
   verbos.exigirUsoDaRodada({ task, rodada });
@@ -2498,30 +2482,23 @@ export function registrarRodada({ repo, ciclo, task, rodada, sessao = null, oper
   const marcas = marcasDeRodada(repo, task, ciclo);
   const anteriores = verbos.rodadasDasMarcas(marcas);
   const base = { ciclo, task, tentativa: r.tentativa, nonce: r.nonce, approval, rodadaDoApproval: a.rodada, rodadasRegistradas: anteriores };
-  const decisao = verbos.conferirRodada({
-    base,
-    anteriores,
-    rodadaDoApproval: a.rodada,
-    ref: r.ref,
-    replanoB: () => replanoDaRodadaB({ repo, ciclo, task, r, ultima: marcas[0]?.sha ?? null }),
-  });
-  if (decisao && decisao.acao !== "gravar-rodada") return decisao;
-  const replanoB = decisao?.replano ?? null;
+  // A marca mais nova que gravou o número do approval (as de carimbo não entram em `marcasDeRodada`).
+  const ultimaRodadaDoApproval = marcas.find((m) => m.rodadaDoApproval != null)?.rodadaDoApproval ?? null;
+  const fora = verbos.conferirRodada({ base, rodadaDoApproval: a.rodada, ultimaRodadaDoApproval, ref: r.ref });
+  if (fora) return fora;
   const sessaoFilha = verbos.sessaoDaFilha({ task, sessao, r });
-  // Sem corpo: corpo na marca `rodada` é o não por pergunta (`Não, pelo operador:`); a B por re-plano vai só no trailer.
+  // Sem corpo: corpo na marca `rodada` é o não por pergunta (`Não, pelo operador:`).
   const sha = commitVazio(repo, ciclo, `Conducao: ${task} tentativa ${r.tentativa} rodada`, {
-    trailers: verbos.trailersDaRodada({ task, r, sessaoFilha, rodada, rodadaDoApproval: a.rodada, replanoB }),
+    trailers: verbos.trailersDaRodada({ task, r, sessaoFilha, rodada, rodadaDoApproval: a.rodada }),
   });
   rodar(repo, ["update-ref", "-d", r.ref]);
-  return comCopia(repo, ciclo, { acao: "rodada-registrada", ...base, rodada, sha, ...(replanoB ? { rodadaBPorReplano: replanoB } : {}) });
+  return comCopia(repo, ciclo, { acao: "rodada-registrada", ...base, rodada, sha });
 }
 
 /** O não por pergunta: o texto do operador vai no corpo da marca `rodada`. */
 function registrarRodadaPorPergunta({ repo, ciclo, task, r, sessao, rodada, operador }) {
   const anteriores = verbos.rodadasDasMarcas(marcasDeRodada(repo, task, ciclo));
   const base = { ciclo, task, tentativa: r.tentativa, nonce: r.nonce, rodadasRegistradas: anteriores };
-  const fora = verbos.conferirRodadaPorPergunta({ base, anteriores, ref: r.ref });
-  if (fora) return fora;
   const sessaoFilha = verbos.sessaoDaFilha({ task, sessao, r });
   const sha = commitVazio(repo, ciclo, `Conducao: ${task} tentativa ${r.tentativa} rodada`, {
     corpo: `Não, pelo operador: ${operador.trim()}`,

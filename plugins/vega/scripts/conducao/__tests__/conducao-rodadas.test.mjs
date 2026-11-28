@@ -12,7 +12,7 @@
  *
  * O rito da task `(gate-de-ux)` (task-brief.mjs `contratoDeRodadas`) roda uma
  * rodada por sessão fresca: A (gate + approval), B (conserto + carimbo), C
- * (gate de novo, `rodada: n+1`), com teto em `rodada: 3`. Cada rodada é uma
+ * (gate de novo, `rodada: n+1`), sem teto (25/11/2026). Cada rodada é uma
  * tentativa da mesma task. Antes do verbo `registrar-conferencia --rodada`, a
  * rodada com `verdict: NEEDS_REWORK` deixava a trazida sem saída: a
  * Verificação (`grep SHIP|SHIP_WITH_DEBT`) sai 1, a conferência só aceita
@@ -20,16 +20,19 @@
  * o primeiro teste falha no `registrar-conferencia --rodada` sem o verbo).
  *
  * Mesmo arranjo de conducao-git.test.mjs: origin bare, árvore da maestra,
- * clone da filha, hooks desligados, verbos chamados como CLI.
+ * clone da filha, hooks desligados, verbos chamados como CLI. A ponta a ponta
+ * (A → B → C) parte do zero; os outros casos partem de uma cópia de um prefixo
+ * fotografado (§prefixos fotografados), rodado pelo CLI uma vez por arquivo
+ * (D3a, 25/11/2026: o mesmo prefixo refeito por caso era a parede do passo).
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { lerApproval, TETO_RODADAS_GATE } from "../git-conducao.mjs";
+import { lerApproval } from "../git-conducao.mjs";
+import { conferirRodada } from "../verbos.mjs";
 import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
@@ -108,9 +111,8 @@ function escreverEm(dir, arquivos) {
   }
 }
 
-function ambiente(t, tasks = [GATE, task("T2")]) {
-  const raiz = pastaTemporaria("conducao-rodadas-");
-  t.after(() => rmSync(raiz, { recursive: true, force: true }));
+/** Origin bare, árvore da maestra no plano e clone da filha, em `raiz`. */
+function montar(raiz, tasks) {
   const origin = path.join(raiz, "origin.git");
   execFileSync("git", ["init", "-q", "--bare", origin]);
   const maestra = path.join(raiz, "maestra");
@@ -127,9 +129,15 @@ function ambiente(t, tasks = [GATE, task("T2")]) {
   g("push", "-q", "origin", "ciclo-teste");
   const filha = path.join(raiz, "filha");
   execFileSync("git", ["clone", "-q", origin, filha]);
-  const f = gitEm(filha);
-  configurar(f);
+  configurar(gitEm(filha));
+}
 
+/** Os verbos da maestra e os passos da filha sobre um `raiz` já montado. */
+function amarrar(raiz) {
+  const maestra = path.join(raiz, "maestra");
+  const filha = path.join(raiz, "filha");
+  const g = gitEm(maestra);
+  const f = gitEm(filha);
   const cli = (...args) => {
     const r = spawnSync(process.execPath, [SCRIPT, ...args, "--repo", maestra, "--ciclo", CICLO], {
       encoding: "utf8",
@@ -179,6 +187,119 @@ function ambiente(t, tasks = [GATE, task("T2")]) {
   return { g, f, maestra, filha, cli, ok, recusa, proximo, abrirPeloProximo, rodada, marcas };
 }
 
+function ambiente(t, tasks = [GATE, task("T2")]) {
+  const raiz = pastaTemporaria("conducao-rodadas-");
+  t.after(() => rmSync(raiz, { recursive: true, force: true }));
+  montar(raiz, tasks);
+  return amarrar(raiz);
+}
+
+const autorizar = (a) => a.ok("autorizar-ciclo", "F1", "--sim", "sim", "--pergunta", "p-00000000000000a1");
+
+// ── carimbo (F4 do ATRM-51, T25/3 → T25/4) ─────────────────────────────────────
+//
+// A B da T25/3 trouxe conserto + carimbo por cherry-pick (a maestra commitou
+// nota entre o `abrir` e o `trazer`): o conserto mudou de sha e o carimbo ficou
+// órfão. A T25/4 refez a B só com o carimbo do sha novo; `--rodada needs-rework`
+// recusava (`approval-fora-do-rito`: 2 marcas pedem `rodada: 2`, o approval segue
+// em 1), e o `proximo` repetia `trazida-sem-conferencia` para sempre.
+
+const carimbo = (sha) => `---\nsha: ${sha}\nreviewers: typescript-reviewer\nveredito: aprovado\n---\n`;
+const carimboDoCiclo = (sha) => `${PASTA}/revisoes/${sha.slice(0, 8)}.md`;
+const SHA_QUALQUER = "0123456789abcdef0123456789abcdef01234567";
+
+/** A filha empurra commits arbitrários na tentativa `<n>` (cada item: arquivos a escrever, `{ rm }`, ou `{ vazio }`). */
+function empurrarFilha(a, n, commits) {
+  const ref = `refs/conducao/${CICLO}/T1/${n}`;
+  a.f("fetch", "-q", "origin", `+${ref}:refs/remotes/tentativa`);
+  a.f("checkout", "-q", "--detach", "refs/remotes/tentativa");
+  const shas = [];
+  for (const [i, c] of commits.entries()) {
+    if (c.rm) a.f("rm", "-q", c.rm);
+    else if (!c.vazio) escreverEm(a.filha, typeof c === "function" ? c(shas) : c);
+    a.f("add", "-A");
+    a.f("commit", "-q", ...(c.vazio ? ["--allow-empty"] : []), "-m", `${CICLO}-F1/T1 — commit ${i + 1}`);
+    shas.push(a.f("rev-parse", "HEAD"));
+  }
+  a.f("push", "-q", "origin", `HEAD:${ref}`);
+  return shas;
+}
+
+/** A maestra commita uma nota no ramo entre o abrir e o trazer ⇒ o trazer sai por cherry-pick. */
+function notaDaMaestra(a) {
+  escreverEm(a.maestra, { [`${PASTA}/notes/nota.md`]: `nota ${Date.now()}\n` });
+  a.g("add", "-A");
+  a.g("commit", "-q", "-m", "nota da maestra");
+}
+
+// ── prefixos fotografados ───────────────────────────────────────────────────
+//
+// Os casos partem de poucos prefixos: `aberta` (autorizar + abrir a T1/1),
+// `rodadaA` (a A trazida com approval NEEDS_REWORK sem `rodada:`, que conta 1; sem registro) e
+// `bRefeita` (A registrada; a B com conserto e carimbo trazida por cherry-pick,
+// o carimbo órfão; registrada; a T1/3 aberta). Cada prefixo roda pelo CLI uma
+// vez; cada caso recebe uma cópia (`cp -a`, e o origin religado, porque a
+// config guarda o caminho absoluto).
+
+const PREFIXOS = {
+  aberta: {
+    passos: (a) => {
+      autorizar(a);
+      a.abrirPeloProximo("T1", 1);
+    },
+  },
+  rodadaA: {
+    base: "aberta",
+    passos: (a) => a.rodada("T1", 1, { [APPROVAL]: approval("NEEDS_REWORK") }),
+  },
+  bRefeita: {
+    base: "rodadaA",
+    passos: (a) => {
+      a.ok("registrar-conferencia", "T1", "--rodada", "needs-rework");
+      a.abrirPeloProximo("T1", 2);
+      const [conserto] = empurrarFilha(a, 2, [{ "src/t1.mjs": "export const conserto = 1;\n" }, ([c]) => ({ [carimboDoCiclo(c)]: carimbo(c) })]);
+      notaDaMaestra(a);
+      const trazido = a.ok("trazer", "T1", "--tentativa", "2", "--sessao", "filha-T1-2");
+      const novo = a.g("log", "-1", "--format=%H", "HEAD", "--", "src/t1.mjs");
+      a.ok("registrar-conferencia", "T1", "--rodada", "needs-rework");
+      a.abrirPeloProximo("T1", 3);
+      return { conserto, novo, trazido };
+    },
+  },
+};
+
+const fotos = new Map();
+
+function copiar(de, para) {
+  execFileSync("cp", ["-a", `${de}/.`, para]);
+  const origin = path.join(para, "origin.git");
+  gitEm(path.join(para, "maestra"))("remote", "set-url", "origin", origin);
+  gitEm(path.join(para, "filha"))("remote", "set-url", "origin", origin);
+}
+
+/** O prefixo `nome`, rodado uma vez: a base (outro prefixo, ou o plano [GATE]) e os passos por cima. */
+function foto(nome) {
+  if (!fotos.has(nome)) {
+    const { base, passos } = PREFIXOS[nome];
+    const raiz = pastaTemporaria(`conducao-rodadas-${nome}-`);
+    if (base) copiar(foto(base).raiz, raiz);
+    else montar(raiz, [GATE]);
+    fotos.set(nome, { raiz, extra: passos(amarrar(raiz)) ?? {} });
+  }
+  return fotos.get(nome);
+}
+
+/** Uma cópia do prefixo `nome` para o caso; devolve o ambiente (`a`) e o que o prefixo guardou. */
+function deFoto(t, nome) {
+  const { raiz: de, extra } = foto(nome);
+  const raiz = pastaTemporaria("conducao-rodadas-");
+  t.after(() => rmSync(raiz, { recursive: true, force: true }));
+  copiar(de, raiz);
+  return { a: amarrar(raiz), ...extra };
+}
+
+// ── a ponta a ponta ──────────────────────────────────────────────────────────
+
 test("rodada NEEDS_REWORK abre a tentativa n+1 da mesma task, sem contar falha", (t) => {
   const a = ambiente(t, [GATE]);
   a.ok("autorizar-ciclo", "F1", "--sim", "sim, pode tocar a F1", "--pergunta", "p-00000000000000a1");
@@ -221,26 +342,27 @@ test("rodada NEEDS_REWORK abre a tentativa n+1 da mesma task, sem contar falha",
   assert.equal(c.tentativa, 3);
 });
 
-test("verdict SHIP e SHIP_WITH_DEBT recusam --rodada; a trazida segue pendente", (t) => {
-  for (const verdict of ["SHIP", "SHIP_WITH_DEBT"]) {
-    const a = ambiente(t, [GATE]);
-    a.ok("autorizar-ciclo", "F1", "--sim", "sim", "--pergunta", "p-00000000000000a1");
-    a.abrirPeloProximo("T1", 1);
-    a.rodada("T1", 1, { [APPROVAL]: approval(verdict, 1) });
-    a.recusa("approval-nao-pede-rodada", "registrar-conferencia", "T1", "--rodada", "needs-rework");
-    assert.ok(!a.marcas().some((m) => /rodada$/.test(m)));
-    assert.equal(a.proximo().motivo, "trazida-sem-conferencia");
-    assert.equal(a.ok("registrar-conferencia", "T1", "--verificacao", "verde", "--publicacao", "nao-se-aplica").acao, "conferida");
-  }
+// ── recusas do --rodada ──────────────────────────────────────────────────────
+
+test("verdict SHIP_WITH_DEBT recusa --rodada needs-rework e carimbo; a trazida segue pendente e fecha pela conferência verde", (t) => {
+  // SHIP, o outro sim, recusa --rodada na ponta a ponta.
+  const { a } = deFoto(t, "aberta");
+  a.rodada("T1", 1, { [APPROVAL]: approval("SHIP_WITH_DEBT", 1), [carimboDoCiclo(SHA_QUALQUER)]: carimbo(SHA_QUALQUER) });
+  a.recusa("approval-nao-pede-rodada", "registrar-conferencia", "T1", "--rodada", "needs-rework");
+  a.recusa("approval-nao-pede-rodada", "registrar-conferencia", "T1", "--rodada", "carimbo");
+  assert.ok(!a.marcas().some((m) => /(rodada|carimbo)$/.test(m)), a.marcas().join("\n"));
+  assert.equal(a.proximo().motivo, "trazida-sem-conferencia");
+  assert.equal(a.ok("registrar-conferencia", "T1", "--verificacao", "verde", "--publicacao", "nao-se-aplica").acao, "conferida");
 });
 
-test("task que não é conferência do operador recusa --rodada, mesmo com approval NEEDS_REWORK no HEAD", (t) => {
+test("task que não é conferência do operador recusa --rodada needs-rework e carimbo, mesmo com approval NEEDS_REWORK e carimbo no HEAD", (t) => {
   const a = ambiente(t, [task("T2", { outputs: `\`${APPROVAL}\` (create)` })]);
-  a.ok("autorizar-ciclo", "F1", "--sim", "sim", "--pergunta", "p-00000000000000a1");
+  autorizar(a);
   a.abrirPeloProximo("T2", 1);
-  a.rodada("T2", 1, { [APPROVAL]: approval("NEEDS_REWORK", 1) });
+  a.rodada("T2", 1, { [APPROVAL]: approval("NEEDS_REWORK", 1), [carimboDoCiclo(SHA_QUALQUER)]: carimbo(SHA_QUALQUER) });
   a.recusa("rodada-fora-da-conferencia", "registrar-conferencia", "T2", "--rodada", "needs-rework");
-  assert.ok(!a.marcas().some((m) => /rodada$/.test(m)));
+  a.recusa("rodada-fora-da-conferencia", "registrar-conferencia", "T2", "--rodada", "carimbo");
+  assert.ok(!a.marcas().some((m) => /(rodada|carimbo)$/.test(m)), a.marcas().join("\n"));
   const p = a.proximo();
   assert.equal(p.motivo, "trazida-sem-conferencia");
   assert.equal(p.liveUxGate, undefined);
@@ -248,44 +370,32 @@ test("task que não é conferência do operador recusa --rodada, mesmo com appro
 });
 
 test("approval ausente no HEAD recusa --rodada", (t) => {
-  const a = ambiente(t, [GATE]);
-  a.ok("autorizar-ciclo", "F1", "--sim", "sim", "--pergunta", "p-00000000000000a1");
-  a.abrirPeloProximo("T1", 1);
+  const { a } = deFoto(t, "aberta");
   a.rodada("T1", 1, { "src/t1.mjs": "export const t1 = 1;\n" });
   a.recusa("approval-ausente", "registrar-conferencia", "T1", "--rodada", "needs-rework");
   assert.ok(!a.marcas().some((m) => /rodada$/.test(m)));
 });
 
-test("teto do rito: approval NEEDS_REWORK com rodada 3 pergunta a Rita e não abre rodada além", (t) => {
-  const a = ambiente(t, [GATE]);
-  a.ok("autorizar-ciclo", "F1", "--sim", "sim", "--pergunta", "p-00000000000000a1");
-  a.abrirPeloProximo("T1", 1);
-  a.rodada("T1", 1, { [APPROVAL]: approval("NEEDS_REWORK", 3) });
-  const r = a.cli("registrar-conferencia", "T1", "--rodada", "needs-rework");
-  assert.equal(r.status, 1, r.linhas.join("\n"));
-  assert.equal(r.saida.acao, "perguntar");
-  assert.equal(r.saida.motivo, "teto-de-rodadas");
-  assert.equal(r.saida.rodadaDoApproval, 3);
-  assert.ok(!a.marcas().some((m) => /rodada$/.test(m)));
-  // O laço não abre a tentativa 2: a trazida segue esperando Rita.
-  const p = a.proximo();
-  assert.equal(p.acao, "perguntar");
-  assert.equal(p.motivo, "trazida-sem-conferencia");
-});
-
-test("--rodada recusa valor desconhecido e mistura com flags da conferência", (t) => {
-  const a = ambiente(t, [GATE]);
-  a.ok("autorizar-ciclo", "F1", "--sim", "sim", "--pergunta", "p-00000000000000a1");
-  a.abrirPeloProximo("T1", 1);
-  a.rodada("T1", 1, { [APPROVAL]: approval("NEEDS_REWORK", 1) });
+test("approval NEEDS_REWORK: --rodada recusa valor desconhecido e mistura com flags da conferência, e a conferência verde recusa", (t) => {
+  const { a } = deFoto(t, "rodadaA");
   a.recusa("uso", "registrar-conferencia", "T1", "--rodada", "ship");
   a.recusa("uso", "registrar-conferencia", "T1", "--rodada", "needs-rework", "--verificacao", "verde");
   a.recusa("uso", "registrar-conferencia", "T1", "--rodada", "needs-rework", "--motivo", "x");
-  assert.ok(!a.marcas().some((m) => /rodada$/.test(m)));
+  a.recusa("approval-pede-rodada", "registrar-conferencia", "T1", "--verificacao", "verde", "--publicacao", "nao-se-aplica");
+  assert.ok(!a.marcas().some((m) => /(rodada|conferida)$/.test(m)), a.marcas().join("\n"));
 });
+
+// ── o número do approval: sem teto, não recua ────────────────────────────────
+//
+// No ATRM-54 a B saiu por re-plano (tasks novas de que o gate dependia) e o laço
+// passou a aceitar esse re-plano como a B. No L4 a 2ª passada só de máquina fez o
+// conserto dentro da própria tentativa e gravou o approval já na rodada seguinte;
+// o laço recusou (`approval-fora-do-rito`) e pediu re-plano (D53). Sem teto e sem
+// exigir a B por re-plano, approval que sobe ou repete grava; o que recua pergunta.
 
 test("lerApproval lê verdict e rodada só do frontmatter; rodada ausente conta 1", () => {
   assert.deepEqual(lerApproval(approval("NEEDS_REWORK", 2)), { verdict: "NEEDS_REWORK", rodada: 2 });
+  assert.deepEqual(lerApproval(approval("NEEDS_REWORK")), { verdict: "NEEDS_REWORK", rodada: 1 });
   assert.deepEqual(lerApproval(approval("SHIP")), { verdict: "SHIP", rodada: 1 });
   assert.ok(Number.isNaN(lerApproval(approval("NEEDS_REWORK", "dois")).rodada));
   assert.deepEqual(lerApproval("sem frontmatter\nverdict: NEEDS_REWORK\n"), { verdict: null, rodada: null });
@@ -293,131 +403,78 @@ test("lerApproval lê verdict e rodada só do frontmatter; rodada ausente conta 
   assert.equal(lerApproval("---\ndois_tempos:\n  verdict: NEEDS_REWORK\n---\n").verdict, null);
 });
 
-/** A · B · C até o approval da vez; devolve o ambiente com a última tentativa trazida e sem registro. */
-function ateRodada(t, approvals) {
-  const a = ambiente(t, [GATE]);
-  a.ok("autorizar-ciclo", "F1", "--sim", "sim", "--pergunta", "p-00000000000000a1");
-  approvals.forEach((arquivos, i) => {
-    if (i > 0) a.ok("registrar-conferencia", "T1", "--rodada", "needs-rework");
-    a.abrirPeloProximo("T1", i + 1);
-    a.rodada("T1", i + 1, arquivos);
-  });
-  return a;
-}
-
-test("approval sem `rodada:` conta como 1 e registra a rodada A", (t) => {
-  const a = ateRodada(t, [{ [APPROVAL]: approval("NEEDS_REWORK") }]);
-  assert.equal(a.ok("registrar-conferencia", "T1", "--rodada", "needs-rework").rodadaDoApproval, 1);
+test("conferirRodada: sem marca grava qualquer número; repetir (a B) e subir (a C, ou a B dentro da tentativa) gravam; recuar pergunta", () => {
+  const casos = [
+    // [approval da vez, último registrado, rodadaMinima da pergunta | null = grava]
+    [1, null, null], // a A
+    [3, null, null], // a primeira já em 3: sem teto
+    [1, 1, null], // a B que não regrava o approval
+    [2, 1, null], // a C
+    [4, 2, null], // a B feita dentro da tentativa
+    [1, 2, 2], // approval velho no HEAD
+    [3, 4, 4],
+  ];
+  for (const [rodadaDoApproval, ultimaRodadaDoApproval, minima] of casos) {
+    const r = conferirRodada({ base: { task: "T1" }, rodadaDoApproval, ultimaRodadaDoApproval, ref: "refs/x" });
+    const rotulo = `approval ${rodadaDoApproval} depois de ${ultimaRodadaDoApproval}`;
+    if (minima === null) assert.equal(r, null, rotulo);
+    else {
+      assert.equal(r?.motivo, "approval-fora-do-rito", rotulo);
+      assert.equal(r.rodadaMinima, minima, rotulo);
+    }
+  }
 });
 
-test("rodada C que não regrava o approval pergunta (approval-fora-do-rito), sem abrir rodada", (t) => {
-  const a = ateRodada(t, [
-    { [APPROVAL]: approval("NEEDS_REWORK", 1) }, // A
-    { "src/t1.mjs": "export const conserto = 1;\n" }, // B
-    { "src/t1.mjs": "export const conserto = 2;\n" }, // C sem approval novo
-  ]);
+test("rito sem teto pelo CLI: approval que sobe ou repete grava, quatro marcas abrem a 5ª, e o approval que recua pergunta sem abrir rodada", (t) => {
+  const { a } = deFoto(t, "rodadaA");
+  const s1 = a.ok("registrar-conferencia", "T1", "--rodada", "needs-rework");
+  assert.equal(s1.rodadaDoApproval, 1);
+  assert.equal(s1.rodadasRegistradas, 0);
+  const passos = [
+    // [tentativa, o que a filha traz, rodadaDoApproval, rodadasRegistradas antes]
+    [2, { [APPROVAL]: approval("NEEDS_REWORK", 2) }, 2, 1], // conserto e approval novo na mesma tentativa
+    [3, { "src/t1.mjs": "export const conserto = 1;\n" }, 2, 2], // passada de máquina sem approval novo: repete
+    [4, { [APPROVAL]: approval("NEEDS_REWORK", 4) }, 4, 3], // sobe mais de um
+  ];
+  for (const [n, arquivos, rodadaDoApproval, rodadasRegistradas] of passos) {
+    a.abrirPeloProximo("T1", n);
+    a.rodada("T1", n, arquivos);
+    const s = a.ok("registrar-conferencia", "T1", "--rodada", "needs-rework");
+    assert.equal(s.acao, "rodada-registrada", `tentativa ${n}`);
+    assert.equal(s.rodadaDoApproval, rodadaDoApproval, `tentativa ${n}`);
+    assert.equal(s.rodadasRegistradas, rodadasRegistradas, `tentativa ${n}`);
+    assert.equal(s.rodadaBPorReplano, undefined, `tentativa ${n}`);
+  }
+  // Sem teto: a 5ª abre depois de quatro marcas; a C dela mente (approval velho).
+  a.abrirPeloProximo("T1", 5);
+  a.rodada("T1", 5, { [APPROVAL]: approval("NEEDS_REWORK", 3) });
   const r = a.cli("registrar-conferencia", "T1", "--rodada", "needs-rework");
   assert.equal(r.status, 1, r.linhas.join("\n"));
   assert.equal(r.saida.motivo, "approval-fora-do-rito");
-  assert.equal(r.saida.rodadaEsperada, 2);
-  assert.equal(r.saida.rodadasRegistradas, 2);
+  assert.equal(r.saida.rodadaMinima, 4);
+  assert.equal(r.saida.rodadasRegistradas, 4);
+  assert.equal(a.marcas().filter((m) => /rodada$/.test(m)).length, 4);
+  assert.ok(!a.marcas().some((m) => /falhou$/.test(m)), a.marcas().join("\n"));
   assert.equal(a.proximo().motivo, "trazida-sem-conferencia");
 });
 
-test("teto pelas marcas: depois de A·B·C·B, approval que diz rodada 1 ainda bate no teto", (t) => {
-  const a = ateRodada(t, [
-    { [APPROVAL]: approval("NEEDS_REWORK", 1) }, // A
-    { "src/t1.mjs": "export const conserto = 1;\n" }, // B
-    { [APPROVAL]: approval("NEEDS_REWORK", 2) }, // C
-    { "src/t1.mjs": "export const conserto = 2;\n" }, // B
-    { [APPROVAL]: approval("NEEDS_REWORK", 1) }, // C que mente
-  ]);
-  const r = a.cli("registrar-conferencia", "T1", "--rodada", "needs-rework");
-  assert.equal(r.status, 1, r.linhas.join("\n"));
-  assert.equal(r.saida.motivo, "teto-de-rodadas");
-  assert.equal(r.saida.rodadasRegistradas, 4);
-  assert.equal(a.marcas().filter((m) => /rodada$/.test(m)).length, 4);
-});
-
-test("conferência verde recusa task (gate-de-ux) com o approval em NEEDS_REWORK", (t) => {
-  const a = ateRodada(t, [{ [APPROVAL]: approval("NEEDS_REWORK", 1) }]);
-  a.recusa("approval-pede-rodada", "registrar-conferencia", "T1", "--verificacao", "verde", "--publicacao", "nao-se-aplica");
-  assert.ok(!a.marcas().some((m) => /conferida$/.test(m)));
-});
-
-// O rito das rodadas (o que a sessão faz em cada uma) é do projeto, no brief dele; o teto
-// que o verbo cobra é do núcleo: três emissões do arquivo, e a 4ª nunca abre.
-test("teto do verbo é o do rito de três rodadas", () => {
-  assert.equal(TETO_RODADAS_GATE, 3);
-});
-
-// ── rodada de carimbo (F4 do ATRM-51, T25/3 → T25/4) ─────────────────────────
-//
-// A B da T25/3 trouxe conserto + carimbo por cherry-pick (a maestra commitou
-// nota entre o `abrir` e o `trazer`): o conserto mudou de sha e o carimbo ficou
-// órfão. A T25/4 refez a B só com o carimbo do sha novo; `--rodada needs-rework`
-// recusava (`approval-fora-do-rito`: 2 marcas pedem `rodada: 2`, o approval segue
-// em 1), e o `proximo` repetia `trazida-sem-conferencia` para sempre.
-
-const carimbo = (sha) => `---\nsha: ${sha}\nreviewers: typescript-reviewer\nveredito: aprovado\n---\n`;
-const carimboDoCiclo = (sha) => `${PASTA}/revisoes/${sha.slice(0, 8)}.md`;
-const SHA_QUALQUER = "0123456789abcdef0123456789abcdef01234567";
-
-/** A filha empurra commits arbitrários na tentativa `<n>` (cada item: arquivos a escrever, ou `{ rm }`). */
-function empurrarFilha(a, n, commits) {
-  const ref = `refs/conducao/${CICLO}/T1/${n}`;
-  a.f("fetch", "-q", "origin", `+${ref}:refs/remotes/tentativa`);
-  a.f("checkout", "-q", "--detach", "refs/remotes/tentativa");
-  const shas = [];
-  for (const [i, c] of commits.entries()) {
-    if (c.rm) a.f("rm", "-q", c.rm);
-    else escreverEm(a.filha, typeof c === "function" ? c(shas) : c);
-    a.f("add", "-A");
-    a.f("commit", "-q", "-m", `${CICLO}-F1/T1 — commit ${i + 1}`);
-    shas.push(a.f("rev-parse", "HEAD"));
-  }
-  a.f("push", "-q", "origin", `HEAD:${ref}`);
-  return shas;
-}
-
-/** A maestra commita uma nota no ramo entre o abrir e o trazer ⇒ o trazer sai por cherry-pick. */
-function notaDaMaestra(a) {
-  escreverEm(a.maestra, { [`${PASTA}/notes/nota.md`]: `nota ${Date.now()}\n` });
-  a.g("add", "-A");
-  a.g("commit", "-q", "-m", "nota da maestra");
-}
-
-/** Rodada B por cherry-pick: conserto e, por cima, o carimbo do sha da filha. */
-function rodadaBComCarimboOrfao(a, n) {
-  const [conserto] = empurrarFilha(a, n, [{ "src/t1.mjs": "export const conserto = 1;\n" }, ([c]) => ({ [carimboDoCiclo(c)]: carimbo(c) })]);
-  notaDaMaestra(a);
-  const trazido = a.ok("trazer", "T1", "--tentativa", String(n), "--sessao", `filha-T1-${n}`);
-  const novo = a.g("log", "-1", "--format=%H", "HEAD", "--", "src/t1.mjs");
-  return { conserto, novo, trazido };
-}
+// ── a rodada de carimbo ──────────────────────────────────────────────────────
 
 test("trazer por cherry-pick avisa carimboOrfao quando o carimbo da filha cobre um sha que mudou", (t) => {
-  const a = ateRodada(t, [{ [APPROVAL]: approval("NEEDS_REWORK", 1) }]);
-  a.ok("registrar-conferencia", "T1", "--rodada", "needs-rework");
-  a.abrirPeloProximo("T1", 2);
-  const { conserto, novo, trazido } = rodadaBComCarimboOrfao(a, 2);
+  const { conserto, novo, trazido } = deFoto(t, "bRefeita");
   assert.equal(trazido.modo, "cherry-pick");
   assert.notEqual(novo, conserto);
   assert.deepEqual(trazido.carimboOrfao, { de: conserto, para: novo, carimbo: carimboDoCiclo(conserto) });
 });
 
 test("trazer sem carimbo órfão não avisa: fast-forward com carimbo, e cherry-pick sem carimbo na ponta", (t) => {
-  const ff = ambiente(t, [GATE]);
-  ff.ok("autorizar-ciclo", "F1", "--sim", "sim", "--pergunta", "p-00000000000000a1");
-  ff.abrirPeloProximo("T1", 1);
+  const { a: ff } = deFoto(t, "aberta");
   empurrarFilha(ff, 1, [{ "src/t1.mjs": "export const t1 = 1;\n" }, ([c]) => ({ [carimboDoCiclo(c)]: carimbo(c) })]);
   const sff = ff.ok("trazer", "T1", "--tentativa", "1", "--sessao", "filha");
   assert.equal(sff.modo, "fast-forward");
   assert.equal(sff.carimboOrfao, undefined);
 
-  const a = ambiente(t, [GATE]);
-  a.ok("autorizar-ciclo", "F1", "--sim", "sim", "--pergunta", "p-00000000000000a1");
-  a.abrirPeloProximo("T1", 1);
+  const { a } = deFoto(t, "aberta");
   empurrarFilha(a, 1, [{ "src/t1.mjs": "export const t1 = 1;\n" }]);
   notaDaMaestra(a);
   const s = a.ok("trazer", "T1", "--tentativa", "1", "--sessao", "filha");
@@ -426,22 +483,12 @@ test("trazer sem carimbo órfão não avisa: fast-forward com carimbo, e cherry-
 });
 
 test("cenário medido: B só de carimbo fecha por --rodada carimbo, sem consumir rodada, e a C seguinte registra", (t) => {
-  const a = ateRodada(t, [{ [APPROVAL]: approval("NEEDS_REWORK", 1) }]); // A
-  a.ok("registrar-conferencia", "T1", "--rodada", "needs-rework");
-  a.abrirPeloProximo("T1", 2);
-  const { novo } = rodadaBComCarimboOrfao(a, 2); // B, carimbo órfão
-  a.ok("registrar-conferencia", "T1", "--rodada", "needs-rework");
+  const { a, novo } = deFoto(t, "bRefeita"); // A e B (carimbo órfão) registradas, T1/3 aberta
 
   // A filha da tentativa 3 refaz a B só com o carimbo do sha novo (fast-forward).
-  a.abrirPeloProximo("T1", 3);
   a.rodada("T1", 3, { [carimboDoCiclo(novo)]: carimbo(novo) });
 
-  // Contraprova do estado medido: needs-rework recusa e o laço para.
-  const r = a.cli("registrar-conferencia", "T1", "--rodada", "needs-rework");
-  assert.equal(r.status, 1, r.linhas.join("\n"));
-  assert.equal(r.saida.motivo, "approval-fora-do-rito");
-  assert.equal(a.proximo().motivo, "trazida-sem-conferencia");
-
+  // A tentativa só de carimbo fecha por --rodada carimbo (sem teto, um needs-rework aqui também gravaria).
   const s = a.ok("registrar-conferencia", "T1", "--rodada", "carimbo");
   assert.equal(s.acao, "carimbo-registrado");
   assert.equal(s.tentativa, 3);
@@ -461,19 +508,8 @@ test("cenário medido: B só de carimbo fecha por --rodada carimbo, sem consumir
   assert.ok(!a.marcas().some((m) => /falhou$/.test(m)), a.marcas().join("\n"));
 });
 
-/** A · B (conserto com carimbo órfão) registradas; abre a tentativa 3. Devolve o ambiente e o sha novo do conserto. */
-function ateBRefeita(t) {
-  const a = ateRodada(t, [{ [APPROVAL]: approval("NEEDS_REWORK", 1) }]);
-  a.ok("registrar-conferencia", "T1", "--rodada", "needs-rework");
-  a.abrirPeloProximo("T1", 2);
-  const { novo } = rodadaBComCarimboOrfao(a, 2);
-  a.ok("registrar-conferencia", "T1", "--rodada", "needs-rework");
-  a.abrirPeloProximo("T1", 3);
-  return { a, novo };
-}
-
 test("--rodada carimbo aceita o destino avulso (.projeto/state/revisoes/<sha8>.md)", (t) => {
-  const { a, novo } = ateBRefeita(t);
+  const { a, novo } = deFoto(t, "bRefeita");
   const p = `.projeto/state/revisoes/${novo.slice(0, 8)}.md`;
   const [ponta] = empurrarFilha(a, 3, [{ [p]: carimbo(novo) }]);
   // `.claude/` está no alcance dos hooks: o trazer pergunta, e Rita aprova a ponta.
@@ -481,182 +517,23 @@ test("--rodada carimbo aceita o destino avulso (.projeto/state/revisoes/<sha8>.m
   assert.deepEqual(a.ok("registrar-conferencia", "T1", "--rodada", "carimbo").carimbos, [p]);
 });
 
-test("--rodada carimbo recusa carimbo que não cobre o conserto do HEAD e tentativa sem arquivo", (t) => {
-  const alheio = ateBRefeita(t).a;
-  alheio.rodada("T1", 3, { [carimboDoCiclo(SHA_QUALQUER)]: carimbo(SHA_QUALQUER) });
-  alheio.recusa("rodada-carimbo-nao-cobre-o-conserto", "registrar-conferencia", "T1", "--rodada", "carimbo");
-  assert.equal(alheio.proximo().motivo, "trazida-sem-conferencia");
-
-  const vazia = ateBRefeita(t).a;
-  const ref = `refs/conducao/${CICLO}/T1/3`;
-  vazia.f("fetch", "-q", "origin", `+${ref}:refs/remotes/tentativa`);
-  vazia.f("checkout", "-q", "--detach", "refs/remotes/tentativa");
-  vazia.f("commit", "-q", "--allow-empty", "-m", `${CICLO}-F1/T1 — vazio`);
-  vazia.f("push", "-q", "origin", `HEAD:${ref}`);
-  vazia.ok("trazer", "T1", "--tentativa", "3", "--sessao", "filha");
-  vazia.recusa("rodada-carimbo-sem-carimbo", "registrar-conferencia", "T1", "--rodada", "carimbo");
-});
-
-test("--rodada carimbo recusa tentativa que muda código além do carimbo", (t) => {
-  const a = ateRodada(t, [{ [APPROVAL]: approval("NEEDS_REWORK", 1) }]);
-  a.ok("registrar-conferencia", "T1", "--rodada", "needs-rework");
-  a.abrirPeloProximo("T1", 2);
-  a.rodada("T1", 2, { "src/t1.mjs": "export const conserto = 1;\n", [carimboDoCiclo(SHA_QUALQUER)]: carimbo(SHA_QUALQUER) });
-  const r = a.recusa("rodada-carimbo-fora-do-carimbo", "registrar-conferencia", "T1", "--rodada", "carimbo");
-  assert.match(r.stderr, /src\/t1\.mjs/);
-  assert.ok(!a.marcas().some((m) => /carimbo$/.test(m)));
-  assert.equal(a.proximo().motivo, "trazida-sem-conferencia");
-});
-
-test("--rodada carimbo recusa carimbo fora dos destinos, carimbo apagado, approval SHIP e task que não é conferência do operador", (t) => {
-  const fora = ateRodada(t, [{ [APPROVAL]: approval("NEEDS_REWORK", 1) }]);
-  fora.ok("registrar-conferencia", "T1", "--rodada", "needs-rework");
-  fora.abrirPeloProximo("T1", 2);
-  fora.rodada("T1", 2, { [`docs/reviews/${SHA_QUALQUER.slice(0, 8)}.md`]: carimbo(SHA_QUALQUER) });
-  fora.recusa("rodada-carimbo-fora-do-carimbo", "registrar-conferencia", "T1", "--rodada", "carimbo");
-
-  const apagado = ateRodada(t, [{ [APPROVAL]: approval("NEEDS_REWORK", 1), [carimboDoCiclo(SHA_QUALQUER)]: carimbo(SHA_QUALQUER) }]);
-  apagado.ok("registrar-conferencia", "T1", "--rodada", "needs-rework");
-  apagado.abrirPeloProximo("T1", 2);
-  empurrarFilha(apagado, 2, [{ rm: carimboDoCiclo(SHA_QUALQUER) }]);
-  apagado.ok("trazer", "T1", "--tentativa", "2", "--sessao", "filha");
-  apagado.recusa("rodada-carimbo-fora-do-carimbo", "registrar-conferencia", "T1", "--rodada", "carimbo");
-
-  const ship = ateRodada(t, [{ [APPROVAL]: approval("SHIP", 1), [carimboDoCiclo(SHA_QUALQUER)]: carimbo(SHA_QUALQUER) }]);
-  ship.recusa("approval-nao-pede-rodada", "registrar-conferencia", "T1", "--rodada", "carimbo");
-
-  const comum = ambiente(t, [task("T2", { outputs: `\`${APPROVAL}\` (create)` })]);
-  comum.ok("autorizar-ciclo", "F1", "--sim", "sim", "--pergunta", "p-00000000000000a1");
-  comum.abrirPeloProximo("T2", 1);
-  comum.rodada("T2", 1, { [carimboDoCiclo(SHA_QUALQUER)]: carimbo(SHA_QUALQUER) });
-  comum.recusa("rodada-fora-da-conferencia", "registrar-conferencia", "T2", "--rodada", "carimbo");
-});
-
-// ── rodada B feita por re-plano (ATRM-54 F6, T27 tentativa 4) ────────────────
-//
-// Os consertos da rodada A da T27 saíram em tasks novas (T45–T48) por re-plano
-// de decisão registrada (D-ATRM54-34), de que a T27 passou a depender: a B
-// nunca aconteceu dentro da task, a tentativa seguinte já foi a C (approval
-// `rodada: 2`), e `--rodada needs-rework` recusava `approval-fora-do-rito`
-// (1 marca pede `rodada: 1`). O rito passa a contar esse re-plano como a B.
-
-/** O gate T1 que passa a depender de `T3` (pelos Inputs), e a T3 nova, independente. */
-const GATE_DEPENDE_DE_T3 = GATE.replace("- **Inputs:** `README.md`", "- **Inputs:** `README.md` · saída da T3");
-const T3 = task("T3");
-
-/** A maestra commita o re-plano no ramo do ciclo (canonico novo), com o subject dado. */
-function replanejar(a, tasks, subject) {
-  escreverEm(a.maestra, { [CAMINHO]: canonico(tasks) });
-  a.g("add", "-A");
-  a.g("commit", "-q", "-m", subject);
-  return a.g("rev-parse", "HEAD");
-}
-
-/** O `proximo` até abrir `tk`: herda a autorização do re-plano, ou o operador re-autoriza o plano mudado. */
-function abrirDepoisDoReplano(a, tk, tentativa) {
-  for (let i = 0; i < 4; i++) {
-    const p = a.proximo();
-    if (p.acao === "herdar-autorizacao") a.ok("herdar-autorizacao", p.fase, "--nonce", p.nonce);
-    else if (p.acao === "perguntar" && p.motivo === "plano-mudou") a.ok("autorizar-ciclo", "F1", "--sim", "sim, o re-plano", "--pergunta", "p-00000000000000a1");
-    else if (p.acao === "abrir") {
-      const x = p.tarefas.find((y) => y.task === tk);
-      assert.ok(x, `esperava abrir ${tk}: ${JSON.stringify(p)}`);
-      assert.equal(x.tentativa, tentativa, JSON.stringify(p));
-      a.ok("abrir", tk, "--tentativa", String(tentativa), "--nonce", x.nonce, "--modo-maestra", "auto");
-      return x;
-    } else assert.fail(`proximo inesperado: ${JSON.stringify(p)}`);
+test("--rodada carimbo recusa o que não é só carimbo do conserto, e a trazida segue pendente", (t) => {
+  const SRC = "src/t1.mjs";
+  const casos = [
+    // [nome, commits da filha na T1/3 (sobre a B refeita) ⇒ (conserto) => commits, recusa, trecho do stderr]
+    ["código além do carimbo", () => [{ [SRC]: "export const conserto = 2;\n", [carimboDoCiclo(SHA_QUALQUER)]: carimbo(SHA_QUALQUER) }], "rodada-carimbo-fora-do-carimbo", /src\/t1\.mjs/],
+    ["carimbo fora dos destinos", () => [{ [`docs/reviews/${SHA_QUALQUER.slice(0, 8)}.md`]: carimbo(SHA_QUALQUER) }], "rodada-carimbo-fora-do-carimbo", /docs\/reviews\//],
+    ["carimbo apagado", (conserto) => [{ rm: carimboDoCiclo(conserto) }], "rodada-carimbo-fora-do-carimbo", /^conducao: .*\bD \.agents\//m],
+    ["carimbo que não cobre o conserto do HEAD", () => [{ [carimboDoCiclo(SHA_QUALQUER)]: carimbo(SHA_QUALQUER) }], "rodada-carimbo-nao-cobre-o-conserto", null],
+    ["tentativa sem arquivo", () => [{ vazio: true }], "rodada-carimbo-sem-carimbo", null],
+  ];
+  for (const [nome, commits, codigo, trecho] of casos) {
+    const { a, conserto } = deFoto(t, "bRefeita");
+    empurrarFilha(a, 3, commits(conserto));
+    a.ok("trazer", "T1", "--tentativa", "3", "--sessao", "filha");
+    const r = a.recusa(codigo, "registrar-conferencia", "T1", "--rodada", "carimbo");
+    if (trecho) assert.match(r.stderr, trecho, nome);
+    assert.ok(!a.marcas().some((m) => /carimbo$/.test(m)), `${nome}\n${a.marcas().join("\n")}`);
+    assert.equal(a.proximo().motivo, "trazida-sem-conferencia", nome);
   }
-  assert.fail(`${tk} não abriu`);
-}
-
-const RULING_T3 = `${CICLO}-F1/D-TESTE2-9 — re-plano de F1: conserto da rodada A do gate em T3`;
-
-test("re-plano de ruling que cria task de que o gate passa a depender conta como a B: approval 2 depois de 1 marca grava", (t) => {
-  const a = ateRodada(t, [{ [APPROVAL]: approval("NEEDS_REWORK", 1) }]); // A
-  a.ok("registrar-conferencia", "T1", "--rodada", "needs-rework");
-  const replano = replanejar(a, [GATE_DEPENDE_DE_T3, T3], RULING_T3);
-
-  // A B sai na T3, fora da task do gate.
-  abrirDepoisDoReplano(a, "T3", 1);
-  const ref = `refs/conducao/${CICLO}/T3/1`;
-  a.f("fetch", "-q", "origin", `+${ref}:refs/remotes/tentativa`);
-  a.f("checkout", "-q", "--detach", "refs/remotes/tentativa");
-  escreverEm(a.filha, { "src/t3.mjs": "export const conserto = 1;\n" });
-  a.f("add", "-A");
-  a.f("commit", "-q", "-m", `${CICLO}-F1/T3 — conserto`);
-  a.f("push", "-q", "origin", `HEAD:${ref}`);
-  a.ok("trazer", "T3", "--tentativa", "1", "--sessao", "filha-T3-1");
-  a.ok("registrar-conferencia", "T3", "--verificacao", "verde", "--publicacao", "nao-se-aplica");
-
-  // A tentativa seguinte do gate já é a C.
-  a.abrirPeloProximo("T1", 2);
-  a.rodada("T1", 2, { [APPROVAL]: approval("NEEDS_REWORK", 2) });
-  const s = a.ok("registrar-conferencia", "T1", "--rodada", "needs-rework");
-  assert.equal(s.acao, "rodada-registrada");
-  assert.equal(s.rodadaDoApproval, 2);
-  assert.equal(s.rodadasRegistradas, 1);
-  assert.equal(s.rodadaBPorReplano.sha, replano);
-  assert.equal(s.rodadaBPorReplano.ruling, "D-TESTE2-9");
-  assert.equal(s.rodadaBPorReplano.por, "dependencia");
-  assert.deepEqual(s.rodadaBPorReplano.novas, ["T3"]);
-  assert.equal(a.g("log", "-1", "--format=%(trailers:key=Conducao-Rodada-B-Replano,valueonly=true)"), replano);
-
-  // A marca conta como duas: a B seguinte (approval ainda 2) grava, e a C dela (3) bate no teto.
-  a.abrirPeloProximo("T1", 3);
-  a.rodada("T1", 3, { "src/t1.mjs": "export const conserto = 2;\n" });
-  assert.equal(a.ok("registrar-conferencia", "T1", "--rodada", "needs-rework").rodadasRegistradas, 3);
-  a.abrirPeloProximo("T1", 4);
-  a.rodada("T1", 4, { [APPROVAL]: approval("NEEDS_REWORK", 3) });
-  const teto = a.cli("registrar-conferencia", "T1", "--rodada", "needs-rework");
-  assert.equal(teto.status, 1, teto.linhas.join("\n"));
-  assert.equal(teto.saida.motivo, "teto-de-rodadas");
-  assert.equal(teto.saida.rodadasRegistradas, 4);
-});
-
-test("re-plano de ruling cuja task nova o gate não depende nem cita recusa approval-fora-do-rito, dizendo o que destrava", (t) => {
-  const a = ateRodada(t, [{ [APPROVAL]: approval("NEEDS_REWORK", 1) }]); // A
-  a.ok("registrar-conferencia", "T1", "--rodada", "needs-rework");
-  const replano = replanejar(a, [GATE, T3], `${CICLO}-F1/D-TESTE2-9 — re-plano de F1: tarefa nova sem relação`);
-
-  // O gate é independente: abre direto, sem passar pela T3.
-  abrirDepoisDoReplano(a, "T1", 2);
-  a.rodada("T1", 2, { [APPROVAL]: approval("NEEDS_REWORK", 2) });
-  const r = a.cli("registrar-conferencia", "T1", "--rodada", "needs-rework");
-  assert.equal(r.status, 1, r.linhas.join("\n"));
-  assert.equal(r.saida.motivo, "approval-fora-do-rito");
-  assert.equal(r.saida.rodadaEsperada, 1);
-  assert.equal(r.saida.rodadasRegistradas, 1);
-  assert.match(r.saida.destrava, /re-plano de decisão registrada/);
-  assert.deepEqual(r.saida.replanosVistos, [{ sha: replano, ruling: "D-TESTE2-9", motivo: "T1-nao-depende-nem-e-citada" }]);
-  assert.ok(!a.marcas().some((m) => /tentativa 2 rodada$/.test(m)));
-  assert.equal(a.proximo().motivo, "trazida-sem-conferencia");
-});
-
-test("re-plano de ruling que cria task e cita o gate no corpo conta como a B, mesmo sem dependência", (t) => {
-  const a = ateRodada(t, [{ [APPROVAL]: approval("NEEDS_REWORK", 1) }]); // A
-  a.ok("registrar-conferencia", "T1", "--rodada", "needs-rework");
-  escreverEm(a.maestra, { [CAMINHO]: canonico([GATE, T3]) });
-  a.g("add", "-A");
-  a.g("commit", "-q", "-m", `${CICLO}-F1/D-TESTE2-9 — re-plano de F1: conserto em tarefa nova`, "-m", "A rodada B da T1 sai na T3.");
-  const replano = a.g("rev-parse", "HEAD");
-  abrirDepoisDoReplano(a, "T1", 2);
-  a.rodada("T1", 2, { [APPROVAL]: approval("NEEDS_REWORK", 2) });
-  const s = a.ok("registrar-conferencia", "T1", "--rodada", "needs-rework");
-  assert.equal(s.rodadaBPorReplano.sha, replano);
-  assert.equal(s.rodadaBPorReplano.por, "citacao");
-});
-
-test("sem re-plano, approval 2 depois de 1 marca recusa como antes, e a recusa diz que um re-plano destravaria", (t) => {
-  const a = ateRodada(t, [
-    { [APPROVAL]: approval("NEEDS_REWORK", 1) }, // A
-    { [APPROVAL]: approval("NEEDS_REWORK", 2) }, // C sem B
-  ]);
-  const r = a.cli("registrar-conferencia", "T1", "--rodada", "needs-rework");
-  assert.equal(r.status, 1, r.linhas.join("\n"));
-  assert.equal(r.saida.motivo, "approval-fora-do-rito");
-  assert.equal(r.saida.rodadaEsperada, 1);
-  assert.equal(r.saida.rodadasRegistradas, 1);
-  assert.match(r.saida.destrava, /conta como a rodada B/);
-  assert.deepEqual(r.saida.replanosVistos, []);
-  assert.equal(a.marcas().filter((m) => /rodada$/.test(m)).length, 1);
 });

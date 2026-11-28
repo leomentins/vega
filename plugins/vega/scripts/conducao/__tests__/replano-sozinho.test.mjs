@@ -272,46 +272,118 @@ test("fase reaberta por CI com 1 task e fechamento novo herda com aviso, grava o
   assert.deepEqual(ab.tarefas.map((x) => x.task), ["T5"]);
 });
 
-test("re-plano no meio da fase com o trailer segue sozinho; sem o trailer, a herança de antes", (t) => {
-  for (const [motivo, origem] of [["revisao:t1-medio", "sozinho"], [null, "replano"]]) {
-    const a = ambiente(t, { conferidas: ["T1"] });
-    a.replanejar("#### T2 — tarefa T2", `${task("T5", { inputs: "T1" })}#### T2 — tarefa T2`, RULING(9, "T5"), motivo);
-    const h = a.proximo();
-    assert.equal(h.acao, "herdar-autorizacao", JSON.stringify(h));
-    assert.equal(h.origem, origem, String(motivo));
-  }
-});
-
-test("fase reaberta fora da regra do re-plano sozinho herda pela pré-autorização (ruling de 23/11/2026)", (t) => {
+test("re-plano fora da regra do sozinho: a herança de antes, a pré-autorização, a restrição e o motivo repetido, por tabela de casos", (t) => {
+  // A regra pura (`replanoSozinho`, acima) decide cada condição; aqui, pelo CLI, para onde cai o re-plano
+  // que ela recusa. Publicação que altera, Steps que mesclam a proposta e tasks demais caem na mesma
+  // pré-autorização que o commit sem o trailer, e cada uma reprova `sozinho` na tabela pura.
+  const T9 = task("T9", { inputs: "`README.md`" });
   const publica = task("T5", { inputs: "T2", steps: "aplica com `db push`", extra: ["- **Publicação:** sim, altera a coluna"] });
   const merge = task("T5", { inputs: "T2", steps: "roda `gh pr merge` da proposta" });
   const tres = task("T5", { inputs: "T2" }) + task("T7", { inputs: "T5" }) + task("T8", { inputs: "T7" });
+  const preautorizado = (p) => {
+    assert.equal(p.acao, "herdar-autorizacao");
+    assert.equal(p.origem, "preautorizado");
+    assert.equal(p.reaberta, true);
+  };
   const casos = [
-    { caso: "commit sem o trailer", de: ANTES_DA_F2, para: T5 + T6 + ANTES_DA_F2, motivo: null },
-    { caso: "publicação que altera", de: ANTES_DA_F2, para: publica + T6 + ANTES_DA_F2, motivo: "ci:a" },
-    { caso: "Steps que mesclam a proposta", de: ANTES_DA_F2, para: merge + T6 + ANTES_DA_F2, motivo: "ci:a" },
-    { caso: "3 tasks novas além do fechamento", de: ANTES_DA_F2, para: tres + task("T6", { inputs: "T8", satisfies: FECHA }) + ANTES_DA_F2, motivo: "ci:a" },
-    { caso: "task em outra fase", de: "## 4. Pronto", para: `${task("T7", { inputs: "T4", fase: "F2" })}## 4. Pronto`, motivo: "ci:a", tambem: [ANTES_DA_F2, T5 + T6 + ANTES_DA_F2] },
-    { caso: "linha de restrição", de: LINHA_15, para: `${LINHA_15}\n\n**Consentimentos:** \`replano-sozinho\` → pergunta`, motivo: "ci:a", tambem: [ANTES_DA_F2, T5 + T6 + ANTES_DA_F2] },
+    {
+      caso: "no meio da fase, com o trailer: segue sozinho",
+      conferidas: ["T1"],
+      de: "#### T2 — tarefa T2",
+      para: `${task("T5", { inputs: "T1" })}#### T2 — tarefa T2`,
+      motivo: "revisao:t1-medio",
+      espera: (p) => {
+        assert.equal(p.acao, "herdar-autorizacao");
+        assert.equal(p.origem, "sozinho");
+      },
+    },
+    {
+      caso: "no meio da fase, sem o trailer: a herança de ruling de antes",
+      conferidas: ["T1"],
+      de: "#### T2 — tarefa T2",
+      para: `${task("T5", { inputs: "T1" })}#### T2 — tarefa T2`,
+      motivo: null,
+      espera: (p) => {
+        assert.equal(p.acao, "herdar-autorizacao");
+        assert.equal(p.origem, "replano");
+      },
+    },
+    {
+      caso: "fase reaberta, commit sem o trailer: herda pela pré-autorização (ruling de 23/11/2026)",
+      de: ANTES_DA_F2,
+      para: T5 + T6 + ANTES_DA_F2,
+      motivo: null,
+      espera: (p) => {
+        assert.equal(p.acao, "herdar-autorizacao");
+        assert.equal(p.origem, "preautorizado");
+        assert.equal(p.reaberta, true);
+      },
+    },
+    { caso: "fase reaberta, publicação que altera: herda pela pré-autorização", de: ANTES_DA_F2, para: publica + T6 + ANTES_DA_F2, motivo: "ci:a", espera: preautorizado },
+    { caso: "fase reaberta, Steps que mesclam a proposta: herda pela pré-autorização", de: ANTES_DA_F2, para: merge + T6 + ANTES_DA_F2, motivo: "ci:a", espera: preautorizado },
+    {
+      caso: "fase reaberta, 3 tasks novas além do fechamento: herda pela pré-autorização",
+      de: ANTES_DA_F2,
+      para: tres + task("T6", { inputs: "T8", satisfies: FECHA }) + ANTES_DA_F2,
+      motivo: "ci:a",
+      espera: preautorizado,
+    },
+    {
+      caso: "fase reaberta, task em outra fase: herda pela pré-autorização",
+      de: "## 4. Pronto",
+      para: `${task("T7", { inputs: "T4", fase: "F2" })}## 4. Pronto`,
+      motivo: "ci:a",
+      tambem: [ANTES_DA_F2, T5 + T6 + ANTES_DA_F2],
+      espera: (p) => {
+        assert.equal(p.acao, "herdar-autorizacao");
+        assert.equal(p.origem, "preautorizado");
+        assert.equal(p.reaberta, true);
+      },
+    },
+    {
+      // O re-plano que mexe na linha `**Consentimentos:**` não se pré-autoriza: a restrição vale pelo que o sim viu.
+      caso: "fase reaberta, linha de restrição: pergunta plano-mudou",
+      de: LINHA_15,
+      para: `${LINHA_15}\n\n**Consentimentos:** \`replano-sozinho\` → pergunta`,
+      motivo: "ci:a",
+      tambem: [ANTES_DA_F2, T5 + T6 + ANTES_DA_F2],
+      espera: (p) => {
+        assert.equal(p.acao, "perguntar");
+        assert.equal(p.motivo, "plano-mudou");
+        assert.equal(p.reaberta, true);
+      },
+    },
+    {
+      caso: "o mesmo motivo duas vezes no ciclo pergunta replano-repetido, com o conserto do molde",
+      antes: (x) => x.replanejar("#### T1 — tarefa T1", `${T9}#### T1 — tarefa T1`, RULING(8, "T9"), "ci:lint-vermelho"),
+      conferidas: ["T9", "T1", "T2"],
+      de: ANTES_DA_F2,
+      para: T5 + T6 + ANTES_DA_F2,
+      motivo: "operaria:lint-vermelho",
+      espera: (p) => {
+        assert.equal(p.acao, "perguntar");
+        assert.equal(p.motivo, "replano-repetido");
+        assert.equal(p.fase, "F1");
+        assert.equal(p.conserto, "molde");
+        assert.equal(p.anteriores.length, 1);
+        assert.match(p.ponteiro, /^replano:[0-9a-f]{8}$/);
+      },
+    },
   ];
-  assert.ok(casos.length > 0);
+  assert.equal(casos.length, 9);
   for (const c of casos) {
-    const a = ambiente(t);
+    const a = ambiente(t, { antes: c.antes ?? null, ...(c.conferidas ? { conferidas: c.conferidas } : {}) });
     if (c.tambem) {
       const texto = readFileSync(path.join(a.dir, CAMINHO), "utf8").replace(c.tambem[0], c.tambem[1]);
       writeFileSync(path.join(a.dir, CAMINHO), texto);
     }
     a.replanejar(c.de, c.para, RULING(9, "T5"), c.motivo);
     const p = a.proximo(a.verde(92));
-    // O re-plano que mexe na linha `**Consentimentos:**` não se pré-autoriza: a restrição vale pelo que o sim viu.
-    if (c.caso === "linha de restrição") {
-      assert.equal(p.acao, "perguntar", `${c.caso}: ${JSON.stringify(p)}`);
-      assert.equal(p.motivo, "plano-mudou", c.caso);
-    } else {
-      assert.equal(p.acao, "herdar-autorizacao", `${c.caso}: ${JSON.stringify(p)}`);
-      assert.equal(p.origem, "preautorizado", c.caso);
+    try {
+      c.espera(p);
+    } catch (e) {
+      throw new Error(`${c.caso}: ${JSON.stringify(p)}`, { cause: e });
     }
-    assert.equal(p.reaberta, true, c.caso);
   }
 });
 
@@ -332,6 +404,8 @@ test("fase reaberta pelo CI com republicação aditiva da função (o caso T42 d
     const h = a.proximo(a.verde(94));
     assert.equal(h.acao, "herdar-autorizacao", `${motivo}: ${JSON.stringify(h)}`);
     assert.ok(["sozinho", "preautorizado"].includes(h.origem), `${motivo}: ${h.origem}`);
+    // A gravação e a abertura coberta pelo sim do ciclo não dependem do trailer: ponta a ponta só com ele.
+    if (motivo === null) continue;
     const ok = a.cli("herdar-autorizacao", "F1", "--nonce", h.nonce);
     assert.equal(ok.status, 0, ok.stderr);
     assert.equal(JSON.parse(ok.stdout.trim()).avisarOperador, true);
@@ -339,20 +413,4 @@ test("fase reaberta pelo CI com republicação aditiva da função (o caso T42 d
     assert.equal(ab.acao, "abrir", `${motivo}: ${JSON.stringify(ab)}`);
     assert.deepEqual(ab.tarefas.map((x) => x.task), ["T5"]);
   }
-});
-
-test("o mesmo motivo duas vezes no ciclo pergunta replano-repetido, com o conserto do molde", (t) => {
-  const T9 = task("T9", { inputs: "`README.md`" });
-  const a = ambiente(t, {
-    antes: (x) => x.replanejar("#### T1 — tarefa T1", `${T9}#### T1 — tarefa T1`, RULING(8, "T9"), "ci:lint-vermelho"),
-    conferidas: ["T9", "T1", "T2"],
-  });
-  a.replanejar(ANTES_DA_F2, T5 + T6 + ANTES_DA_F2, RULING(9, "T5-T6"), "operaria:lint-vermelho");
-  const p = a.proximo(a.verde(93));
-  assert.equal(p.acao, "perguntar", JSON.stringify(p));
-  assert.equal(p.motivo, "replano-repetido");
-  assert.equal(p.fase, "F1");
-  assert.equal(p.conserto, "molde");
-  assert.equal(p.anteriores.length, 1);
-  assert.match(p.ponteiro, /^replano:[0-9a-f]{8}$/);
 });

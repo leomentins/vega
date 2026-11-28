@@ -109,7 +109,8 @@ test("etapa em rodadas: default 1, nomeia a rodada, recusa acima do teto", () =>
   assert.equal(um.teto, 2);
   assert.equal(um.modelo, "modelo-medio");
   assert.match(um.pedido.split("\n")[0], /^Rode o \/revisar-plano do C, rodada 1 de 2\.$/);
-  assert.equal(rodar("revisar-plano", "--ciclo", "C", "--rodada", "2").json.nome, "C · revisar-plano 2");
+  assert.equal(um.nome, "C · plano · revisar-plano");
+  assert.equal(rodar("revisar-plano", "--ciclo", "C", "--rodada", "2").json.nome, "C · plano · revisar-plano · r2");
   const acima = rodar("revisar-plano", "--ciclo", "C", "--rodada", "3");
   assert.equal(acima.status, 1);
   assert.match(acima.stderr, /teto-da-etapa/);

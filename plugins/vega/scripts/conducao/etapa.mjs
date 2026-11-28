@@ -99,7 +99,7 @@ export function pedidoDaEtapa({ repo, ciclo, etapa, rodada, arvore, ramo }) {
     etapa: e.id,
     comando: e.comando,
     ...(n === null ? {} : { rodada: n, teto: e.rodadas }),
-    nome: `${ciclo} · ${e.id}${n === null ? "" : ` ${n}`}`,
+    nome: `${ciclo} · plano · ${e.id}${n === null || n < 2 ? "" : ` · r${n}`}`,
     tier: e.tier,
     modelo,
     ...(e.tier !== "inherit" && !mapeado ? { aviso: `a declaração não mapeia o tier ${e.tier}; a etapa nasce com o modelo de quem a cria` } : {}),

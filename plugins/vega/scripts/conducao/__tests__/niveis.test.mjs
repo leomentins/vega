@@ -164,7 +164,7 @@ test("maestra: passada do corte com cadeia livre, pergunta a herdeira ao operado
   const r = maestraCom({ ...corte, herdeira: { pergunta: "p-0000000000000001", escolha: "sim" } });
   assert.doesNotMatch(r.texto, /--herdeira/);
   assert.equal(r.acao, "passar-maestra");
-  assert.equal(r.nome, `${CICLO} · maestra · 4`);
+  assert.equal(r.nome, `${CICLO} · maestra · h4`);
   assert.match(r.texto, new RegExp(`--ordinal 4 --nonce ${"3".repeat(16)} --anterior session_maestra`));
   assert.match(r.texto, /archive_session da maestra anterior session_maestra/);
   assert.match(r.texto, /session_c1/);

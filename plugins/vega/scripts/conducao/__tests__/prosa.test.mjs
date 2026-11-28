@@ -33,7 +33,12 @@ const DECLARACOES = [path.resolve(AQUI, "fixtures", "projeto-de-teste", ".altair
 // Hotfix vega-maestra-leva-pergunta: em 3 níveis o operador responde na sessão da maestra (o papel
 // na tabela, a linha da §Três níveis, o ponteiro da §3.1 e a regra do send_message) somou 30
 // palavras, com o passo a passo em references/maestra.md §A pergunta: 6936 → 6966. Teto ao medido.
-const FAIXA = { min: 5500, max: 6966 };
+// Hotfix vega-troca-assumir-adota-sozinho: o preparo sozinho do `assumir` e o ponteiro das duas
+// ordens curtas da troca de conta somaram 28 palavras à skill, com o passo a passo em
+// references/maestra.md §Troca de conta, fora da soma: 6959 → 6987. Teto ao medido.
+// Hotfix vega-nomes-de-sessao: o `abrir` devolve o `nome` da operária, e a skill manda usá-lo
+// como título do create_session (5 palavras): 6987 → 6992. Teto ao medido.
+const FAIXA = { min: 5500, max: 6992 };
 // Gente que decide fora da condução e não é operador declarado.
 const OUTRAS_PESSOAS = ["Fulano", "Beltrano"];
 

@@ -128,15 +128,15 @@
  *   registrar-conferencia T<k> --rodada nao|needs-rework [--operador <texto>] [--sessao <id>]
  *      só task de conferência do operador (T14, 7-a): o não dele grava `Conducao: T<k> tentativa <n> rodada`,
  *      que encerra a tentativa sem ser feita nem falha, e o `proximo` abre a n+1. Por pergunta, `--operador`
- *      = o texto do operador dizendo não (obrigatório), e o 3º não sai `perguntar teto-de-rodadas`. Por arquivo
- *      (caso declarado no adaptador, por exemplo um gate de UX por arquivo; `needs-rework` é o mesmo não): o approval do
- *      HEAD diz não (`verdict: NEEDS_REWORK`) com `rodada` abaixo do teto do rito (3 ⇒ `perguntar
- *      teto-de-rodadas`), e o brief entrega a rodada B ou C; a B feita fora da task por re-plano de decisão
- *      registrada, com task nova de que o gate passa a depender, conta (trailer `Conducao-Rodada-B-Replano`)
+ *      = o texto do operador dizendo não (obrigatório). Por arquivo (caso declarado no adaptador, por exemplo
+ *      um gate de UX por arquivo; `needs-rework` é o mesmo não): o approval do HEAD diz não
+ *      (`verdict: NEEDS_REWORK`) com `rodada` que não recua abaixo da última registrada (recuou ⇒
+ *      `perguntar approval-fora-do-rito`), e o brief entrega a rodada B ou C. Sem teto de rodadas
+ *      (25/11/2026): o gate segue até o operador aprovar
  *   registrar-conferencia T<k> --rodada carimbo [--sessao <id>]
  *      mesma task, caso por arquivo, approval em NEEDS_REWORK, tentativa trazida que só acrescenta carimbo (o carimbo que o
  *      adaptador declara; outro arquivo ⇒ `rodada-carimbo-fora-do-carimbo`):
- *      grava `Conducao: T<k> tentativa <n> carimbo`, que não conta como rodada nem no teto
+ *      grava `Conducao: T<k> tentativa <n> carimbo`, que não conta como rodada
  *   recusar-publicacao T<k> [--motivo <texto>]
  *   reverter-trazido T<k> [--motivo <texto>]
  *   registrar-falha T<k> --tentativa <n> --coberta sim|nao|ambiente|pergunta [--motivo <texto>]
@@ -599,9 +599,9 @@ export function semSaidasGeradasNaVaga(ctx, geradas) {
  * `geradas` são os caminhos das saídas geradas declaradas (`semSaidasGeradasNaVaga`);
  * `consentimentos` são os casos do ciclo no git (`lerConsentimentos`).
  */
-export function contextoDoProximo({ ciclo, head, plano, planoBlob, planoHead, planoHeadBlob, diffPlano, autorizacoes, estado, entrada = {}, agora = null, reinicioEm = null, encerradas = new Set(), repo = null, replanos = null, anteriores = [], planoHeadTexto = null, planoTexto = null, reconhecer = parsePhaseCommit, autorizacaoDoCiclo = null, conferencia = [], temCi = true, geradas = [], tiers = {}, passagem = null, consentimentos = [], niveis: arranjo = 2 }, acao) {
+export function contextoDoProximo({ ciclo, head, plano, planoBlob, planoHead, planoHeadBlob, diffPlano, autorizacoes, estado, entrada = {}, agora = null, reinicioEm = null, encerradas = new Set(), repo = null, replanos = null, anteriores = [], planoHeadTexto = null, planoTexto = null, reconhecer = parsePhaseCommit, autorizacaoDoCiclo = null, conferencia = [], temCi = true, geradas = [], tiers = {}, passagem = null, consentimentos = [], niveis: arranjo = 2, emEspera = new Set() }, acao) {
   const ctx = contextoDaDecisao(
-    { ciclo, head, plano, planoBlob, planoHead, planoHeadBlob, diffPlano, autorizacoes, estado, entrada, agora, reinicioEm, encerradas, repo, replanos, anteriores, planoHeadTexto, planoTexto, reconhecer, autorizacaoDoCiclo, conferencia, temCi, tiers, passagem, consentimentos, niveis: arranjo },
+    { ciclo, head, plano, planoBlob, planoHead, planoHeadBlob, diffPlano, autorizacoes, estado, entrada, agora, reinicioEm, encerradas, repo, replanos, anteriores, planoHeadTexto, planoTexto, reconhecer, autorizacaoDoCiclo, conferencia, temCi, tiers, passagem, consentimentos, niveis: arranjo, emEspera },
     {
       acao,
       nonce,
@@ -647,12 +647,81 @@ export function decidir(params) {
     ...campos,
   });
   // A pergunta das regras sai pelo construtor único (pergunta.mjs, T12).
-  const ctx = contextoDoProximo(params, pergunta.comPergunta(fabrica));
-  for (const regra of ORDEM_DAS_REGRAS) {
-    const decidida = regra(ctx);
-    if (decidida) return decidida;
+  const pelasRegras = (emEspera) => {
+    const ctx = contextoDoProximo({ ...params, emEspera }, pergunta.comPergunta(fabrica));
+    for (const regra of ORDEM_DAS_REGRAS) {
+      const decidida = regra(ctx);
+      if (decidida) return decidida;
+    }
+    throw new Error("decidir: nenhuma regra decidiu — regraSemSaida, a última, sempre decide");
+  };
+  return comPerguntasAbertas(pelasRegras, params.entrada?.perguntasAbertas);
+}
+
+/**
+ * Os motivos de pergunta que param só uma task e esperam o operador (hotfix
+ * conducao-pergunta-aberta-nao-trava, D37 do LABS-23): enquanto a pergunta está com
+ * ele, a task fica parada e as outras seguem.
+ */
+export const PERGUNTAS_QUE_ESPERAM_O_OPERADOR = Object.freeze(["conferencia-do-operador", "pergunta-da-filha", "task-sensivel"]);
+
+/**
+ * A pergunta aberta não trava o que não depende dela (hotfix conducao-pergunta-aberta-nao-trava,
+ * 28/11/2026). `abertas` é o `perguntasAbertas` da entrada: as perguntas que a condutora já levou
+ * ao operador (`task`, `tentativa`, `motivo`; com `respondidaEm`, já respondida, só conta na pausa
+ * do prazo). Quando as regras decidem uma pergunta de `PERGUNTAS_QUE_ESPERAM_O_OPERADOR` que casa
+ * com uma aberta, a task dela entra em `emEspera` (na `task-sensivel`, toda task que ela lista) e
+ * as regras decidem de novo: a task parada não é trazida, conferida nem vigiada, quem depende dela
+ * não abre (não está feita), e a vaga e os Outputs dela seguem ocupados (segue em voo). A ação que
+ * sai leva `perguntasAbertas`, as que seguem com o operador. Sem outra coisa a fazer — só esperar
+ * filhas paradas, sem vaga, ou `sem-saida` —, a primeira pergunta volta como hoje. A ordem não muda:
+ * a pergunta que ainda não foi levada sai primeiro, e nenhuma resposta é dada aqui.
+ */
+export function comPerguntasAbertas(pelasRegras, abertas) {
+  const vivas = (Array.isArray(abertas) ? abertas : []).filter((p) => p && typeof p.task === "string" && typeof p.motivo === "string" && p.respondidaEm == null);
+  const emEspera = new Set();
+  const congeladas = [];
+  // `esgotou`: as regras não tinham mais nada a fazer (só esperar, ou a pergunta repetida). Aí a
+  // aberta que elas não perguntaram (respondida sem `respondidaEm`, ou superada) sai em
+  // `perguntasSemEco`, para a condutora consertar a lista; e também quando a ação é sobre a task
+  // dela (a vigia acusou o prazo, por exemplo). Fora disso, outra ação pode só ter vindo na frente.
+  const com = (d, esgotou) => {
+    const semEco = vivas.filter(
+      (p) => (esgotou || p.task === d.task) && !congeladas.some((c) => c.task === p.task && c.motivo === p.motivo && c.tentativa === p.tentativa),
+    );
+    return {
+      ...d,
+      ...(congeladas.length ? { perguntasAbertas: congeladas } : {}),
+      ...(semEco.length ? { perguntasSemEco: semEco.map(({ task, tentativa, motivo }) => ({ task, tentativa, motivo })) } : {}),
+    };
+  };
+  const soEspera = (d) =>
+    d.motivo === "sem-saida" ||
+    (d.acao === "esperar" && (d.motivo === "sem-vaga" || (d.motivo === "filhas-em-voo" && (d.emVoo ?? []).every((id) => emEspera.has(id)))));
+  let primeira = null;
+  for (;;) {
+    const d = pelasRegras(emEspera);
+    // A `task-sensivel` é uma por fase e lista as pendentes: casa pela listada em qualquer posição,
+    // porque a primeira (a `task` da ação) muda com a ordem das prontas.
+    const listadas = d.motivo === "task-sensivel" && Array.isArray(d.tasks) ? d.tasks.map((x) => x.task) : [d.task];
+    const item =
+      d.acao === "perguntar" && PERGUNTAS_QUE_ESPERAM_O_OPERADOR.includes(d.motivo)
+        ? vivas.find((p) => p.motivo === d.motivo && (d.motivo === "task-sensivel" ? listadas.includes(p.task) : p.task === d.task && p.tentativa === d.tentativa))
+        : null;
+    if (!item) {
+      if (!primeira) return vivas.length ? com(d, d.acao === "esperar") : d;
+      return soEspera(d) ? com(primeira, true) : com(d, d.acao === "esperar");
+    }
+    primeira ??= d;
+    const novas = listadas.filter((id) => !emEspera.has(id));
+    // Rede: a regra que devolve a pergunta de uma task já parada não pode girar o laço.
+    if (!novas.length) return com(primeira, true);
+    for (const id of novas) emEspera.add(id);
+    // Os itens da entrada que casaram: na `task-sensivel`, todo item dela cuja task a pergunta lista
+    // (a condutora pode gravar um por task, e nenhum deles é lista velha).
+    const casados = d.motivo === "task-sensivel" ? vivas.filter((p) => p.motivo === "task-sensivel" && listadas.includes(p.task)) : [item];
+    for (const p of casados) if (!congeladas.some((c) => c.task === p.task && c.motivo === p.motivo && c.tentativa === p.tentativa)) congeladas.push({ task: p.task, tentativa: p.tentativa, motivo: p.motivo });
   }
-  throw new Error("decidir: nenhuma regra decidiu — regraSemSaida, a última, sempre decide");
 }
 
 /**
@@ -1728,6 +1797,19 @@ export function problemasDaEntrada(entrada) {
   lista("aprovacoes", (a, onde) => {
     for (const k of ["task", "nonce"]) tipo(`${onde}.${k}`, a[k], texto, "texto");
   });
+  // A pergunta que a condutora já levou ao operador (hotfix conducao-pergunta-aberta-nao-trava): sem
+  // `task` ou `motivo` ela não congela nada, e um instante ilegível desligaria a pausa do prazo calado.
+  lista("perguntasAbertas", (p, onde) => {
+    // Todo campo, menos `respondidaEm`, é exigido: um motivo digitado errado nunca casaria, e a trava voltaria calada.
+    for (const k of ["task", "tentativa", "motivo", "abertaEm"]) if (p[k] === undefined || p[k] === null) out.push(`${onde}.${k}: ausente`);
+    tipo(`${onde}.task`, p.task, (v) => typeof v === "string" && /^T\d{1,3}$/.test(v), "T<k>");
+    tipo(`${onde}.motivo`, p.motivo, (v) => PERGUNTAS_QUE_ESPERAM_O_OPERADOR.includes(v), PERGUNTAS_QUE_ESPERAM_O_OPERADOR.join(" | "));
+    // A `task-sensivel` da estação condutora sai com tentativa 0.
+    tipo(`${onde}.tentativa`, p.tentativa, inteiro, "inteiro >= 0");
+    for (const k of ["abertaEm", "respondidaEm"]) tipo(`${onde}.${k}`, p[k], (v) => epoch(v) !== null, "instante ISO ou epoch em segundos");
+    if (p.respondidaEm != null && epoch(p.respondidaEm) !== null && epoch(p.abertaEm) !== null && epoch(p.respondidaEm) < epoch(p.abertaEm))
+      out.push(`${onde}.respondidaEm: antes de abertaEm`);
+  });
   tipo("ci", entrada.ci, objeto, "objeto");
   if (objeto(entrada.ci)) {
     tipo("ci.sha", entrada.ci.sha, texto, "texto");
@@ -1770,7 +1852,7 @@ export const MOTIVO_SEM_NIVEL =
   "proximo não tem mais nível: o papel maestra foi aposentado (VEGA-37) — a condutora que fecha a fase cria a seguinte pelo `criar` do encerrar-sessao; rode o proximo sem --nivel";
 
 /** Campos de cima que o `proximo` lê da entrada (SKILL §2 passo 1). */
-const CAMPOS_DA_ENTRADA = Object.freeze(["filhas", "aprovacoes", "ci", "proposta", "inscrita", "tetoPonte", "agora", "sessaoMaestra", "herdeira", "anterior", "maestra", "linhagem"]);
+const CAMPOS_DA_ENTRADA = Object.freeze(["filhas", "aprovacoes", "ci", "proposta", "inscrita", "tetoPonte", "agora", "sessaoMaestra", "herdeira", "anterior", "maestra", "linhagem", "perguntasAbertas"]);
 
 /**
  * A entrada com `vez: "esperando"` nas filhas cuja sessão o adaptador diz ter

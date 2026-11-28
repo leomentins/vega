@@ -263,7 +263,7 @@ export function decidirMaestra({ ciclo, sessao, linhagem, contexto, criar, nonce
     return {
       acao: "passar-maestra",
       ...base,
-      nome: `${ciclo} · maestra · ${ordinal + 1}`,
+      nome: `${ciclo} · maestra · h${ordinal + 1}`,
       modelo: null,
       linhagem: conta,
       contexto: { usados, max, corte },

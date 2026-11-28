@@ -86,9 +86,10 @@ function pedeSimParaPublicar(ctx, t) {
  * Lê: `fase`, `voo` (`[{ t, r }]` — task do plano e tentativa em voo), `filhas`, `consentimentos`.
  */
 export function regraTrazer(ctx) {
-  const { acao, lerAviso, fase, voo, filhas } = ctx;
+  const { acao, lerAviso, fase, voo, filhas, emEspera = new Set() } = ctx;
   for (const { t, r } of voo) {
-    if (!r.nonce) continue;
+    // Parada numa pergunta aberta ao operador: nada dela se aplica (já trazida, ou esperando a resposta).
+    if (!r.nonce || emEspera.has(t.id)) continue;
     const ok = filhas
       .filter((f) => f.nonce === r.nonce)
       .map((f) => ({ f, a: lerAviso(f.aviso) }))
@@ -166,7 +167,13 @@ export function regraAbrir(ctx) {
   const { ciclo, head, acao, nonce, plano, fase, servidor, vooAtivo, reabrir, maxTent, cobertaPelaFase, aprovacoes, ultimaAutorizacao, tiers = {} } = ctx;
   const { vivas, teto, vagas } = vagasDoTeto({ ...ctx, largura: plano.largura });
 
-  const ocupados = vooAtivo.flatMap(({ t }) => t.outputs);
+  // A trazida parada numa pergunta aberta já saiu do voo, mas o trabalho dela ainda não foi
+  // conferido (um não do operador o tira): os Outputs dela seguem ocupados até a resposta.
+  const { tasks = [], trazidas = new Map(), emEspera = new Set() } = ctx;
+  const ocupados = [
+    ...vooAtivo.flatMap(({ t }) => t.outputs),
+    ...tasks.filter((t) => emEspera.has(t.id) && trazidas.has(t.id) && !vooAtivo.some((v) => v.t.id === t.id)).flatMap((t) => t.outputs),
+  ];
   const selecionadas = [];
   for (const t of servidor) {
     if (selecionadas.length >= vagas) break;
@@ -378,11 +385,15 @@ export function contextoDaDecisao(params, injetados) {
   const reabrir = new Map();
   // Conjunto pronto (T6 passo 4), com as tasks a reabrir na frente. A tentativa
   // que caiu deixa de ocupar vaga e saídas: a nova toma o lugar dela.
+  // A task parada numa pergunta aberta ao operador (`emEspera`, `comPerguntasAbertas` de
+  // conducao.mjs) não está pronta, e quem depende dela também não (ela não está feita).
+  const emEspera = params.emEspera instanceof Set ? params.emEspera : new Set();
   const prontas = () =>
-    tasks.filter((t) => !feita(t.id) && (!estado.emVoo.has(t.id) || reabrir.has(t.id)) && !t.fechamento && t.deps.every(feita));
+    tasks.filter((t) => !feita(t.id) && !emEspera.has(t.id) && (!estado.emVoo.has(t.id) || reabrir.has(t.id)) && !t.fechamento && t.deps.every(feita));
 
   return {
     ...params,
+    emEspera,
     ...injetados,
     filhas,
     aprovacoes,
@@ -811,7 +822,7 @@ export function papelNaPassagem({ posse, anexado, aberta }) {
 /**
  * A fase e o nome da herdeira (D-VEGA37-18): passagem depois do encerramento da
  * fase é de fronteira, e a herdeira é a primeira condutora da fase seguinte
- * (`<ciclo> · F<n+1>`); no meio da fase, leva o ordinal dentro dela — a
+ * (`<ciclo> · F<n+1>`); no meio da fase, leva o ordinal dentro dela (`· h<k>`) — a
  * primeira condutora é a 1, cada passagem confirmada no meio soma uma.
  */
 export function herdeiraDaPassagem({ ciclo, plano, encerradas, aberta, noMeio }) {
@@ -975,10 +986,21 @@ export function regraPassarNaFronteira(ctx) {
 
 /**
  * Nome da condutora pela fase (D-VEGA37-2, D-VEGA37-18): `<ciclo> · F<n>`, e
- * a herdeira que entra no meio da mesma fase leva o ordinal, `· 2`, `· 3`.
+ * a herdeira que entra no meio da mesma fase leva o contador de herdeira,
+ * `· h2`, `· h3` (padrão de nome de sessão do operador, 28/11/2026:
+ * `<ciclo> · <fase> · <task> · <contador>`).
  */
 export function nomeDaCondutora(ciclo, fase, ordinal = 1) {
-  return ordinal > 1 ? `${ciclo} · ${fase} · ${ordinal}` : `${ciclo} · ${fase}`;
+  return ordinal > 1 ? `${ciclo} · ${fase} · h${ordinal}` : `${ciclo} · ${fase}`;
+}
+
+/**
+ * Nome da operária (padrão de nome de sessão do operador, 28/11/2026):
+ * `<ciclo> · F<n> · T<k> · t<tentativa>`, a tentativa sempre escrita. Sem a
+ * fase (task fora do plano lido), a casa cai: `<ciclo> · T<k> · t<n>`.
+ */
+export function nomeDaOperaria(ciclo, fase, task, tentativa) {
+  return [ciclo, fase, task, `t${tentativa}`].filter(Boolean).join(" · ");
 }
 
 /**
@@ -1174,9 +1196,10 @@ export function regraPublicacaoRecusada(ctx) {
  * Lê: `tasks`, `trazidas`, `conferencia` (casos do adaptador).
  */
 export function regraTrazidaSemConferencia(ctx) {
-  const { acao, fase, tasks, trazidas, conferencia, casoDeConferencia, opcoesDaConferencia } = ctx;
+  const { acao, fase, tasks, trazidas, conferencia, casoDeConferencia, opcoesDaConferencia, emEspera = new Set() } = ctx;
   if (!emCurso(ctx)) return null;
-  const trazida = tasks.find((t) => trazidas.has(t.id));
+  // A trazida cuja conferência já está com o operador espera a resposta; a seguinte, na ordem, decide.
+  const trazida = tasks.find((t) => trazidas.has(t.id) && !emEspera.has(t.id));
   if (!trazida) return null;
   const r = trazidas.get(trazida.id);
   const base = { fase: fase.id, task: trazida.id, tentativa: r.tentativa, nonceTentativa: r.nonce, ref: r.ref };
@@ -1211,6 +1234,33 @@ export function cutucadaDestaQueda(sessao, epoch) {
 }
 
 /**
+ * Segundos em que a tentativa `r` da task esperou o operador (hotfix
+ * conducao-pergunta-aberta-nao-trava; achado da condutora do LABS-23, T44/D36):
+ * os intervalos `[abertaEm, respondidaEm)` das `perguntasAbertas` já
+ * respondidas daquela task e tentativa, cortados no instante em que a tentativa
+ * abriu e juntados quando se sobrepõem. A vigia desconta isso do prazo. A ainda
+ * aberta não entra: a task dela está parada (`emEspera`) e a vigia nem a olha; a
+ * aberta que as regras não perguntam mais é lista velha (`perguntasSemEco`) e
+ * não pode calar o prazo para sempre.
+ */
+export function pausaDaTentativa(perguntasAbertas, task, r, agora, epoch) {
+  if (agora == null || !Array.isArray(perguntasAbertas)) return 0;
+  const intervalos = perguntasAbertas
+    .filter((p) => p?.task === task && p.tentativa === r.tentativa && p.abertaEm != null && p.respondidaEm != null)
+    .map((p) => [Math.max(epoch(p.abertaEm), r.abertaEm ?? -Infinity), Math.min(epoch(p.respondidaEm), agora)])
+    .filter(([de, ate]) => Number.isFinite(de) && Number.isFinite(ate) && ate > de)
+    .sort((x, y) => x[0] - y[0]);
+  let total = 0;
+  let fim = -Infinity;
+  for (const [de, ate] of intervalos) {
+    const ini = Math.max(de, fim);
+    if (ate > ini) total += ate - ini;
+    fim = Math.max(fim, ate);
+  }
+  return total;
+}
+
+/**
  * Vigia das filhas em voo (depois do `trazer`). Regra de falha, uma só
  * (esboço §Vigia de filha; T12):
  *   (1) filha some sem aviso — arquivada, ausente ou prazo vencido ⇒ perguntar;
@@ -1237,7 +1287,7 @@ export function cutucadaDestaQueda(sessao, epoch) {
  * `feita`, `tetoFalhasAmbiente`, `silencioFilhaCaidaMin`, `epoch`. Escreve: `reabrir`.
  */
 export function regraVigia(ctx) {
-  const { acao, lerAviso, fase, tasks, voo, filhas, estado, agora, reinicioEm, feita, reabrir, tetoFalhasAmbiente, silencioFilhaCaidaMin, epoch } = ctx;
+  const { acao, lerAviso, fase, tasks, voo, filhas, estado, agora, reinicioEm, feita, reabrir, tetoFalhasAmbiente, silencioFilhaCaidaMin, epoch, entrada = {}, emEspera = new Set() } = ctx;
   if (!emCurso(ctx)) return null;
   const falhasDe = (t) => estado.falhas.get(t) ?? 0;
   const cobertaPorReinicio = (r) => reinicioEm !== null && r.abertaEm != null && r.abertaEm <= reinicioEm;
@@ -1246,7 +1296,11 @@ export function regraVigia(ctx) {
   const reentregar = [];
   const dentroDoPrazo = (t, r) => agora !== null && r.abertaEm != null && agora - r.abertaEm <= t.prazoMin * 60;
   const registrar = (t, r) => ({ registrarFalha: { task: t.id, tentativa: r.tentativa, coberta: "nao" } });
+  // Tempo da tentativa: o que passou desde que abriu, menos o que ela esperou o operador.
+  const decorrido = (t, r) => agora - r.abertaEm - pausaDaTentativa(entrada.perguntasAbertas, t.id, r, agora, epoch);
   for (const { t, r } of voo) {
+    // Parada numa pergunta aberta ao operador: a vigia não pergunta nem reabre por ela.
+    if (emEspera.has(t.id)) continue;
     if (!r.nonce) {
       perguntasDaVigia.push(["marcador-invalido", t, r]);
       continue;
@@ -1302,8 +1356,10 @@ export function regraVigia(ctx) {
         continue;
       }
     }
-    if (agora !== null && r.abertaEm != null && agora - r.abertaEm > t.prazoMin * 60)
-      perguntasDaVigia.push(["prazo-vencido", t, r, { prazoMin: t.prazoMin, abertaEm: r.abertaEm, ...registrar(t, r) }]);
+    if (agora !== null && r.abertaEm != null && decorrido(t, r) > t.prazoMin * 60) {
+      const pausaMin = Math.floor((agora - r.abertaEm - decorrido(t, r)) / 60);
+      perguntasDaVigia.push(["prazo-vencido", t, r, { prazoMin: t.prazoMin, abertaEm: r.abertaEm, ...(pausaMin > 0 ? { pausaMin } : {}), ...registrar(t, r) }]);
+    }
   }
   // Verificação vermelha: o `reverter-trazido` já tirou o trabalho; falta a falha.
   for (const t of tasks) {

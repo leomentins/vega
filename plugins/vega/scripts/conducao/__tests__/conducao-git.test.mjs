@@ -8,7 +8,7 @@
  * gates do projeto em cada commit e push de fixture). Os verbos são chamados
  * como CLI, do jeito que a maestra os chama.
  */
-import { test } from "node:test";
+import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { paginaDoProjeto } from "../adaptador.mjs";
 import { anexarAoBrief, partidaDoBrief, vereditoAprova } from "../git-conducao.mjs";
+import { decidirNoTrazer } from "../verbos.mjs";
 import { pastaTemporaria } from "../../testes/pasta-temporaria.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
@@ -95,10 +96,8 @@ function escreverEm(dir, arquivos) {
   }
 }
 
-/** Origin bare + árvore da maestra no ramo do ciclo + clone da filha. */
-function ambiente(t, { tasks = [task("T1"), task("T2")], largura = 3 } = {}) {
-  const raiz = pastaTemporaria("conducao-git-");
-  t.after(() => rmSync(raiz, { recursive: true, force: true }));
+/** Origin bare + árvore da maestra no ramo do ciclo + clone da filha, montados em `raiz`. */
+function montar(raiz, { tasks, largura }) {
   const origin = path.join(raiz, "origin.git");
   execFileSync("git", ["init", "-q", "--bare", origin]);
 
@@ -117,8 +116,16 @@ function ambiente(t, { tasks = [task("T1"), task("T2")], largura = 3 } = {}) {
 
   const filha = path.join(raiz, "filha");
   execFileSync("git", ["clone", "-q", origin, filha]);
+  configurar(gitEm(filha));
+}
+
+/** Os ajudantes sobre uma `raiz` já montada (ou copiada de um molde). */
+function ajudantes(raiz) {
+  const origin = path.join(raiz, "origin.git");
+  const maestra = path.join(raiz, "maestra");
+  const filha = path.join(raiz, "filha");
+  const g = gitEm(maestra);
   const f = gitEm(filha);
-  configurar(f);
 
   const cli = (...args) => {
     const r = spawnSync(process.execPath, [SCRIPT, ...args, "--repo", maestra, "--ciclo", CICLO], {
@@ -180,7 +187,49 @@ function ambiente(t, { tasks = [task("T1"), task("T2")], largura = 3 } = {}) {
   return { raiz, origin, maestra, filha, g, f, cli, ok, pergunta, noOrigin, refTentativa, filhaTrabalha, autorizar, abrir, proximo };
 }
 
+/**
+ * Moldes (D3a): o prefixo comum — montagem, e com `abertas` o `autorizar-ciclo` e um `abrir` por task
+ * da lista, pelo CLI como sempre — roda UMA vez por combinação; cada teste recebe uma cópia (`cp -a`)
+ * com o origin dos dois clones reapontado para a cópia (o caminho absoluto vai na config).
+ * `abertas` nulo = só a montagem, sem autorizar; `[]` = autorizado, nada aberto.
+ */
+const PASTA_DOS_MOLDES = pastaTemporaria("conducao-git-moldes-");
+after(() => rmSync(PASTA_DOS_MOLDES, { recursive: true, force: true }));
+const moldes = new Map();
+
+function molde(opcoes) {
+  const chave = JSON.stringify(opcoes);
+  let m = moldes.get(chave);
+  if (m) return m;
+  m = path.join(PASTA_DOS_MOLDES, String(moldes.size));
+  mkdirSync(m);
+  montar(m, opcoes);
+  if (opcoes.abertas) {
+    const h = ajudantes(m);
+    h.autorizar();
+    for (const tk of opcoes.abertas) h.abrir(tk);
+  }
+  moldes.set(chave, m);
+  return m;
+}
+
+function ambiente(t, { tasks = [task("T1"), task("T2")], largura = 3, abertas = null } = {}) {
+  const raiz = pastaTemporaria("conducao-git-");
+  t.after(() => rmSync(raiz, { recursive: true, force: true }));
+  execFileSync("cp", ["-a", `${molde({ tasks, largura, abertas })}/.`, raiz]);
+  const origin = path.join(raiz, "origin.git");
+  for (const clone of ["maestra", "filha"]) gitEm(path.join(raiz, clone))("remote", "set-url", "origin", origin);
+  return ajudantes(raiz);
+}
+
 // ── autorizar-ciclo e cópia ──────────────────────────────────────────────────
+
+const CLINICO = "db/migrations/20261015000000_x.sql";
+const OUTRO_CLINICO = "db/migrations/20261015000001_y.sql";
+const AUTORIZADO = { abertas: [] };
+const T1_ABERTA = { abertas: ["T1"] };
+/** Três tasks abertas; a T3 declara o caminho clínico nos Outputs. */
+const TRES_ABERTAS = { tasks: [task("T1"), task("T2"), task("T3", { outputs: `\`${CLINICO}\` (create)` })], abertas: ["T1", "T2", "T3"] };
 
 test("autorizar-ciclo grava o sim e o blob do plano e cria a copia do ciclo", (t) => {
   const a = ambiente(t);
@@ -195,8 +244,7 @@ test("autorizar-ciclo grava o sim e o blob do plano e cria a copia do ciclo", (t
 });
 
 test("copia so avanca: recusa HEAD que nao descende do ultimo valor empurrado", (t) => {
-  const a = ambiente(t);
-  a.autorizar();
+  const a = ambiente(t, AUTORIZADO);
   const copia = a.g("rev-parse", "HEAD");
   a.g("commit", "-q", "--allow-empty", "-m", "commit avulso da maestra");
   assert.equal(a.ok("empurrar-copia").empurrada, true);
@@ -220,8 +268,7 @@ test("autorizar-ciclo sem o texto do sim de Rita nao grava nada", (t) => {
 // ── abrir ───────────────────────────────────────────────────────────────────
 
 test("abrir grava o marcador fora do ramo, a referencia no origin e o espelho local", (t) => {
-  const a = ambiente(t);
-  a.autorizar();
+  const a = ambiente(t, AUTORIZADO);
   const head = a.g("rev-parse", "HEAD");
   const s = a.abrir("T1");
   assert.equal(a.g("rev-parse", "HEAD"), head, "o marcador não entra no ramo");
@@ -229,6 +276,8 @@ test("abrir grava o marcador fora do ramo, a referencia no origin e o espelho lo
   assert.equal(a.g("rev-parse", `${s.marcador}^`), head);
   assert.equal(a.noOrigin(a.refTentativa("T1", 1)), s.marcador);
   assert.equal(a.g("rev-parse", `refs/conducao-local/${CICLO}/T1/1`), s.marcador);
+  // O título da operária sai do verbo (padrão de nome de sessão de 28/11/2026).
+  assert.equal(s.nome, `${CICLO} · F1 · T1 · t1`);
   // O mesmo abrir repetido (mesmo nonce: saída perdida, sessão que não nasceu) devolve a mesma
   // partida, sem parar e sem mexer no origin (hotfix conducao-corta-paradas-de-regra).
   const repetido = a.abrir("T1");
@@ -236,6 +285,7 @@ test("abrir grava o marcador fora do ramo, a referencia no origin e o espelho lo
   assert.equal(repetido.jaAberta, true);
   assert.equal(repetido.marcador, s.marcador);
   assert.equal(repetido.partida, s.partida);
+  assert.equal(repetido.nome, s.nome);
   assert.equal(repetido.brief.commit, s.brief.commit);
   assert.equal(a.noOrigin(a.refTentativa("T1", 1)), s.marcador);
   // A mesma tentativa não abre duas vezes com outro nonce, nem com o espelho local apagado.
@@ -248,8 +298,7 @@ test("abrir grava o marcador fora do ramo, a referencia no origin e o espelho lo
 });
 
 test("abrir recusa com a copia do ciclo no origin diferente do HEAD", (t) => {
-  const a = ambiente(t);
-  a.autorizar();
+  const a = ambiente(t, AUTORIZADO);
   a.g("commit", "-q", "--allow-empty", "-m", "commit da maestra sem empurrar a copia");
   const p = a.pergunta("copia-diverge-do-head", "abrir", "T1", "--tentativa", "1", "--nonce", "nonceT11", "--modo-maestra", "auto");
   assert.equal(a.noOrigin(a.refTentativa("T1", 1)), null);
@@ -268,8 +317,7 @@ const TASK_BRIEF = path.resolve(AQUI, "fixtures", "projeto-de-teste", ".altair",
 const { lerSessao } = createRequire(import.meta.url)(path.resolve(AQUI, "..", "..", "..", "hooks", "lib", "sessao-operaria.js"));
 
 test("abrir grava o brief na referencia irma; lido do git e byte a byte o do task-brief --operaria", (t) => {
-  const a = ambiente(t);
-  a.autorizar();
+  const a = ambiente(t, AUTORIZADO);
   const s = a.abrir("T1", 1, NONCE_HEX);
   const ref = a.refTentativa("T1", 1);
   // O marcador segue o mesmo: subject, pai e referência; o brief é filho dele, com a mesma árvore.
@@ -322,19 +370,8 @@ test("abrir grava o brief na referencia irma; lido do git e byte a byte o do tas
   assert.deepEqual(r.divergencias, []);
 });
 
-test("trazer apaga o brief da tentativa no origin", (t) => {
-  const a = ambiente(t);
-  a.autorizar();
-  a.abrir("T1");
-  a.filhaTrabalha("T1", 1, [{ "src/t1.mjs": "export const t1 = 1;\n" }]);
-  const s = a.ok("trazer", "T1", "--tentativa", "1", "--sessao", "s1");
-  assert.deepEqual(s.apagada.brief, { ref: refBrief("T1", 1), origin: "apagada" });
-  assert.equal(a.noOrigin(refBrief("T1", 1)), null);
-});
-
 test("abrir recusa canonico da arvore diferente do HEAD, sem nada no origin", (t) => {
-  const a = ambiente(t);
-  a.autorizar();
+  const a = ambiente(t, AUTORIZADO);
   writeFileSync(path.join(a.maestra, CAMINHO), "plano sujo\n");
   a.pergunta("canonico-difere-do-head", "abrir", "T1", "--tentativa", "1", "--nonce", "nonceT11", "--modo-maestra", "auto");
   assert.equal(a.noOrigin(a.refTentativa("T1", 1)), null);
@@ -354,22 +391,31 @@ test("partidaDoBrief recusa brief sem o contrato desta task e nonce", () => {
 
 // ── trazer ──────────────────────────────────────────────────────────────────
 
-test("trazer por fast-forward preserva o sha da filha", (t) => {
-  const a = ambiente(t);
-  a.autorizar();
-  a.abrir("T1");
+test("trazer por fast-forward: confere a ponta avisada, preserva o sha da filha e apaga tentativa, brief e espelhos", (t) => {
+  const a = ambiente(t, T1_ABERTA);
   const ponta = a.filhaTrabalha("T1", 1, [{ "src/t1.mjs": "export const t1 = 1;\n" }]);
+  // Ponta diferente da que a filha avisou: pergunta antes de trazer.
+  a.pergunta("ponta-diverge-do-aviso", "trazer", "T1", "--tentativa", "1", "--sha", "deadbeef");
   const s = a.ok("trazer", "T1", "--tentativa", "1", "--sha", ponta.slice(0, 8), "--sessao", "sessao-filha-1");
   assert.equal(s.modo, "fast-forward");
   assert.equal(a.g("rev-parse", "HEAD"), ponta);
   assert.equal(a.noOrigin(`refs/conducao/${CICLO}/copia`), ponta);
+  // A referência da tentativa trazida sai do origin, com o brief irmão, o espelho local e a busca temporária.
+  assert.equal(s.apagada.origin, "apagada");
+  assert.equal(a.noOrigin(a.refTentativa("T1", 1)), null, "referência do origin apagada");
+  assert.deepEqual(s.apagada.brief, { ref: refBrief("T1", 1), origin: "apagada" });
+  assert.equal(a.noOrigin(refBrief("T1", 1)), null);
+  assert.equal(a.g("for-each-ref", `refs/conducao-local/${CICLO}/T1/`), "", "espelho local apagado");
+  assert.equal(a.g("for-each-ref", "refs/conducao-busca/"), "", "busca temporária apagada");
+  // Entre trazer e conferir a task não reabre: o registro da trazida segura.
+  const p = a.proximo();
+  assert.equal(p.acao, "perguntar");
+  assert.equal(p.motivo, "trazida-sem-conferencia");
+  assert.equal(p.task, "T1");
 });
 
 test("trazer por cherry-pick grava a linha -x com o sha da filha", (t) => {
-  const a = ambiente(t);
-  a.autorizar();
-  a.abrir("T1");
-  a.abrir("T2");
+  const a = ambiente(t, TRES_ABERTAS);
   a.filhaTrabalha("T1", 1, [{ "src/t1.mjs": "export const t1 = 1;\n" }]);
   const pontaT2 = a.filhaTrabalha("T2", 1, [{ "src/t2.mjs": "export const t2 = 2;\n" }]);
   a.ok("trazer", "T1", "--tentativa", "1", "--sessao", "s1");
@@ -383,9 +429,8 @@ test("trazer por cherry-pick grava a linha -x com o sha da filha", (t) => {
 });
 
 test("trazer recusa faixa que nao descende do marcador da referencia local", (t) => {
-  const a = ambiente(t);
-  a.autorizar();
-  const s = a.abrir("T1");
+  const a = ambiente(t, T1_ABERTA);
+  const marcador = a.g("rev-parse", `refs/conducao-local/${CICLO}/T1/1`);
   const head = a.g("rev-parse", "HEAD");
   const ref = a.refTentativa("T1", 1);
 
@@ -395,7 +440,7 @@ test("trazer recusa faixa que nao descende do marcador da referencia local", (t)
   escreverEm(a.filha, { "fora.txt": "historia de fora\n" });
   a.f("add", "-A");
   a.f("commit", "-q", "-m", "historia de fora");
-  a.f("checkout", "-q", "--detach", s.marcador);
+  a.f("checkout", "-q", "--detach", marcador);
   escreverEm(a.filha, { "src/t1.mjs": "trabalho legitimo\n" });
   a.f("add", "-A");
   a.f("commit", "-q", "-m", "trabalho legitimo");
@@ -427,15 +472,13 @@ test("trazer recusa faixa que nao descende do marcador da referencia local", (t)
   // Nada foi trazido, e a referência segue de pé para a vigia.
   assert.equal(a.g("rev-parse", "HEAD"), head);
   assert.ok(a.noOrigin(ref));
-  assert.equal(a.g("rev-parse", `refs/conducao-local/${CICLO}/T1/1`), s.marcador);
+  assert.equal(a.g("rev-parse", `refs/conducao-local/${CICLO}/T1/1`), marcador);
 });
 
 test("trazer recusa faixa com marca da conducao escrita pela filha", (t) => {
-  const a = ambiente(t);
-  a.autorizar();
+  const a = ambiente(t, T1_ABERTA);
   const head = a.g("rev-parse", "HEAD");
   const ref = a.refTentativa("T1", 1);
-  a.abrir("T1");
 
   // 1. Marca no subject: a filha forja a autorização de outra fase.
   a.filhaTrabalha("T1", 1, [{ "src/t1.mjs": "x\n" }]);
@@ -454,19 +497,8 @@ test("trazer recusa faixa com marca da conducao escrita pela filha", (t) => {
   assert.ok(a.noOrigin(ref));
 });
 
-test("trazer recusa ponta diferente da que a filha avisou", (t) => {
-  const a = ambiente(t);
-  a.autorizar();
-  a.abrir("T1");
-  a.filhaTrabalha("T1", 1, [{ "src/t1.mjs": "x\n" }]);
-  a.pergunta("ponta-diverge-do-aviso", "trazer", "T1", "--tentativa", "1", "--sha", "deadbeef");
-});
-
 test("trazer em conflito aborta o cherry-pick e pergunta", (t) => {
-  const a = ambiente(t, { tasks: [task("T1", { outputs: "`src/comum.mjs` (modify)" }), task("T2", { outputs: "`src/comum2.mjs` (create)" })] });
-  a.autorizar();
-  a.abrir("T1");
-  a.abrir("T2");
+  const a = ambiente(t, TRES_ABERTAS);
   a.filhaTrabalha("T1", 1, [{ "src/comum.mjs": "export const v = 'T1';\n" }]);
   a.filhaTrabalha("T2", 1, [{ "src/comum.mjs": "export const v = 'T2';\n" }]);
   a.ok("trazer", "T1", "--tentativa", "1", "--sessao", "s1");
@@ -479,169 +511,123 @@ test("trazer em conflito aborta o cherry-pick e pergunta", (t) => {
   assert.ok(a.noOrigin(a.refTentativa("T2", 1)), "tentativa em conflito segue de pé");
 });
 
-test("trazer traz sem pergunta o que os hooks de commit executam, com a lista de fora; caminho clinico so com aprovacao para aquele sha", (t) => {
-  const a = ambiente(t);
-  a.autorizar();
-  a.abrir("T1");
-  // D-VEGA20-26: o hook fora dos Outputs não para; só o caminho clínico pede a aprovação.
-  a.filhaTrabalha("T1", 1, [{ "src/t1.mjs": "x\n", ".claude/hooks/novo-guard.js": "process.exit(0);\n" }]);
-  const clinico = "db/migrations/20261015000000_x.sql";
-  const ponta = a.filhaTrabalha("T1", 1, [{ [clinico]: "select 1;\n" }]);
+// ── alcance dos hooks e caminho clínico (D-VEGA20-26) ───────────────────────
+// A regra é a de `decidirNoTrazer` (função pura): a tabela cobre as variações de Outputs; as duas
+// ponta a ponta abaixo provam o mesmo pelo CLI — uma sem pergunta, outra com a aprovação por sha.
+
+const INSTRUCAO = [
+  ".claude/settings.json",
+  ".claude/settings.local.json",
+  ".claude/skills/conducao/SKILL.md",
+  ".claude/rules/dev-discipline.md",
+  ".claude/agents/code-reviewer.md",
+  "CLAUDE.md",
+  "app/CLAUDE.md",
+  ".mcp.json",
+  ".github/workflows/ci.yml",
+  ".github/CODEOWNERS",
+  ".claude/workflows/harness-pass.mjs",
+  ".claude/launch.json",
+  "AGENTS.md",
+];
+
+test("decidirNoTrazer: hook e superficie de instrucao nunca perguntam e vao ao relato so fora dos Outputs; so o caminho clinico fora dos Outputs pergunta", () => {
+  const casos = [
+    {
+      nome: "hook alcançado declarado exato nos Outputs",
+      caminhos: ["src/t1.mjs", ".claude/scripts/mapa/leitor.mjs"],
+      outputs: [".claude/scripts/mapa/leitor.mjs", "src/t1.mjs"],
+      motivos: [],
+      fora: [],
+    },
+    {
+      nome: "Output declarado como diretório cobre o que está embaixo",
+      caminhos: [".claude/scripts/pre-commit-x.mjs"],
+      outputs: [".claude/scripts/"],
+      motivos: [],
+      fora: [],
+    },
+    {
+      nome: "só o que fica fora dos Outputs vai ao relato",
+      caminhos: [".claude/scripts/mapa/leitor.mjs", ".claude/hooks/novo-guard.js"],
+      outputs: [".claude/scripts/mapa/leitor.mjs"],
+      motivos: [],
+      fora: [".claude/hooks/novo-guard.js"],
+    },
+    {
+      nome: "superfície de instrução da maestra fora dos Outputs",
+      caminhos: ["src/t1.mjs", ...INSTRUCAO],
+      outputs: ["src/t1.mjs"],
+      motivos: [],
+      fora: [...INSTRUCAO],
+    },
+    {
+      nome: "caminho clínico fora dos Outputs pergunta; o canonico vai à parte",
+      caminhos: [CAMINHO, OUTRO_CLINICO, ".claude/hooks/novo-guard.js"],
+      outputs: ["src/t1.mjs"],
+      motivos: [{ motivo: "caminho-clinico-fora-dos-outputs", caminhos: [OUTRO_CLINICO] }],
+      fora: [OUTRO_CLINICO, ".claude/hooks/novo-guard.js"],
+      canonicoAlterado: true,
+    },
+    {
+      nome: "caminho clínico declarado nos Outputs não pergunta",
+      caminhos: [CLINICO],
+      outputs: [CLINICO],
+      motivos: [],
+      fora: [],
+    },
+  ];
+  for (const c of casos) {
+    const d = decidirNoTrazer({ caminhos: c.caminhos, canonico: CAMINHO, outputs: c.outputs });
+    assert.deepEqual(d.motivos, c.motivos, c.nome);
+    assert.deepEqual([...d.foraDosOutputs].sort(), [...c.fora].sort(), c.nome);
+    assert.equal(d.canonicoAlterado, c.canonicoAlterado ?? false, c.nome);
+  }
+});
+
+test("trazer traz sem pergunta o que os hooks alcancam e a superficie de instrucao, e lista no relato so o de fora dos Outputs", (t) => {
+  const a = ambiente(t, T1_ABERTA);
+  // O `settings*.json` leva JSON legível: ilegível, ele define a parada (D-VEGA20-26, fail-closed).
+  const fora = [".claude/hooks/novo-guard.js", ".claude/settings.json", "CLAUDE.md"];
+  a.filhaTrabalha("T1", 1, [{ "src/t1.mjs": "x\n", ".claude/hooks/novo-guard.js": "process.exit(0);\n", ".claude/settings.json": "{}\n", "CLAUDE.md": "veneno\n" }]);
+  const s = a.ok("trazer", "T1", "--tentativa", "1", "--sessao", "s1");
+  assert.equal(s.acao, "trazida");
+  assert.deepEqual([...s.foraDosOutputs].sort(), [...fora].sort());
+  assert.equal(s.canonicoAlterado, false);
+  for (const c of fora) assert.ok(s.avisoOperador.some((l) => l.includes(c)), JSON.stringify(s.avisoOperador));
+});
+
+test("trazer pergunta pelo caminho clinico fora dos Outputs e so traz com --aprovado que confere com a ponta de agora; declarado nos Outputs, traz sem pergunta", (t) => {
+  const a = ambiente(t, TRES_ABERTAS);
+  const ponta = a.filhaTrabalha("T1", 1, [{ "src/t1.mjs": "x\n", [CAMINHO]: canonico([task("T1")], 9), [OUTRO_CLINICO]: "select 1;\n" }]);
   const p = a.pergunta("trazer-exige-aprovacao", "trazer", "T1", "--tentativa", "1");
   assert.equal(p.sha, ponta);
-  assert.deepEqual(p.motivos, [{ motivo: "caminho-clinico-fora-dos-outputs", caminhos: [clinico] }]);
-  // `--aprovado` que veio e não confere diz por quê (P24 do ATRM-51).
+  assert.deepEqual(p.motivos, [{ motivo: "caminho-clinico-fora-dos-outputs", caminhos: [OUTRO_CLINICO] }]);
+  // `--aprovado` que veio e não confere diz por quê (P24 do ATRM-51): sha inteiro alheio, prefixo
+  // curto demais (antes: repetia `trazer-exige-aprovacao` calado) e prefixo de 7+ que não bate.
   a.pergunta("aprovado-nao-confere", "trazer", "T1", "--tentativa", "1", "--aprovado", "0".repeat(40));
+  const curto = a.pergunta("aprovado-nao-confere", "trazer", "T1", "--tentativa", "1", "--aprovado", ponta.slice(0, 6));
+  assert.equal(curto.aprovado, ponta.slice(0, 6));
+  assert.equal(curto.sha, ponta);
+  const outro = ponta[0] === "a" ? "b" : "a";
+  a.pergunta("aprovado-nao-confere", "trazer", "T1", "--tentativa", "1", "--aprovado", `${outro}${ponta.slice(1, 8)}`);
   // A filha empurra mais depois da aprovação: a aprovação era para o sha antigo.
   const nova = a.filhaTrabalha("T1", 1, [{ "src/t1.mjs": "y\n" }]);
   a.pergunta("aprovado-nao-confere", "trazer", "T1", "--tentativa", "1", "--aprovado", ponta);
-  const s = a.ok("trazer", "T1", "--tentativa", "1", "--aprovado", nova, "--sessao", "s1");
+  // Prefixo de 7+ da ponta de agora, em qualquer caixa, traz.
+  const s = a.ok("trazer", "T1", "--tentativa", "1", "--aprovado", nova.slice(0, 8).toUpperCase(), "--sessao", "s1");
   assert.equal(s.acao, "trazida");
-  assert.deepEqual(s.foraDosOutputs, [".claude/hooks/novo-guard.js", clinico].sort());
-});
-
-test("trazer nao pergunta quando o que os hooks alcancam e Output declarado da task", (t) => {
-  const a = ambiente(t, { tasks: [task("T1", { outputs: "`.claude/scripts/mapa/leitor.mjs` (create) · `src/t1.mjs` (create)" }), task("T2")] });
-  a.autorizar();
-  a.abrir("T1");
-  a.filhaTrabalha("T1", 1, [{ "src/t1.mjs": "x\n", ".claude/scripts/mapa/leitor.mjs": "export const x = 1;\n" }]);
-  assert.equal(a.ok("trazer", "T1", "--tentativa", "1", "--sessao", "s1").acao, "trazida");
-});
-
-test("Output declarado como diretorio cobre o alcance dos hooks embaixo dele: traz sem pergunta e nada fica fora", (t) => {
-  const a = ambiente(t, { tasks: [task("T1", { outputs: "`.claude/scripts/` (create)" }), task("T2")] });
-  a.autorizar();
-  a.abrir("T1");
-  a.filhaTrabalha("T1", 1, [{ ".claude/scripts/pre-commit-x.mjs": "export const x = 1;\n" }]);
-  const s = a.ok("trazer", "T1", "--tentativa", "1", "--sessao", "s1");
-  assert.equal(s.acao, "trazida");
-  assert.deepEqual(s.foraDosOutputs, []);
-  assert.equal(s.canonicoAlterado, false);
-});
-
-test("esperar-filha recusa --max-min malformado e sai rede-falhou sem origin", (t) => {
-  const a = ambiente(t);
-  a.autorizar();
-  a.abrir("T1");
-  for (const v of ["5m", "-1", "1.5"]) {
-    const r = a.cli("esperar-filha", "T1", "--tentativa", "1", "--teto-chamador-min", "30", "--max-min", v);
-    assert.notEqual(r.status, 0, `--max-min ${v} deveria falhar`);
-  }
-  a.g("remote", "set-url", "origin", path.join(a.raiz, "nao-existe.git"));
-  const r = a.ok("esperar-filha", "T1", "--tentativa", "1", "--teto-chamador-min", "30", "--max-min", "5", "--intervalo-s", "1");
-  assert.equal(r.desfecho, "rede-falhou");
-  assert.equal(r.falhas, 3);
-});
-
-test("trazer lista no relato so o que os hooks alcancam fora dos Outputs, sem perguntar", (t) => {
-  const a = ambiente(t, { tasks: [task("T1", { outputs: "`.claude/scripts/mapa/leitor.mjs` (create)" }), task("T2")] });
-  a.autorizar();
-  a.abrir("T1");
-  a.filhaTrabalha("T1", 1, [{ ".claude/scripts/mapa/leitor.mjs": "export const x = 1;\n", ".claude/hooks/novo-guard.js": "process.exit(0);\n" }]);
-  const s = a.ok("trazer", "T1", "--tentativa", "1", "--sessao", "s1");
-  assert.deepEqual(s.foraDosOutputs, [".claude/hooks/novo-guard.js"]);
-  assert.ok(s.avisoOperador.some((l) => l.includes(".claude/hooks/novo-guard.js")), JSON.stringify(s.avisoOperador));
-});
-
-test("esperar-filha sai no prazo sem push e com a ponta quando a filha empurra", (t) => {
-  const a = ambiente(t);
-  a.autorizar();
-  a.abrir("T1");
-  const parada = a.ok("esperar-filha", "T1", "--tentativa", "1", "--teto-chamador-min", "30", "--max-min", "0");
-  assert.equal(parada.desfecho, "prazo");
-  const ponta = a.filhaTrabalha("T1", 1, [{ "src/t1.mjs": "x\n" }]);
-  const andou = a.ok("esperar-filha", "T1", "--tentativa", "1", "--teto-chamador-min", "30", "--max-min", "0");
-  assert.equal(andou.desfecho, "andou");
-  assert.equal(andou.ponta, ponta);
-  assert.equal(a.ok("esperar-filha", "T2", "--tentativa", "1", "--teto-chamador-min", "30", "--max-min", "0").desfecho, "sem-referencia-local");
-});
-
-test("esperar-filha sem teto do chamador ou com prazo acima dele sai com exit 2", (t) => {
-  const a = ambiente(t);
-  a.autorizar();
-  a.abrir("T1");
-  // Referência já andou: se o verbo esperasse em vez de recusar, sairia 0 na hora com `andou`.
-  a.filhaTrabalha("T1", 1, [{ "src/t1.mjs": "x\n" }]);
-  const semTeto = a.cli("esperar-filha", "T1", "--tentativa", "1", "--max-min", "0");
-  assert.equal(semTeto.status, 2, semTeto.stdout);
-  assert.match(semTeto.stderr, /--teto-chamador-min/);
-  const semTetoNemPrazo = a.cli("esperar-filha", "T1", "--tentativa", "1");
-  assert.equal(semTetoNemPrazo.status, 2);
-  const acima = a.cli("esperar-filha", "T1", "--tentativa", "1", "--teto-chamador-min", "30", "--max-min", "60");
-  assert.equal(acima.status, 2, acima.stdout);
-  assert.match(acima.stderr, /--max-min 60 passa do teto do chamador \(30 min\)/);
-  // O padrão de 4 min (abaixo do cache de 5 min) também é medido contra o teto.
-  assert.equal(a.cli("esperar-filha", "T1", "--tentativa", "1", "--teto-chamador-min", "3").status, 2);
-  assert.equal(a.ok("esperar-filha", "T1", "--tentativa", "1", "--teto-chamador-min", "30", "--max-min", "30").desfecho, "andou");
-});
-
-test("trazer traz sem pergunta a superficie de instrucao da maestra e a lista no relato", (t) => {
-  const a = ambiente(t);
-  a.autorizar();
-  a.abrir("T1");
-  const instrucao = [
-    ".claude/settings.json",
-    ".claude/settings.local.json",
-    ".claude/skills/conducao/SKILL.md",
-    ".claude/rules/dev-discipline.md",
-    ".claude/agents/code-reviewer.md",
-    "CLAUDE.md",
-    "app/CLAUDE.md",
-    ".mcp.json",
-    ".github/workflows/ci.yml",
-    ".github/CODEOWNERS",
-    ".claude/workflows/harness-pass.mjs",
-    ".claude/launch.json",
-    "AGENTS.md",
-  ];
-  // O `settings*.json` leva JSON legível: ilegível, ele define a parada (D-VEGA20-26, fail-closed).
-  a.filhaTrabalha("T1", 1, [{ "src/t1.mjs": "x\n", ...Object.fromEntries(instrucao.map((c) => [c, /settings[^/]*\.json$/.test(c) ? "{}\n" : "veneno\n"])) }]);
-  const s = a.ok("trazer", "T1", "--tentativa", "1", "--sessao", "s1");
-  assert.deepEqual([...s.foraDosOutputs].sort(), [...instrucao].sort());
-});
-
-test("trazer pergunta so pelo caminho clinico fora dos Outputs; o canonico do ciclo vai ao relato a parte", (t) => {
-  const clinico = "db/migrations/20261015000000_x.sql";
-  const a = ambiente(t, { tasks: [task("T1"), task("T2", { outputs: `\`${clinico}\` (create)` })] });
-  a.autorizar();
-  a.abrir("T1");
-  a.abrir("T2");
-  const outroClinico = "db/migrations/20261015000001_y.sql";
-  a.filhaTrabalha("T1", 1, [{ [CAMINHO]: canonico([task("T1")], 9), [outroClinico]: "select 1;\n" }]);
-  const p = a.pergunta("trazer-exige-aprovacao", "trazer", "T1", "--tentativa", "1");
-  assert.deepEqual(p.motivos, [{ motivo: "caminho-clinico-fora-dos-outputs", caminhos: [outroClinico] }]);
-  const s = a.ok("trazer", "T1", "--tentativa", "1", "--aprovado", p.sha, "--sessao", "s1");
   assert.equal(s.canonicoAlterado, true);
-  assert.deepEqual(s.foraDosOutputs, [outroClinico], "o canonico fica fora da lista de fora dos Outputs");
-  // Na T2 o mesmo caminho clínico é Output declarado: traz sem perguntar.
-  a.filhaTrabalha("T2", 1, [{ [clinico]: "select 1;\n" }]);
-  assert.equal(a.ok("trazer", "T2", "--tentativa", "1", "--sessao", "s2").acao, "trazida");
-});
-
-test("trazer apaga a referencia da tentativa trazida", (t) => {
-  const a = ambiente(t);
-  a.autorizar();
-  a.abrir("T1");
-  a.filhaTrabalha("T1", 1, [{ "src/t1.mjs": "x\n" }]);
-  const s = a.ok("trazer", "T1", "--tentativa", "1", "--sessao", "s1");
-  assert.equal(s.apagada.origin, "apagada");
-  assert.equal(a.noOrigin(a.refTentativa("T1", 1)), null, "referência do origin apagada");
-  assert.equal(a.g("for-each-ref", `refs/conducao-local/${CICLO}/T1/`), "", "espelho local apagado");
-  assert.equal(a.g("for-each-ref", "refs/conducao-busca/"), "", "busca temporária apagada");
-  assert.equal(a.noOrigin(`refs/conducao/${CICLO}/copia`), a.g("rev-parse", "HEAD"));
-  // Entre trazer e conferir a task não reabre: o registro da trazida segura.
-  const p = a.proximo();
-  assert.equal(p.acao, "perguntar");
-  assert.equal(p.motivo, "trazida-sem-conferencia");
-  assert.equal(p.task, "T1");
+  assert.deepEqual(s.foraDosOutputs, [OUTRO_CLINICO], "o canonico fica fora da lista de fora dos Outputs");
+  // Na T3 o caminho clínico é Output declarado: traz sem perguntar.
+  a.filhaTrabalha("T3", 1, [{ [CLINICO]: "select 1;\n" }]);
+  assert.equal(a.ok("trazer", "T3", "--tentativa", "1", "--sessao", "s3").acao, "trazida");
 });
 
 // ── conferência, carimbo, recusa, revert ────────────────────────────────────
 
 test("registrar-conferencia grava os trailers da filha e o proximo conta a task como feita", (t) => {
-  const a = ambiente(t, { tasks: [task("T1"), task("T2", { extra: ["**Estação:** servidor"] })] });
-  a.autorizar();
-  a.abrir("T1");
+  const a = ambiente(t, { tasks: [task("T1"), task("T2", { extra: ["**Estação:** servidor"] })], ...T1_ABERTA });
   const ponta = a.filhaTrabalha("T1", 1, [{ "src/t1.mjs": "x\n" }]);
   a.ok("trazer", "T1", "--tentativa", "1", "--sessao", "sessao-filha-1");
   assert.equal(a.proximo().motivo, "trazida-sem-conferencia");
@@ -660,64 +646,47 @@ test("registrar-conferencia grava os trailers da filha e o proximo conta a task 
   assert.deepEqual(p.tarefas.map((x) => x.task), ["T2"]);
 });
 
-test("conferir-carimbo cobra o carimbo da filha pelo sha dela, inclusive depois de cherry-pick", (t) => {
-  const a = ambiente(t);
-  a.autorizar();
-  a.abrir("T1");
-  a.abrir("T2");
-  a.filhaTrabalha("T1", 1, [{ "src/t1.mjs": "x\n" }]);
-  a.ok("trazer", "T1", "--tentativa", "1", "--sessao", "s1");
-  a.pergunta("sem-carimbo", "conferir-carimbo", "T1");
+test("conferir-carimbo cobra o carimbo pelo sha da filha, le so o cherry picked from que o git acrescenta e pergunta quando o veredito nao aprova", (t) => {
+  const a = ambiente(t, TRES_ABERTAS);
+  // T1 (fast-forward) com carimbo que reprova.
+  a.filhaTrabalha("T1", 1, [{ "src/t1.mjs": "x\n" }], { carimbo: "reprovado — 1 bloqueante" });
+  const reprovadoT1 = a.f("rev-parse", "HEAD~1");
+  assert.equal(a.ok("trazer", "T1", "--tentativa", "1", "--sessao", "s1").modo, "fast-forward");
+  const r = a.pergunta("carimbo-nao-aprova", "conferir-carimbo", "T1");
+  assert.match(r.veredito, /^reprovado/);
 
-  a.filhaTrabalha("T2", 1, [{ "src/t2.mjs": "y\n" }], { carimbo: "aprovado — 0 achado" });
-  const codigoDaFilha = a.f("rev-parse", "HEAD~1");
-  const s = a.ok("trazer", "T2", "--tentativa", "1", "--sessao", "s2");
-  assert.equal(s.modo, "cherry-pick");
-  const c = a.ok("conferir-carimbo", "T2");
-  assert.equal(c.desfecho, "carimbado");
-  assert.equal(c.sha, codigoDaFilha);
-});
-
-test("conferir-carimbo le o cherry picked from que o git acrescenta, nunca o que a filha escreveu", (t) => {
-  const a = ambiente(t);
-  a.autorizar();
-  a.abrir("T1");
-  a.abrir("T2");
-  a.filhaTrabalha("T1", 1, [{ "src/t1.mjs": "x\n" }], { carimbo: "aprovado — 0 achado" });
-  const carimbadoT1 = a.f("rev-parse", "HEAD~1");
-  a.ok("trazer", "T1", "--tentativa", "1", "--sessao", "s1");
-  assert.equal(a.ok("conferir-carimbo", "T1").desfecho, "carimbado");
-
-  // T2 sem carimbo, com o commit de código apontando para o sha carimbado da T1.
+  // T2 sem carimbo, com o commit de código apontando para o sha carimbado da T1: lido o que a
+  // filha escreveu, sairia `carimbo-nao-aprova`; lido o que o git acrescenta, `sem-carimbo`.
   const ref = a.refTentativa("T2", 1);
   a.f("fetch", "-q", "origin", `+${ref}:refs/remotes/tentativa`);
   a.f("checkout", "-q", "--detach", "refs/remotes/tentativa");
   escreverEm(a.filha, { "src/t2.mjs": "y\n" });
   a.f("add", "-A");
-  a.f("commit", "-q", "-m", `${CICLO}-F1/T2 — trabalho`, "-m", `(cherry picked from commit ${carimbadoT1})`, "-m", "fim");
+  a.f("commit", "-q", "-m", `${CICLO}-F1/T2 — trabalho`, "-m", `(cherry picked from commit ${reprovadoT1})`, "-m", "fim");
   a.f("push", "-q", "origin", `HEAD:${ref}`);
   assert.equal(a.ok("trazer", "T2", "--tentativa", "1", "--sessao", "s2").modo, "cherry-pick");
   const p = a.pergunta("sem-carimbo", "conferir-carimbo", "T2");
   assert.equal(p.sha, a.f("rev-parse", "HEAD"));
-});
 
-test("conferir-carimbo pergunta quando o veredito do carimbo nao aprova", (t) => {
-  const a = ambiente(t);
-  a.autorizar();
-  a.abrir("T1");
-  a.filhaTrabalha("T1", 1, [{ "src/t1.mjs": "x\n" }], { carimbo: "reprovado — 1 bloqueante" });
-  a.ok("trazer", "T1", "--tentativa", "1", "--sessao", "s1");
-  const p = a.pergunta("carimbo-nao-aprova", "conferir-carimbo", "T1");
-  assert.match(p.veredito, /^reprovado/);
+  // T3 carimbada, trazida por cherry-pick: o carimbo vale pelo sha da filha.
+  a.filhaTrabalha("T3", 1, [{ "src/t3.mjs": "z\n" }], { carimbo: "aprovado — 0 achado" });
+  const codigoDaFilha = a.f("rev-parse", "HEAD~1");
+  assert.equal(a.ok("trazer", "T3", "--tentativa", "1", "--sessao", "s3").modo, "cherry-pick");
+  const c = a.ok("conferir-carimbo", "T3");
+  assert.equal(c.desfecho, "carimbado");
+  assert.equal(c.sha, codigoDaFilha);
+
   assert.equal(vereditoAprova("aprovado-com-notas"), true);
   assert.equal(vereditoAprova("pass-with-warnings — 1 bloqueante consertado"), true);
   assert.equal(vereditoAprova(""), false);
   assert.equal(vereditoAprova("bloqueado"), false);
 });
 
+const PUBLICA = { tasks: [task("T1", { steps: "publica com `db push` pelo verbo sancionado" }), task("T2")], ...AUTORIZADO };
+const CONDUTORA = { tasks: [task("T1", { extra: ["**Estação:** condutora"] }), task("T2")], ...AUTORIZADO };
+
 test("task com publicacao: conferencia so com publicacao feita, e a recusa no gate faz o proximo parar", (t) => {
-  const a = ambiente(t, { tasks: [task("T1", { steps: "publica com `db push` pelo verbo sancionado" }), task("T2")] });
-  a.autorizar();
+  const a = ambiente(t, PUBLICA);
   // O sim da fase cobre a abertura (F4.17); a publicação segue pedindo o sim por task.
   const p0 = a.proximo();
   assert.equal(p0.acao, "abrir");
@@ -736,9 +705,7 @@ test("task com publicacao: conferencia so com publicacao feita, e a recusa no ga
 });
 
 test("task que so menciona publicacao fecha nao-se-aplica com o sim no corpo e a dispensa no trailer", (t) => {
-  const a = ambiente(t, { tasks: [task("T1", { steps: "o gerador imprime a dica `db-publish.mjs functions deploy`" }), task("T2")] });
-  a.autorizar();
-  a.abrir("T1");
+  const a = ambiente(t, { tasks: [task("T1", { steps: "o gerador imprime a dica `db-publish.mjs functions deploy`" }), task("T2")], ...T1_ABERTA });
   a.filhaTrabalha("T1", 1, [{ "src/t1.mjs": "x\n" }]);
   a.ok("trazer", "T1", "--tentativa", "1", "--sessao", "s1");
   const vazio = a.cli("registrar-conferencia", "T1", "--verificacao", "verde", "--publicacao", "nao-se-aplica", "--sim", "  ");
@@ -753,8 +720,7 @@ test("task que so menciona publicacao fecha nao-se-aplica com o sim no corpo e a
 });
 
 test("auditar acusa conferencia nao-se-aplica sem a dispensa em task que o plano liga a publicacao", (t) => {
-  const a = ambiente(t, { tasks: [task("T1", { steps: "publica com `db push`" })] });
-  a.autorizar();
+  const a = ambiente(t, PUBLICA);
   a.abrir("T1");
   const ponta = a.filhaTrabalha("T1", 1, [{ "src/t1.mjs": "x\n" }]);
   a.ok("trazer", "T1", "--tentativa", "1", "--sessao", "s1");
@@ -772,9 +738,7 @@ ramo: ciclo-teste
 });
 
 test("reverter-trazido desfaz por revert, nunca reset, e a task reabre na tentativa seguinte", (t) => {
-  const a = ambiente(t);
-  a.autorizar();
-  a.abrir("T1");
+  const a = ambiente(t, T1_ABERTA);
   a.filhaTrabalha("T1", 1, [{ "src/t1.mjs": "x\n" }, { "src/t1b.mjs": "y\n" }]);
   const s = a.ok("trazer", "T1", "--tentativa", "1", "--sessao", "s1");
   const r = a.ok("reverter-trazido", "T1", "--motivo", "Verificação vermelha");
@@ -789,8 +753,7 @@ test("reverter-trazido desfaz por revert, nunca reset, e a task reabre na tentat
 });
 
 test("registrar-conferencia --manual fecha so task de estacao workstation, com o texto de Rita", (t) => {
-  const a = ambiente(t, { tasks: [task("T1"), task("T2", { extra: ["**Estação:** workstation", "**Independente:** sim"] })] });
-  a.autorizar();
+  const a = ambiente(t, { tasks: [task("T1"), task("T2", { extra: ["**Estação:** workstation", "**Independente:** sim"] })], ...AUTORIZADO });
   let r = a.cli("registrar-conferencia", "T1", "--manual", "--sim", "terminei", "--publicacao", "nao-se-aplica");
   assert.equal(r.status, 1);
   assert.match(r.stderr, /manual-fora-de-workstation/);
@@ -804,11 +767,8 @@ test("registrar-conferencia --manual fecha so task de estacao workstation, com o
   assert.deepEqual(ret.feitas, ["T2"]);
 });
 
-// ── limpar ──────────────────────────────────────────────────────────────────
-
 test("registrar-conferencia --condutora fecha so task de estacao condutora, com a sessao dela, e o auditar aceita", (t) => {
-  const a = ambiente(t, { tasks: [task("T1", { extra: ["**Estação:** condutora"] }), task("T2")] });
-  a.autorizar();
+  const a = ambiente(t, CONDUTORA);
   let r = a.cli("registrar-conferencia", "T2", "--condutora", "--verificacao", "verde", "--publicacao", "nao-se-aplica", "--sessao", "m1");
   assert.equal(r.status, 1);
   assert.match(r.stderr, /maestra-fora-da-estacao/);
@@ -834,8 +794,7 @@ test("registrar-conferencia --condutora fecha so task de estacao condutora, com 
 });
 
 test("auditar acusa conferencia de filha em task de estacao condutora", (t) => {
-  const a = ambiente(t, { tasks: [task("T1", { extra: ["**Estação:** condutora"] })] });
-  a.autorizar();
+  const a = ambiente(t, CONDUTORA);
   a.g("commit", "-q", "--allow-empty", "-m", "Conducao: T1 conferida", "-m",
     ["Conducao-Task: T1", "Conducao-Sha-Filha: 0000000", "Conducao-Sessao-Filha: s1", "Conducao-Nonce: x", "Conducao-Verificacao: verde", "Conducao-Publicacao: nao-se-aplica"].join("\n"));
   const nota = path.join(a.raiz, "nota-auditar-maestra-forjada.md");
@@ -844,22 +803,7 @@ test("auditar acusa conferencia de filha em task de estacao condutora", (t) => {
   assert.ok(saida.violacoes.some((v) => v.regra === "maestra-sem-executor"), JSON.stringify(saida.violacoes));
 });
 
-test("limpar recusa com tentativa em voo e depois apaga tentativas encerradas e a copia", (t) => {
-  const a = ambiente(t);
-  a.autorizar();
-  a.abrir("T1");
-  a.pergunta("conducao-viva", "limpar");
-  // Tentativa que falhou (o commit da T12): sai do voo e vira rastro morto.
-  a.g("commit", "-q", "--allow-empty", "-m", "Conducao: T1 tentativa 1 falhou");
-  a.ok("empurrar-copia");
-  const s = a.ok("limpar");
-  assert.deepEqual(s.origin.sort(), [`refs/conducao-brief/${CICLO}/T1/1`, `refs/conducao/${CICLO}/T1/1`, `refs/conducao/${CICLO}/copia`].sort());
-  assert.equal(a.g("ls-remote", "origin", `refs/conducao-brief/${CICLO}/*`), "");
-  assert.equal(a.g("ls-remote", "origin", `refs/conducao/${CICLO}/*`), "");
-  assert.equal(a.g("for-each-ref", `refs/conducao-local/${CICLO}/`), "");
-});
-
-// ── aviso da filha em referência irmã (P22 do ATRM-51) e --aprovado curto (P24) ──
+// ── aviso da filha em referência irmã (P22 do ATRM-51) ──────────────────────
 
 const refAviso = (tk, n) => `refs/conducao-aviso/${CICLO}/${tk}/${n}`;
 
@@ -883,14 +827,43 @@ function filhaAvisa(a, tk, n, linha) {
 
 const esperar = (a, tk = "T1") => a.ok("esperar-filha", tk, "--tentativa", "1", "--teto-chamador-min", "30", "--max-min", "0");
 
-test("esperar-filha acorda com o aviso da filha que nao empurrou trabalho, e cada aviso uma vez so", (t) => {
-  const a = ambiente(t);
-  a.autorizar();
-  a.abrir("T1");
+// ── limpar ──────────────────────────────────────────────────────────────────
+
+test("limpar recusa com tentativa em voo e depois apaga tentativas encerradas, avisos das filhas e a copia", (t) => {
+  const a = ambiente(t, T1_ABERTA);
+  a.pergunta("conducao-viva", "limpar");
   filhaParte(a, "T1", 1);
+  filhaAvisa(a, "T1", 1, "T1-FALHA pergunta nonceT11");
+  esperar(a);
+  // Tentativa que falhou (o commit da T12): sai do voo e vira rastro morto.
+  a.g("commit", "-q", "--allow-empty", "-m", "Conducao: T1 tentativa 1 falhou");
+  a.ok("empurrar-copia");
+  const s = a.ok("limpar");
+  assert.deepEqual(s.origin.sort(), [refAviso("T1", 1), `refs/conducao-brief/${CICLO}/T1/1`, `refs/conducao/${CICLO}/T1/1`, `refs/conducao/${CICLO}/copia`].sort());
+  assert.equal(a.g("ls-remote", "origin", `refs/conducao-aviso/${CICLO}/*`), "");
+  assert.equal(a.g("ls-remote", "origin", `refs/conducao-brief/${CICLO}/*`), "");
+  assert.equal(a.g("ls-remote", "origin", `refs/conducao/${CICLO}/*`), "");
+  assert.equal(a.g("for-each-ref", `refs/conducao-local/${CICLO}/`), "");
+});
+
+// ── esperar-filha ───────────────────────────────────────────────────────────
+
+test("esperar-filha: prazo sem push, sem-referencia-local, aviso alheio marcado, aviso da tentativa uma vez so, e a ponta quando a filha empurra", (t) => {
+  const a = ambiente(t, T1_ABERTA);
+  // Sem push e sem referência de aviso (contrato anterior): o comportamento de sempre.
+  assert.equal(esperar(a).desfecho, "prazo");
+  assert.equal(esperar(a, "T2").desfecho, "sem-referencia-local");
+  filhaParte(a, "T1", 1);
+  // Aviso que não é desta tentativa (outro nonce): acorda, marcado como não conferido.
+  const alheio = filhaAvisa(a, "T1", 1, "T1-FALHA pergunta outroNonce");
+  const e0 = esperar(a);
+  assert.equal(e0.desfecho, "avisou");
+  assert.equal(e0.aviso, alheio);
+  assert.equal(e0.confere, false);
+  // Aviso da tentativa, sem trabalho empurrado. Antes do conserto: `prazo` — a pergunta ficava
+  // invisível até o fim da espera.
   const pergunta = filhaAvisa(a, "T1", 1, "T1-FALHA pergunta nonceT11");
   const e1 = esperar(a);
-  // Antes do conserto: `prazo` — a pergunta ficava invisível até o fim da espera.
   assert.equal(e1.desfecho, "avisou");
   assert.equal(e1.linha, "T1-FALHA pergunta nonceT11");
   assert.equal(e1.aviso, pergunta);
@@ -907,48 +880,32 @@ test("esperar-filha acorda com o aviso da filha que nao empurrou trabalho, e cad
   assert.equal(e2.desfecho, "avisou");
   assert.equal(e2.linha, `T1-OK ${ponta.slice(0, 8)} nonceT11`);
   assert.equal(e2.ponta, ponta, "o trabalho que andou vem junto");
-  assert.equal(esperar(a).desfecho, "andou", "visto o aviso, volta o desfecho de sempre");
+  const andou = esperar(a);
+  assert.equal(andou.desfecho, "andou", "visto o aviso, volta o desfecho de sempre");
+  assert.equal(andou.ponta, ponta);
 });
 
-test("esperar-filha marca aviso que nao e da tentativa e segue sem aviso como antes", (t) => {
-  const a = ambiente(t);
-  a.autorizar();
-  a.abrir("T1");
-  filhaParte(a, "T1", 1);
-  // Sem referência de aviso (contrato anterior): o comportamento de hoje.
-  assert.equal(esperar(a).desfecho, "prazo");
-  filhaAvisa(a, "T1", 1, "T1-FALHA pergunta outroNonce");
-  const e = esperar(a);
-  assert.equal(e.desfecho, "avisou");
-  assert.equal(e.confere, false);
-});
-
-test("trazer aceita --aprovado com prefixo de 7+ da ponta e diz aprovado-nao-confere ao que nao bate", (t) => {
-  const a = ambiente(t);
-  a.autorizar();
-  a.abrir("T1");
-  const ponta = a.filhaTrabalha("T1", 1, [{ "src/t1.mjs": "x\n", "db/migrations/20261015000000_x.sql": "select 1;\n" }]);
-  a.pergunta("trazer-exige-aprovacao", "trazer", "T1", "--tentativa", "1");
-  const curto = a.pergunta("aprovado-nao-confere", "trazer", "T1", "--tentativa", "1", "--aprovado", ponta.slice(0, 6));
-  assert.equal(curto.aprovado, ponta.slice(0, 6));
-  assert.equal(curto.sha, ponta);
-  const outro = ponta[0] === "a" ? "b" : "a";
-  a.pergunta("aprovado-nao-confere", "trazer", "T1", "--tentativa", "1", "--aprovado", `${outro}${ponta.slice(1, 8)}`);
-  // Antes do conserto: o SHA curto repetia `trazer-exige-aprovacao` sem dizer por quê.
-  assert.equal(a.ok("trazer", "T1", "--tentativa", "1", "--aprovado", ponta.slice(0, 8).toUpperCase(), "--sessao", "s1").acao, "trazida");
-});
-
-test("limpar apaga tambem os avisos das filhas no origin", (t) => {
-  const a = ambiente(t);
-  a.autorizar();
-  a.abrir("T1");
-  filhaParte(a, "T1", 1);
-  filhaAvisa(a, "T1", 1, "T1-FALHA pergunta nonceT11");
-  esperar(a);
-  a.g("commit", "-q", "--allow-empty", "-m", "Conducao: T1 tentativa 1 falhou");
-  a.ok("empurrar-copia");
-  const s = a.ok("limpar");
-  assert.deepEqual(s.origin.sort(), [refAviso("T1", 1), `refs/conducao-brief/${CICLO}/T1/1`, `refs/conducao/${CICLO}/T1/1`, `refs/conducao/${CICLO}/copia`].sort());
-  assert.equal(a.g("ls-remote", "origin", `refs/conducao-aviso/${CICLO}/*`), "");
-  assert.equal(a.g("for-each-ref", `refs/conducao-local/${CICLO}/`), "");
+test("esperar-filha sem teto do chamador, com prazo acima dele ou --max-min malformado recusa; sem origin sai rede-falhou", (t) => {
+  const a = ambiente(t, T1_ABERTA);
+  // Referência já andou: se o verbo esperasse em vez de recusar, sairia 0 na hora com `andou`.
+  a.filhaTrabalha("T1", 1, [{ "src/t1.mjs": "x\n" }]);
+  const semTeto = a.cli("esperar-filha", "T1", "--tentativa", "1", "--max-min", "0");
+  assert.equal(semTeto.status, 2, semTeto.stdout);
+  assert.match(semTeto.stderr, /--teto-chamador-min/);
+  const semTetoNemPrazo = a.cli("esperar-filha", "T1", "--tentativa", "1");
+  assert.equal(semTetoNemPrazo.status, 2);
+  const acima = a.cli("esperar-filha", "T1", "--tentativa", "1", "--teto-chamador-min", "30", "--max-min", "60");
+  assert.equal(acima.status, 2, acima.stdout);
+  assert.match(acima.stderr, /--max-min 60 passa do teto do chamador \(30 min\)/);
+  // O padrão de 4 min (abaixo do cache de 5 min) também é medido contra o teto.
+  assert.equal(a.cli("esperar-filha", "T1", "--tentativa", "1", "--teto-chamador-min", "3").status, 2);
+  for (const v of ["5m", "-1", "1.5"]) {
+    const r = a.cli("esperar-filha", "T1", "--tentativa", "1", "--teto-chamador-min", "30", "--max-min", v);
+    assert.notEqual(r.status, 0, `--max-min ${v} deveria falhar`);
+  }
+  assert.equal(a.ok("esperar-filha", "T1", "--tentativa", "1", "--teto-chamador-min", "30", "--max-min", "30").desfecho, "andou");
+  a.g("remote", "set-url", "origin", path.join(a.raiz, "nao-existe.git"));
+  const r = a.ok("esperar-filha", "T1", "--tentativa", "1", "--teto-chamador-min", "30", "--max-min", "5", "--intervalo-s", "1");
+  assert.equal(r.desfecho, "rede-falhou");
+  assert.equal(r.falhas, 3);
 });

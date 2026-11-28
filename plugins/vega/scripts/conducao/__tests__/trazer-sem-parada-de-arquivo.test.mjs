@@ -13,8 +13,9 @@
  * define a parada de publicação (mesmo declarado), a faixa fora do marcador e
  * a task com publicação, na conferência.
  *
- * Cada teste monta um origin bare, a árvore da maestra no ramo do ciclo e um
- * clone da filha, com hooks desligados (como em `conducao-git.test.mjs`).
+ * Uma base monta um origin bare, a árvore da maestra no ramo do ciclo e um
+ * clone da filha, com hooks desligados (como em `conducao-git.test.mjs`), e
+ * autoriza e abre uma vez; cada caso da tabela roda numa cópia dela (D3a).
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -108,10 +109,8 @@ function escreverEm(dir, arquivos) {
   }
 }
 
-/** Origin bare + maestra no ramo do ciclo (com `extra` no primeiro commit) + clone da filha. */
-function ambiente(t, { extra = {} } = {}) {
-  const raiz = pastaTemporaria("trazer-sem-parada-");
-  t.after(() => rmSync(raiz, { recursive: true, force: true }));
+/** Origin bare + maestra no ramo do ciclo (com `extra` no primeiro commit) + clone da filha, sob `raiz`. */
+function montar(raiz, extra) {
   const origin = path.join(raiz, "origin.git");
   execFileSync("git", ["init", "-q", "--bare", origin]);
   const maestra = path.join(raiz, "maestra");
@@ -134,9 +133,15 @@ function ambiente(t, { extra = {} } = {}) {
   g("push", "-q", "origin", "ciclo-teste");
   const filha = path.join(raiz, "filha");
   execFileSync("git", ["clone", "-q", origin, filha]);
-  const f = gitEm(filha);
-  configurar(f);
+  configurar(gitEm(filha));
+}
 
+/** Os verbos sobre o repositório já montado em `raiz` (a base ou uma cópia dela). */
+function operar(raiz) {
+  const maestra = path.join(raiz, "maestra");
+  const filha = path.join(raiz, "filha");
+  const g = gitEm(maestra);
+  const f = gitEm(filha);
   const cli = (...args) => {
     const r = spawnSync(process.execPath, [SCRIPT, ...args, "--repo", maestra, "--ciclo", CICLO], { encoding: "utf8", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
     const linhas = r.stdout.split("\n").filter(Boolean);
@@ -165,9 +170,32 @@ function ambiente(t, { extra = {} } = {}) {
     f("push", "-q", "origin", `HEAD:${ref(tk)}`);
     return f("rev-parse", "HEAD");
   };
-  const autorizar = () => ok("autorizar-ciclo", "F1", "--sim", "sim, pode tocar a F1", "--pergunta", "p-00000000000000a1");
   const abrir = (tk) => ok("abrir", tk, "--tentativa", "1", "--nonce", `nonce${tk}1`, "--modo-maestra", "auto");
-  return { maestra, g, f, filha, ok, pergunta, cli, ref, filhaTrabalha, autorizar, abrir, escreverEm };
+  return { raiz, maestra, g, f, filha, ok, pergunta, cli, ref, filhaTrabalha, abrir, escreverEm };
+}
+
+/** A base de uma tabela: montada, autorizada e com as tasks de `abertas` abertas (o retorno do `abrir` em `aberta`). */
+function base(t, { extra = {}, abertas }) {
+  const raiz = pastaTemporaria("trazer-sem-parada-");
+  t.after(() => rmSync(raiz, { recursive: true, force: true }));
+  montar(raiz, extra);
+  const a = operar(raiz);
+  a.ok("autorizar-ciclo", "F1", "--sim", "sim, pode tocar a F1", "--pergunta", "p-00000000000000a1");
+  const aberta = Object.fromEntries(abertas.map((tk) => [tk, a.abrir(tk)]));
+  return { ...a, aberta };
+}
+
+/**
+ * Cópia da base (origin, maestra e filha) para um caso: o origin vai com caminho absoluto na
+ * config da maestra e da filha, e é reapontado para o da cópia.
+ */
+function copiar(t, b) {
+  const raiz = pastaTemporaria("trazer-sem-parada-caso-");
+  t.after(() => rmSync(raiz, { recursive: true, force: true }));
+  execFileSync("cp", ["-a", `${b.raiz}/.`, raiz]);
+  const origin = path.join(raiz, "origin.git");
+  for (const d of ["maestra", "filha"]) gitEm(path.join(raiz, d))("remote", "set-url", "origin", origin);
+  return { ...operar(raiz), aberta: b.aberta };
 }
 
 /** O trailer `Conducao-Fora-Dos-Outputs` do registro `trazida`, lido do git cru. */
@@ -176,126 +204,197 @@ function foraDoRegistro(a, tk) {
   return JSON.parse(Buffer.from(bruto, "base64url").toString("utf8"));
 }
 
-test("D14: o canonico do ciclo na faixa da T5 traz sem pergunta e sai com canonicoAlterado", (t) => {
-  const a = ambiente(t);
-  a.autorizar();
-  a.abrir("T5");
-  a.filhaTrabalha("T5", { [NOTA_DA_T5]: "fechamento\n", [CAMINHO]: canonico(4) });
-  const s = a.ok("trazer", "T5", "--tentativa", "1", "--sessao", "s5");
-  assert.equal(s.acao, "trazida", JSON.stringify(s));
-  assert.equal(s.canonicoAlterado, true);
-  assert.deepEqual(s.foraDosOutputs, [], "o canonico vai ao relato à parte, nunca na lista de fora");
-  assert.ok(s.avisoOperador.some((l) => l.includes(CAMINHO)), JSON.stringify(s.avisoOperador));
-  assert.deepEqual(foraDoRegistro(a, "T5"), [], "o trailer é gravado mesmo vazio");
-  const r = a.ok("retomar").trazidas.find((x) => x.task === "T5");
-  assert.deepEqual([r.foraDosOutputs, r.canonicoAlterado], [[], true]);
-});
-
 // D-VEGA20-26: o padrão da fábrica deixou de ser condição do trazer — com o contrato do HEAD
 // sem a seção do padrão, ou sem contrato, a D32 traz do mesmo jeito.
 const CONTRATO_SEM_PADRAO = CONTRATO.replace(/^## Padrão da fábrica$/m, "## Outra seção");
-for (const [nome, extra] of [
-  ["sem contrato no HEAD", {}],
-  ["com contrato do HEAD sem o padrão da fábrica", caminhoDoContrato() ? { [caminhoDoContrato()]: CONTRATO_SEM_PADRAO } : null],
-]) {
-  test(`D32: settings.json e hook do motor fora dos Outputs da T41 trazem sem pergunta, ${nome}, e o retomar lê a lista`, (t) => {
-    if (!extra) return t.skip("fora de um repositório git o contrato não tem caminho");
-    const a = ambiente(t, { extra });
-    a.autorizar();
-    a.abrir("T41");
-    a.filhaTrabalha("T41", {
-      [SAIDA_DA_T41]: "test\n",
-      [SETTINGS]: '{\n  "hooks": { "PreToolUse": [] }\n}\n',
-      [HOOK_DO_MOTOR]: "module.exports = { serena: true };\n",
-    });
-    const s = a.ok("trazer", "T41", "--tentativa", "1", "--sessao", "s41");
-    assert.equal(s.acao, "trazida", JSON.stringify(s));
-    assert.deepEqual([...s.foraDosOutputs].sort(), [SETTINGS, HOOK_DO_MOTOR].sort());
-    assert.equal(s.canonicoAlterado, false);
-    for (const c of [SETTINGS, HOOK_DO_MOTOR]) assert.ok(s.avisoOperador.some((l) => l.includes(c)), `${c} no relato: ${JSON.stringify(s.avisoOperador)}`);
-    assert.deepEqual([...foraDoRegistro(a, "T41")].sort(), [SETTINGS, HOOK_DO_MOTOR].sort());
-    const r = a.ok("retomar").trazidas.find((x) => x.task === "T41");
-    assert.deepEqual([...r.foraDosOutputs].sort(), [SETTINGS, HOOK_DO_MOTOR].sort());
-    assert.equal(r.canonicoAlterado, false);
+
+/** D32: settings.json e hook do motor fora dos Outputs da T41 trazem sem pergunta, e o retomar lê a lista. */
+function d32(a) {
+  a.filhaTrabalha("T41", {
+    [SAIDA_DA_T41]: "test\n",
+    [SETTINGS]: '{\n  "hooks": { "PreToolUse": [] }\n}\n',
+    [HOOK_DO_MOTOR]: "module.exports = { serena: true };\n",
   });
+  const s = a.ok("trazer", "T41", "--tentativa", "1", "--sessao", "s41");
+  assert.equal(s.acao, "trazida", JSON.stringify(s));
+  assert.deepEqual([...s.foraDosOutputs].sort(), [SETTINGS, HOOK_DO_MOTOR].sort());
+  assert.equal(s.canonicoAlterado, false);
+  for (const c of [SETTINGS, HOOK_DO_MOTOR]) assert.ok(s.avisoOperador.some((l) => l.includes(c)), `${c} no relato: ${JSON.stringify(s.avisoOperador)}`);
+  assert.deepEqual([...foraDoRegistro(a, "T41")].sort(), [SETTINGS, HOOK_DO_MOTOR].sort());
+  const r = a.ok("retomar").trazidas.find((x) => x.task === "T41");
+  assert.deepEqual([...r.foraDosOutputs].sort(), [SETTINGS, HOOK_DO_MOTOR].sort());
+  assert.equal(r.canonicoAlterado, false);
 }
 
-test("depois de conferir, o retomar ainda devolve a lista e o canonicoAlterado, lidos da marca conferida", (t) => {
-  const a = ambiente(t);
-  a.autorizar();
-  a.abrir("T41");
-  a.filhaTrabalha("T41", { [SAIDA_DA_T41]: "test\n", [HOOK_DO_MOTOR]: "module.exports = { serena: true };\n", [CAMINHO]: canonico(4) });
-  a.ok("trazer", "T41", "--tentativa", "1", "--sessao", "s41");
-  assert.equal(a.ok("registrar-conferencia", "T41", "--verificacao", "verde", "--publicacao", "nao-se-aplica", "--sessao", "session_01TesteDaFilha").acao, "conferida");
-  assert.equal(a.g("for-each-ref", `refs/conducao-local/${CICLO}/trazida/`), "", "a conferência apaga o registro trazida");
-  const r = a.ok("retomar");
-  assert.deepEqual(r.trazidas, []);
-  const c = r.conferidas.find((x) => x.task === "T41");
-  assert.deepEqual([c.foraDosOutputs, c.canonicoAlterado], [[HOOK_DO_MOTOR], true]);
-  assert.deepEqual(r.avisosDoRelato, []);
-});
-
-test("relato ilegivel nao vira null calado: o retomar devolve um aviso nomeando a trazida", (t) => {
-  const a = ambiente(t);
-  a.autorizar();
-  a.abrir("T41");
-  a.filhaTrabalha("T41", { [SAIDA_DA_T41]: "test\n", [HOOK_DO_MOTOR]: "module.exports = { serena: true };\n" });
-  a.ok("trazer", "T41", "--tentativa", "1", "--sessao", "s41");
-  // Regrava o registro `trazida` com os dois trailers do relato ilegíveis.
-  const ref = `refs/conducao-local/${CICLO}/trazida/T41/1`;
-  const velho = a.g("rev-parse", ref);
-  const corpo = a.g("log", "-1", "--format=%B", velho)
-    .replace(/Conducao-Fora-Dos-Outputs: \S+/, `Conducao-Fora-Dos-Outputs: ${Buffer.from("nao e json").toString("base64url")}`)
-    .replace(/Conducao-Canonico-Alterado: \S+/, "Conducao-Canonico-Alterado: talvez");
-  const novo = execFileSync("git", ["commit-tree", a.g("rev-parse", `${velho}^{tree}`), "-p", a.g("rev-parse", `${velho}^`), "-m", corpo], { cwd: a.maestra, encoding: "utf8" }).trim();
-  a.g("update-ref", ref, novo, velho);
-  const r = a.ok("retomar");
-  const tr = r.trazidas.find((x) => x.task === "T41");
-  assert.deepEqual([tr.foraDosOutputs, tr.canonicoAlterado], [null, null]);
-  assert.deepEqual(r.avisosDoRelato.map((x) => [x.task, x.trazida, x.trailer]), [
-    ["T41", ref, "Conducao-Fora-Dos-Outputs"],
-    ["T41", ref, "Conducao-Canonico-Alterado"],
-  ]);
-  // O ilegível segue até a marca conferida, e o aviso a nomeia pelo sha.
-  a.ok("registrar-conferencia", "T41", "--verificacao", "verde", "--publicacao", "nao-se-aplica", "--sessao", "session_01TesteDaFilha");
-  const depois = a.ok("retomar");
-  const sha = a.g("log", "-1", "--format=%H", "--grep=^Conducao: T41 conferida$", "HEAD");
-  assert.deepEqual(depois.avisosDoRelato.map((x) => [x.task, x.conferida, x.trailer]), [
-    ["T41", sha, "Conducao-Fora-Dos-Outputs"],
-    ["T41", sha, "Conducao-Canonico-Alterado"],
-  ]);
-});
-
-test("caminho clinico fora dos Outputs segue em trazer-exige-aprovacao", (t) => {
-  const a = ambiente(t);
-  a.autorizar();
-  a.abrir("T44");
-  const ponta = a.filhaTrabalha("T44", { "src/t44.mjs": "x\n", [CLINICO]: "select 1;\n" });
-  const p = a.pergunta("trazer-exige-aprovacao", "trazer", "T44", "--tentativa", "1");
-  assert.equal(p.sha, ponta);
-  assert.deepEqual(p.motivos, [{ motivo: "caminho-clinico-fora-dos-outputs", caminhos: [CLINICO] }]);
-});
-
-test("o que define a parada de publicacao segue em trazer-exige-aprovacao, mesmo declarado", (t) => {
-  const a = ambiente(t);
-  a.autorizar();
-  a.abrir("T42");
-  a.filhaTrabalha("T42", { [ADAPTADOR]: "export default {};\n", [GATE]: "process.exit(0);\n" });
-  const p = a.pergunta("trazer-exige-aprovacao", "trazer", "T42", "--tentativa", "1");
-  assert.deepEqual(p.motivos, [{ motivo: "define-a-parada", caminhos: [GATE, ADAPTADOR] }]);
-});
-
-test("settings.json cujo diff registra o gate de publicacao define a parada; o que nao registra segue", (t) => {
-  const a = ambiente(t);
-  a.autorizar();
-  a.abrir("T41");
-  a.filhaTrabalha("T41", { [SAIDA_DA_T41]: "test\n", [SETTINGS]: '{\n  "hooks": { "PreToolUse": [{ "command": "node .claude/hooks/publicacao-gate.js" }] }\n}\n' });
-  const p = a.pergunta("trazer-exige-aprovacao", "trazer", "T41", "--tentativa", "1");
-  assert.deepEqual(p.motivos, [{ motivo: "define-a-parada", caminhos: [SETTINGS] }]);
-});
+/**
+ * Os casos sobre a base padrão (T41 e T44 abertas; a T5, a T42 e a T45 o caso abre na cópia).
+ * Cada um roda numa cópia da base; o que traz e o que para não se misturam.
+ */
+const CASOS = [
+  {
+    nome: "D14: o canonico do ciclo na faixa da T5 traz sem pergunta e sai com canonicoAlterado",
+    rodar: (a) => {
+      a.abrir("T5");
+      a.filhaTrabalha("T5", { [NOTA_DA_T5]: "fechamento\n", [CAMINHO]: canonico(4) });
+      const s = a.ok("trazer", "T5", "--tentativa", "1", "--sessao", "s5");
+      assert.equal(s.acao, "trazida", JSON.stringify(s));
+      assert.equal(s.canonicoAlterado, true);
+      assert.deepEqual(s.foraDosOutputs, [], "o canonico vai ao relato à parte, nunca na lista de fora");
+      assert.ok(s.avisoOperador.some((l) => l.includes(CAMINHO)), JSON.stringify(s.avisoOperador));
+      assert.deepEqual(foraDoRegistro(a, "T5"), [], "o trailer é gravado mesmo vazio");
+      const r = a.ok("retomar").trazidas.find((x) => x.task === "T5");
+      assert.deepEqual([r.foraDosOutputs, r.canonicoAlterado], [[], true]);
+    },
+  },
+  { nome: "D32, sem contrato no HEAD", rodar: d32 },
+  {
+    nome: "D32, com contrato do HEAD sem o padrão da fábrica",
+    rodar: (a, tt) => {
+      if (!caminhoDoContrato()) return tt.skip("fora de um repositório git o contrato não tem caminho");
+      a.escreverEm(a.maestra, { [caminhoDoContrato()]: CONTRATO_SEM_PADRAO });
+      a.g("add", "-A");
+      a.g("commit", "-q", "-m", "contrato sem o padrão");
+      d32(a);
+    },
+  },
+  {
+    nome: "depois de conferir, o retomar ainda devolve a lista e o canonicoAlterado, lidos da marca conferida",
+    rodar: (a) => {
+      a.filhaTrabalha("T41", { [SAIDA_DA_T41]: "test\n", [HOOK_DO_MOTOR]: "module.exports = { serena: true };\n", [CAMINHO]: canonico(4) });
+      a.ok("trazer", "T41", "--tentativa", "1", "--sessao", "s41");
+      assert.equal(a.ok("registrar-conferencia", "T41", "--verificacao", "verde", "--publicacao", "nao-se-aplica", "--sessao", "session_01TesteDaFilha").acao, "conferida");
+      assert.equal(a.g("for-each-ref", `refs/conducao-local/${CICLO}/trazida/`), "", "a conferência apaga o registro trazida");
+      const r = a.ok("retomar");
+      assert.deepEqual(r.trazidas, []);
+      const c = r.conferidas.find((x) => x.task === "T41");
+      assert.deepEqual([c.foraDosOutputs, c.canonicoAlterado], [[HOOK_DO_MOTOR], true]);
+      assert.deepEqual(r.avisosDoRelato, []);
+    },
+  },
+  {
+    nome: "relato ilegivel nao vira null calado: o retomar devolve um aviso nomeando a trazida",
+    rodar: (a) => {
+      a.filhaTrabalha("T41", { [SAIDA_DA_T41]: "test\n", [HOOK_DO_MOTOR]: "module.exports = { serena: true };\n" });
+      a.ok("trazer", "T41", "--tentativa", "1", "--sessao", "s41");
+      // Regrava o registro `trazida` com os dois trailers do relato ilegíveis.
+      const ref = `refs/conducao-local/${CICLO}/trazida/T41/1`;
+      const velho = a.g("rev-parse", ref);
+      const corpo = a.g("log", "-1", "--format=%B", velho)
+        .replace(/Conducao-Fora-Dos-Outputs: \S+/, `Conducao-Fora-Dos-Outputs: ${Buffer.from("nao e json").toString("base64url")}`)
+        .replace(/Conducao-Canonico-Alterado: \S+/, "Conducao-Canonico-Alterado: talvez");
+      const novo = execFileSync("git", ["commit-tree", a.g("rev-parse", `${velho}^{tree}`), "-p", a.g("rev-parse", `${velho}^`), "-m", corpo], { cwd: a.maestra, encoding: "utf8" }).trim();
+      a.g("update-ref", ref, novo, velho);
+      const r = a.ok("retomar");
+      const tr = r.trazidas.find((x) => x.task === "T41");
+      assert.deepEqual([tr.foraDosOutputs, tr.canonicoAlterado], [null, null]);
+      assert.deepEqual(r.avisosDoRelato.map((x) => [x.task, x.trazida, x.trailer]), [
+        ["T41", ref, "Conducao-Fora-Dos-Outputs"],
+        ["T41", ref, "Conducao-Canonico-Alterado"],
+      ]);
+      // O ilegível segue até a marca conferida, e o aviso a nomeia pelo sha.
+      a.ok("registrar-conferencia", "T41", "--verificacao", "verde", "--publicacao", "nao-se-aplica", "--sessao", "session_01TesteDaFilha");
+      const depois = a.ok("retomar");
+      const sha = a.g("log", "-1", "--format=%H", "--grep=^Conducao: T41 conferida$", "HEAD");
+      assert.deepEqual(depois.avisosDoRelato.map((x) => [x.task, x.conferida, x.trailer]), [
+        ["T41", sha, "Conducao-Fora-Dos-Outputs"],
+        ["T41", sha, "Conducao-Canonico-Alterado"],
+      ]);
+    },
+  },
+  {
+    nome: "caminho clinico fora dos Outputs segue em trazer-exige-aprovacao",
+    rodar: (a) => {
+      const ponta = a.filhaTrabalha("T44", { "src/t44.mjs": "x\n", [CLINICO]: "select 1;\n" });
+      const p = a.pergunta("trazer-exige-aprovacao", "trazer", "T44", "--tentativa", "1");
+      assert.equal(p.sha, ponta);
+      assert.deepEqual(p.motivos, [{ motivo: "caminho-clinico-fora-dos-outputs", caminhos: [CLINICO] }]);
+    },
+  },
+  {
+    nome: "o que define a parada de publicacao segue em trazer-exige-aprovacao, mesmo declarado",
+    rodar: (a) => {
+      a.abrir("T42");
+      a.filhaTrabalha("T42", { [ADAPTADOR]: "export default {};\n", [GATE]: "process.exit(0);\n" });
+      const p = a.pergunta("trazer-exige-aprovacao", "trazer", "T42", "--tentativa", "1");
+      assert.deepEqual(p.motivos, [{ motivo: "define-a-parada", caminhos: [GATE, ADAPTADOR] }]);
+    },
+  },
+  {
+    nome: "settings.json cujo diff registra o gate de publicacao define a parada",
+    rodar: (a) => {
+      a.filhaTrabalha("T41", { [SAIDA_DA_T41]: "test\n", [SETTINGS]: '{\n  "hooks": { "PreToolUse": [{ "command": "node .claude/hooks/publicacao-gate.js" }] }\n}\n' });
+      const p = a.pergunta("trazer-exige-aprovacao", "trazer", "T41", "--tentativa", "1");
+      assert.deepEqual(p.motivos, [{ motivo: "define-a-parada", caminhos: [SETTINGS] }]);
+    },
+  },
+  {
+    nome: "settings.local.json novo com disableAllHooks define a parada",
+    rodar: (a) => {
+      const local = ".claude/settings.local.json";
+      a.filhaTrabalha("T41", { [SAIDA_DA_T41]: "test\n", [local]: '{ "disableAllHooks": true }\n' });
+      assert.deepEqual(a.pergunta("trazer-exige-aprovacao", "trazer", "T41", "--tentativa", "1").motivos, [{ motivo: "define-a-parada", caminhos: [local] }]);
+    },
+  },
+  {
+    nome: "a faixa fora do marcador segue em faixa-fora-do-marcador",
+    rodar: (a) => {
+      a.f("fetch", "-q", "origin", `+${a.ref("T44")}:refs/remotes/tentativa`);
+      a.f("checkout", "-q", "--orphan", "fora");
+      a.escreverEm(a.filha, { "fora.txt": "historia de fora\n" });
+      a.f("add", "-A");
+      a.f("commit", "-q", "-m", "historia de fora");
+      a.f("checkout", "-q", "--detach", a.aberta.T44.marcador);
+      a.escreverEm(a.filha, { "src/t44.mjs": "trabalho\n" });
+      a.f("add", "-A");
+      a.f("commit", "-q", "-m", "trabalho");
+      a.f("merge", "-q", "--allow-unrelated-histories", "-s", "ours", "-m", "merge de fora", "fora");
+      a.f("push", "-q", "--force", "origin", `HEAD:${a.ref("T44")}`);
+      a.pergunta("faixa-fora-do-marcador", "trazer", "T44", "--tentativa", "1");
+    },
+  },
+  {
+    nome: "a task com publicacao segue parando na conferencia",
+    rodar: (a) => {
+      a.abrir("T45");
+      a.filhaTrabalha("T45", { "src/t45.mjs": "x\n" });
+      assert.equal(a.ok("trazer", "T45", "--tentativa", "1", "--sessao", "s45").acao, "trazida");
+      const r = a.cli("registrar-conferencia", "T45", "--verificacao", "verde", "--publicacao", "nao-se-aplica");
+      assert.equal(r.status, 1);
+      assert.match(r.stderr, /publicacao-pendente/);
+    },
+  },
+];
 
 // Achados da revisão da T43: desligar o gate sem citar o nome dele na linha também define a parada.
 const COM_GATE = '{\n  "hooks": { "PreToolUse": [{ "matcher": "Bash|PowerShell", "hooks": [{ "command": "node .claude/hooks/publicacao-gate.js" }] }] }\n}\n';
+
+/** Os casos sobre a base com o gate já registrado no settings.json da maestra (T41 aberta). */
+const CASOS_COM_GATE = [
+  {
+    nome: "settings.json que ja registra o gate na maestra: trocar o matcher para",
+    rodar: (a) => {
+      a.filhaTrabalha("T41", { [SAIDA_DA_T41]: "test\n", [SETTINGS]: COM_GATE.replace('"Bash|PowerShell"', '"Nada"') });
+      assert.deepEqual(a.pergunta("trazer-exige-aprovacao", "trazer", "T41", "--tentativa", "1").motivos, [{ motivo: "define-a-parada", caminhos: [SETTINGS] }]);
+    },
+  },
+  {
+    nome: "settings.json que ja registra o gate na maestra: mexer em outro hook segue",
+    rodar: (a) => {
+      a.filhaTrabalha("T41", { [SAIDA_DA_T41]: "test\n", [SETTINGS]: COM_GATE.replace('"PreToolUse"', '"Stop": [], "PreToolUse"') });
+      assert.deepEqual(a.ok("trazer", "T41", "--tentativa", "1", "--sessao", "s41").foraDosOutputs, [SETTINGS]);
+    },
+  },
+];
+
+test("trazer sem parada de arquivo: o que traz e o que segue parando, por tabela de casos", async (t) => {
+  for (const [rotulo, b, casos] of [
+    ["", base(t, { abertas: ["T41", "T44"] }), CASOS],
+    ["gate na maestra: ", base(t, { extra: { [SETTINGS]: COM_GATE }, abertas: ["T41"] }), CASOS_COM_GATE],
+  ]) {
+    for (const caso of casos) await t.test(`${rotulo}${caso.nome}`, (tt) => caso.rodar(copiar(tt, b), tt));
+  }
+});
+
 test("settingsMudaAParada: matcher trocado, disableAllHooks, chave hooks repetida e ilegivel param; o resto segue", () => {
   assert.equal(settingsMudaAParada(COM_GATE, COM_GATE.replace('"Bash|PowerShell"', '"Nada"')), true);
   assert.equal(settingsMudaAParada(COM_GATE, COM_GATE.replace('{\n', '{\n  "disableAllHooks": true,\n')), true);
@@ -310,55 +409,4 @@ test("settingsMudaAParada: matcher trocado, disableAllHooks, chave hooks repetid
   assert.equal(settingsMudaAParada(COM_GATE, COM_GATE.replace('"PreToolUse"', '"PostToolUse": [], "PreToolUse"')), false);
   assert.equal(settingsMudaAParada(undefined, '{ "hooks": { "PreToolUse": [] } }'), false);
   assert.equal(settingsMudaAParada('{ "hooks": {} }', '{ "hooks": { "Stop": [] } }'), false);
-});
-
-test("settings.json que ja registra o gate na maestra: trocar o matcher para; mexer em outro hook segue", (t) => {
-  const a = ambiente(t, { extra: { [SETTINGS]: COM_GATE } });
-  a.autorizar();
-  a.abrir("T41");
-  a.filhaTrabalha("T41", { [SAIDA_DA_T41]: "test\n", [SETTINGS]: COM_GATE.replace('"Bash|PowerShell"', '"Nada"') });
-  assert.deepEqual(a.pergunta("trazer-exige-aprovacao", "trazer", "T41", "--tentativa", "1").motivos, [{ motivo: "define-a-parada", caminhos: [SETTINGS] }]);
-  const b = ambiente(t, { extra: { [SETTINGS]: COM_GATE } });
-  b.autorizar();
-  b.abrir("T41");
-  b.filhaTrabalha("T41", { [SAIDA_DA_T41]: "test\n", [SETTINGS]: COM_GATE.replace('"PreToolUse"', '"Stop": [], "PreToolUse"') });
-  assert.deepEqual(b.ok("trazer", "T41", "--tentativa", "1", "--sessao", "s41").foraDosOutputs, [SETTINGS]);
-});
-
-test("settings.local.json novo com disableAllHooks define a parada", (t) => {
-  const a = ambiente(t);
-  a.autorizar();
-  a.abrir("T41");
-  const local = ".claude/settings.local.json";
-  a.filhaTrabalha("T41", { [SAIDA_DA_T41]: "test\n", [local]: '{ "disableAllHooks": true }\n' });
-  assert.deepEqual(a.pergunta("trazer-exige-aprovacao", "trazer", "T41", "--tentativa", "1").motivos, [{ motivo: "define-a-parada", caminhos: [local] }]);
-});
-
-test("a faixa fora do marcador segue em faixa-fora-do-marcador", (t) => {
-  const a = ambiente(t);
-  a.autorizar();
-  const s = a.abrir("T44");
-  a.f("fetch", "-q", "origin", `+${a.ref("T44")}:refs/remotes/tentativa`);
-  a.f("checkout", "-q", "--orphan", "fora");
-  a.escreverEm(a.filha, { "fora.txt": "historia de fora\n" });
-  a.f("add", "-A");
-  a.f("commit", "-q", "-m", "historia de fora");
-  a.f("checkout", "-q", "--detach", s.marcador);
-  a.escreverEm(a.filha, { "src/t44.mjs": "trabalho\n" });
-  a.f("add", "-A");
-  a.f("commit", "-q", "-m", "trabalho");
-  a.f("merge", "-q", "--allow-unrelated-histories", "-s", "ours", "-m", "merge de fora", "fora");
-  a.f("push", "-q", "--force", "origin", `HEAD:${a.ref("T44")}`);
-  a.pergunta("faixa-fora-do-marcador", "trazer", "T44", "--tentativa", "1");
-});
-
-test("a task com publicacao segue parando na conferencia", (t) => {
-  const a = ambiente(t);
-  a.autorizar();
-  a.abrir("T45");
-  a.filhaTrabalha("T45", { "src/t45.mjs": "x\n" });
-  assert.equal(a.ok("trazer", "T45", "--tentativa", "1", "--sessao", "s45").acao, "trazida");
-  const r = a.cli("registrar-conferencia", "T45", "--verificacao", "verde", "--publicacao", "nao-se-aplica");
-  assert.equal(r.status, 1);
-  assert.match(r.stderr, /publicacao-pendente/);
 });

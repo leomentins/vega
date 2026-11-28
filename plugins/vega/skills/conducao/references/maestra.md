@@ -10,7 +10,7 @@ A condutora soma à entrada do `proximo` `maestra` (o `parent_session_id` do `ge
 
 1. roda o `comando` da ação (`pedir-herdeira --nonce <nonce> --entrada <a mesma do proximo>`), que refaz o `proximo` e grava o pedido no origin (`refs/conducao-brief/<ciclo>/pedido/<nonce>`): texto, modelo e nome da herdeira;
 2. manda a `mensagem` da ação (`PASSAR <fase> <nonce>`) à `maestra` por `send_message`, e espera;
-3. com `HERDEIRA <sessão> <nonce> <maestra>`: confere pelo `get_session` que o título da sessão é o `nome` da ação, põe `herdeira: { sessao, criadaEm }` na entrada e segue a ordem da troca (SKILL §6), igual à de 2 níveis. A `<maestra>` da resposta passa a ser a `maestra` da entrada: depois de uma passagem de maestra, a mãe desta condutora está arquivada, e um novo pedido (`retomar-da-passagem`), uma `PERGUNTA` ou uma `PARADA` vão à maestra que respondeu.
+3. com `HERDEIRA <sessão> <nonce> <maestra>`: confere pelo `get_session` que o título da sessão é o `nome` da ação (ação emitida antes do padrão de 28/11/2026 leva o nome antigo, sem a letra do contador — `· 2` onde hoje sai `· h2`; vale o `nome` que a ação trouxe), põe `herdeira: { sessao, criadaEm }` na entrada e segue a ordem da troca (SKILL §6), igual à de 2 níveis. A `<maestra>` da resposta passa a ser a `maestra` da entrada: depois de uma passagem de maestra, a mãe desta condutora está arquivada, e um novo pedido (`retomar-da-passagem`), uma `PERGUNTA` ou uma `PARADA` vão à maestra que respondeu.
 
 Sem `sessaoMaestra` (o id desta sessão) na entrada, sai `perguntar pedinte-ausente`: a maestra não teria a quem responder.
 
@@ -102,10 +102,19 @@ A maestra mescla os dois ramos, por squash (D12b do L4, p-2fe3674c014f0735): com
 A régua é a de [`janela.md`](janela.md): a maestra passa quando o contexto chega a 0,4 da janela. Ela só passa ao receber um `PASSAR`, nunca com uma condutora no meio da fase: nesse momento a única condutora viva é a que pediu, e ela está parada esperando. A condutora que pediu recebe o `HERDEIRA` da herdeira desta maestra, com o id dela, e passa a falar com ela. A herdeira não leva árvore.
 
 1. `maestra --nonce <nonce> --contexto <usados>/<max>` com o contexto passado do corte e lugar na cadeia (`depth + 3 ≤ limit`) sai `perguntar herdeira-da-maestra` (D13a do L4): (a) sim, só desta vez · (b) sim, e não pergunte mais neste ciclo · (c) não, seguir nesta sessão. Abrir pelo `comando.mjs abrir` com o ciclo, `--origem maestra`, o `ponteiro` `maestra:herdeira`, um item só e as opções do verbo byte a byte, e mostrar ao operador; no turno da resposta, o mesmo verbo com `--herdeira <p-…>`. O verbo lê a escolha no registro de perguntas (D17b, p-317f0e4be5157d84) e só passa com origem humana, o ciclo, o ponteiro e o texto da opção conferidos (outra pergunta do ciclo respondida "b" não vale); registro fora do ar, resposta sem prova ou o "só desta vez" de outra passagem ⇒ pergunta de novo, nunca passa calado.
-2. Com (a) ou (b), `passar-maestra`: `create_session` com o `texto` da ação, o `nome` (`<ciclo> · maestra · <k>`) e o `session_context.model` desta sessão. Para passar o registro: `--registro <arquivo ou json>` com a lista `{ sessao, fase, nonce }`, só ids, que vai dentro do texto. Com (b), o texto leva `--herdeira <p-…>` a toda chamada da herdeira: ela confere a mesma pergunta no registro e não pergunta de novo. Com (c), `criar-condutora` com um `aviso`, e esta maestra segue.
+2. Com (a) ou (b), `passar-maestra`: `create_session` com o `texto` da ação, o `nome` (`<ciclo> · maestra · h<k>`) e o `session_context.model` desta sessão. Para passar o registro: `--registro <arquivo ou json>` com a lista `{ sessao, fase, nonce }`, só ids, que vai dentro do texto. Com (b), o texto leva `--herdeira <p-…>` a toda chamada da herdeira: ela confere a mesma pergunta no registro e não pergunta de novo. Com (c), `criar-condutora` com um `aviso`, e esta maestra segue.
 3. Parar. A herdeira roda o mesmo `maestra --nonce` com `--anterior <esta>`, cria a condutora pedida, grava o atendimento, responde à que pediu e arquiva esta sessão (`archive_session`).
 
 Corte passado sem lugar para outra maestra ⇒ `criar-condutora` com `ultimaMaestra: true` e um `aviso`, sem pergunta. Levar o aviso ao operador: a maestra segue até o fim, sem herdeira.
+
+## Troca de conta
+
+A troca de condutora fora da passagem (a regra dela está em [`../SKILL.md`](../SKILL.md)), pedida pelo operador com duas ordens curtas, uma em cada lado, em qualquer ordem. As duas contas veem o mesmo registro de posse, que é a ponte: nenhuma sessão de um lado manda mensagem ao outro.
+
+- **"preparar handoff de `<ciclo>` para `<destino>`"**, à maestra do lado que sai. Ela repassa à condutora, que para de abrir operária, espera as que estão em voo, anota na nota de percalços as perguntas ainda abertas, roda o `entregar` na fronteira limpa, arquiva as próprias filhas e avisa a maestra. A maestra diz ao operador que a troca saiu e que as sessões de lá se arquivam pelo app daquela conta: uma conta não arquiva sessão da outra.
+- **"assumir handoff de `<ciclo>` de `<origem>`"**, numa sessão nova do lado que entra. Essa sessão é a maestra do ciclo dali em diante: as perguntas e os avisos da condutora chegam a ela. Ela cria a condutora da fase corrente, que espera a posse sair da árvore de origem (a leitura da posse que a página do projeto nomeia, a cada poucos minutos, com teto) e então roda o `assumir` e o `retomar`. O `assumir` traz sozinho o código do ramo quando a árvore nova nasceu mais velha.
+
+Pergunta ao operador que ficou aberta do lado que sai se responde do lado que entra, depois do `retomar`: a nota de percalços a carrega.
 
 ## A conta
 

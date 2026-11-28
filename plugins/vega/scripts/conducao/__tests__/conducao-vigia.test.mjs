@@ -1,8 +1,9 @@
 /**
  * conducao-vigia.test.mjs — vigia de filha e regra de falha (VEGA-22 T12).
  *
- * Tabela de casos sobre `conducao.mjs proximo`, chamado como CLI em repos git
- * temporários (hooks desligados: core.hooksPath=/dev/null). A data de abertura
+ * Tabela de casos sobre a decisão do `proximo`: todos pelo `decidir` puro, sobre as marcas e
+ * referências que o git daria, e três também pelo CLI em repos git temporários (hooks
+ * desligados: core.hooksPath=/dev/null). A data de abertura
  * da tentativa é a do marcador (GIT_COMMITTER_DATE), e o relógio da vigia vem
  * de `entrada.agora` — nenhum caso depende do relógio da máquina.
  *
@@ -17,7 +18,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { nonce } from "../conducao.mjs";
+import { decidir, estadoDasTasks, nonce, reinicioConfirmado } from "../conducao.mjs";
+import * as adaptador from "../adaptador.mjs";
+import { lerPlano } from "../ler-plano.mjs";
+import { RE, marcasDoLog } from "../marcas.mjs";
 import { BOTOES } from "../botoes.mjs";
 import * as logEventos from "../log-eventos.mjs";
 import * as vigia from "../vigia.mjs";
@@ -131,11 +135,62 @@ function proximo(dir, entrada = {}, reinicio, { ativaDesde, stderr } = {}) {
 
 const filha = (campos) => ({ sessao: "s1", task: "T1", tentativa: 1, nonce: "n1", estado: "RUNNING", ...campos });
 
+/**
+ * O mesmo `montar` dos casos, sem git: as marcas viram o log bruto que `lerMarcas` lê (o parser é o
+ * real, `marcasDoLog`), e as tentativas em voo, as referências que `lerRefsLocais` devolve. A decisão é
+ * a do `decidir` puro, com o adaptador lido do repositório `base` como o `proximo` o lê.
+ */
+function sintetico(tasks = [task("T1"), task("T2")], largura = 2) {
+  const plano = lerPlano(canonico(tasks, largura));
+  const BLOB = "b".repeat(40);
+  let k = 0;
+  const sha = () => (++k).toString(16).padStart(40, "0");
+  const log = [{ sha: sha(), subject: "Conducao: F1 autorizada", trailers: `Conducao-Plano: ${BLOB}` }];
+  const refs = [];
+  const vazio = (subject, trailers = "") => log.push({ sha: sha(), subject, trailers });
+  return {
+    emVoo: (t, n, x, quando = ABERTA) => {
+      const mk = RE.marcador.exec(`Conducao: abrir ${t} tentativa ${n} nonce ${x}`);
+      refs.push({ ref: `refs/conducao-local/${CICLO}/${t}/${n}`, sha: sha(), task: t, tentativa: n, nonce: mk ? mk[3] : null, abertaEm: quando });
+    },
+    falhou: (t, n, x, coberta = "nao") => vazio(`Conducao: ${t} tentativa ${n} falhou`, `Conducao-Task: ${t}\nConducao-Nonce: ${x}\ncoberta-por-reinicio: ${coberta}`),
+    conferida: (t, x) =>
+      vazio(`Conducao: ${t} conferida`, `Conducao-Task: ${t}\nConducao-Sha-Filha: 0000000\nConducao-Sessao-Filha: s\nConducao-Nonce: ${x}\nConducao-Verificacao: verde\nConducao-Publicacao: nao-se-aplica`),
+    revertida: (t, n, x) => vazio(`Conducao: ${t} tentativa ${n} revertida`, `Conducao-Task: ${t}\nConducao-Nonce: ${x}`),
+    /** A decisão do `proximo` sobre este estado; `head` troca o HEAD (o nonce do arquivar não depende dele). */
+    proximo: (base, entrada = {}, reinicio, { ativaDesde, head = "c".repeat(40) } = {}) => {
+      const marcas = marcasDoLog(log.map((c) => `${c.sha}\x1f${c.subject}\x1f${c.trailers}\n\x1e`).join("\n"), CICLO);
+      const ent = adaptador.lerAdaptador(base);
+      const e = { agora: ISO(ABERTA + 60), ...entrada };
+      const ativa = reinicio ? (ativaDesde ?? Math.floor(Date.parse(reinicio.quando) / 1000) + 1) : null;
+      return decidir({
+        ciclo: CICLO,
+        head,
+        plano,
+        planoBlob: BLOB,
+        planoHead: plano,
+        planoHeadBlob: BLOB,
+        diffPlano: null,
+        autorizacoes: marcas.filter((m) => m.tipo === "autorizada"),
+        estado: estadoDasTasks(marcas, refs, []),
+        entrada: e,
+        agora: Math.floor(Date.parse(e.agora) / 1000),
+        reinicioEm: reinicio && reinicioConfirmado(reinicio, ativa).valido ? Math.floor(Date.parse(reinicio.quando) / 1000) : null,
+        repo: base,
+        conferencia: ent.conferencia,
+        temCi: ent.ci,
+        tiers: ent.tiers,
+      });
+    },
+  };
+}
+
 // ── tabela da regra de falha ────────────────────────────────────────────────
 
 test("regra de falha por tabela de casos", (t) => {
   const casos = [
     {
+      cli: true,
       nome: "falha avisada, primeira: tentativa nova automatica com a falha a gravar",
       montar: (r) => r.emVoo("T1", 1, "n1"),
       entrada: { filhas: [filha({ estado: "IDLE", aviso: "T1-FALHA vitest n1" })] },
@@ -148,6 +203,7 @@ test("regra de falha por tabela de casos", (t) => {
     },
     {
       // P22 do ATRM-51: a pergunta virava `abrir` da tentativa seguinte e contava falha.
+      cli: true,
       nome: "pergunta da filha: vai a Rita, sem falha a gravar e sem abrir",
       montar: (r) => r.emVoo("T1", 1, "n1"),
       entrada: { filhas: [filha({ estado: "IDLE", aviso: "T1-FALHA pergunta n1" })] },
@@ -179,6 +235,7 @@ test("regra de falha por tabela de casos", (t) => {
       },
     },
     {
+      cli: true,
       nome: "ARCHIVED com status FAILED e aviso OK: o aviso decide, trazer",
       montar: (r) => r.emVoo("T1", 1, "n1"),
       entrada: { filhas: [filha({ estado: "ARCHIVED", statusBucket: "FAILED", aviso: "T1-OK deadbeef n1" })] },
@@ -198,6 +255,7 @@ test("regra de falha por tabela de casos", (t) => {
       },
     },
     {
+      cli: true,
       nome: "tentativa sem filha na entrada: perguntar",
       montar: (r) => r.emVoo("T1", 1, "n1"),
       entrada: { agora: ISO(ABERTA + 121 * 60), filhas: [] },
@@ -207,6 +265,7 @@ test("regra de falha por tabela de casos", (t) => {
       },
     },
     {
+      cli: true,
       nome: "tentativa sem filha dentro do prazo: reentregar com o mesmo nonce, sem parar",
       montar: (r) => r.emVoo("T1", 1, "n1"),
       entrada: { agora: ISO(ABERTA + 5 * 60), filhas: [] },
@@ -220,6 +279,7 @@ test("regra de falha por tabela de casos", (t) => {
       },
     },
     {
+      cli: true,
       nome: "prazo vencido sem aviso: perguntar",
       montar: (r) => r.emVoo("T1", 1, "n1"),
       entrada: { agora: ISO(ABERTA + 121 * 60), filhas: [filha()] },
@@ -239,6 +299,7 @@ test("regra de falha por tabela de casos", (t) => {
       },
     },
     {
+      cli: true,
       nome: "queda coberta pelo registro de reinicio: reabre sem contar falha, com aviso a Rita",
       montar: (r) => r.emVoo("T1", 1, "n1"),
       entrada: { filhas: [filha({ estado: "ARCHIVED" })] },
@@ -281,6 +342,7 @@ test("regra de falha por tabela de casos", (t) => {
       },
     },
     {
+      cli: true,
       nome: "verificacao vermelha (revertida sem falha): tentativa nova com a falha a gravar",
       montar: (r) => r.revertida("T1", 1, "n1"),
       entrada: { filhas: [] },
@@ -290,6 +352,7 @@ test("regra de falha por tabela de casos", (t) => {
       },
     },
     {
+      cli: true,
       nome: "verificacao vermelha depois de uma falha contada: perguntar",
       montar: (r) => {
         r.falhou("T1", 1, "n1");
@@ -302,12 +365,29 @@ test("regra de falha por tabela de casos", (t) => {
       },
     },
   ];
+  // Todo caso decide no `decidir` puro; os de `cli: true` também pelo `proximo` real, num repositório
+  // git (a leitura das marcas, das referências e do registro de reinício pelo verbo).
+  const base = novoRepo();
+  t.after(base.limpar);
   for (const c of casos) {
+    const s = sintetico();
+    c.montar(s);
+    try {
+      c.espera(s.proximo(base.dir, c.entrada, c.reinicio, { ativaDesde: c.ativaDesde }));
+    } catch (e) {
+      throw new Error(`${c.nome} (puro)`, { cause: e });
+    }
+    if (!c.cli) continue;
     const r = novoRepo();
     t.after(r.limpar);
     c.montar(r);
-    c.espera(proximo(r.dir, c.entrada, c.reinicio, { ativaDesde: c.ativaDesde }));
+    try {
+      c.espera(proximo(r.dir, c.entrada, c.reinicio, { ativaDesde: c.ativaDesde }));
+    } catch (e) {
+      throw new Error(`${c.nome} (cli)`, { cause: e });
+    }
   }
+  assert.equal(casos.filter((c) => c.cli).length, 9);
 });
 
 test("registro de reinicio sem subida da ponte depois dele e ignorado com aviso", (t) => {
@@ -338,28 +418,7 @@ test("reinicio-valido confirma pela hora de subida da ponte", (t) => {
   assert.equal(spawnSync(process.execPath, [SCRIPT, "reinicio-valido"], { encoding: "utf8" }).status, 2);
 });
 
-test("segunda falha avisada da mesma task emite perguntar, nunca terceira tentativa", (t) => {
-  const r = novoRepo([task("T1")], 1);
-  t.after(r.limpar);
-  r.emVoo("T1", 1, "n1");
-  r.falhou("T1", 1, "n1");
-  r.emVoo("T1", 2, "n2");
-  const entrada = { filhas: [filha({ tentativa: 2, nonce: "n2", estado: "IDLE", aviso: "T1-FALHA vitest n2" })] };
-  const a = proximo(r.dir, entrada);
-  assert.equal(a.acao, "perguntar");
-  assert.equal(a.motivo, "segunda-falha");
-  assert.equal(a.falhas, 1);
-  assert.deepEqual(a.registrarFalha, { task: "T1", tentativa: 2, coberta: "nao" });
-  // A maestra grava a 2ª falha e arquiva a filha: a task fica parada no teto.
-  r.falhou("T1", 2, "n2");
-  const b = proximo(r.dir, { filhas: [filha({ tentativa: 2, nonce: "n2", estado: "ARCHIVED", aviso: "T1-FALHA vitest n2" })] });
-  assert.equal(b.acao, "perguntar");
-  assert.equal(b.motivo, "teto-de-falhas");
-  assert.equal(b.falhas, 2);
-  assert.notEqual(b.acao, "abrir");
-});
-
-test("retomar em sessao nova preserva a contagem de falhas e a segunda falha continua perguntando", (t) => {
+test("retomar em sessao nova preserva a contagem de falhas; a segunda falha avisada pergunta e a gravada para no teto", (t) => {
   const r = novoRepo([task("T1"), task("T2")], 2);
   t.after(r.limpar);
   r.emVoo("T1", 1, "n1");
@@ -373,51 +432,66 @@ test("retomar em sessao nova preserva a contagem de falhas e a segunda falha con
   const estado = JSON.parse(ret.linhas[0]);
   assert.deepEqual(estado.falhas, { T1: 1 }, "falha coberta por reinício não entra na contagem");
   assert.deepEqual(estado.emVoo.map((x) => [x.task, x.tentativa]), [["T1", 2]]);
+  // Segunda falha avisada da mesma task: perguntar, nunca terceira tentativa.
   const a = proximo(r.dir, { filhas: [filha({ tentativa: 2, nonce: "n2", estado: "IDLE", aviso: "T1-FALHA tsc n2" })] });
   assert.equal(a.acao, "perguntar");
   assert.equal(a.motivo, "segunda-falha");
+  assert.equal(a.falhas, 1);
+  assert.deepEqual(a.registrarFalha, { task: "T1", tentativa: 2, coberta: "nao" });
+  // A maestra grava a 2ª falha e arquiva a filha: a task fica parada no teto.
+  r.falhou("T1", 2, "n2");
+  const b = proximo(r.dir, { filhas: [filha({ tentativa: 2, nonce: "n2", estado: "ARCHIVED", aviso: "T1-FALHA tsc n2" })] });
+  assert.equal(b.acao, "perguntar");
+  assert.equal(b.motivo, "teto-de-falhas");
+  assert.equal(b.falhas, 2);
+  assert.notEqual(b.acao, "abrir");
 });
 
 // ── rede de arquivamento ────────────────────────────────────────────────────
 
-test("filha com tentativa decidida e fora de ARCHIVED emite arquivar com nonce, uma vez", (t) => {
-  const r = novoRepo();
-  t.after(r.limpar);
-  r.conferida("T1", "n1");
+test("filha com tentativa decidida e fora de ARCHIVED emite arquivar com nonce, uma vez; sem aviso ou sem decisao, nunca", (t) => {
+  const base = novoRepo();
+  t.after(base.limpar);
+  // Ponta a ponta: a conferência gravada no git e a filha viva com o aviso OK ⇒ arquivar, pelo verbo.
+  base.conferida("T1", "n1");
   const viva = filha({ estado: "IDLE", aviso: "T1-OK deadbeef n1" });
-  const a = proximo(r.dir, { filhas: [viva] });
+  const a = proximo(base.dir, { filhas: [viva] });
   assert.equal(a.acao, "arquivar", "precede o abrir da T2 pronta");
   assert.equal(a.sessao, "s1");
   assert.equal(a.nonceTentativa, "n1");
   assert.equal(a.nonce, nonce(CICLO, "arquivar:s1", "n1", ""));
+
+  // O resto da rede pelo `decidir` puro, sobre o mesmo estado.
+  const s = sintetico();
+  s.conferida("T1", "n1");
+  const p = (filhas, opcoes) => s.proximo(base.dir, { filhas }, undefined, opcoes);
+  const campos = (x) => ({ acao: x.acao, sessao: x.sessao, nonceTentativa: x.nonceTentativa, nonce: x.nonce, aviso: x.aviso });
+  assert.deepEqual(campos(p([viva])), campos(a), "o puro decide o mesmo que o verbo");
   // Mesma entrada, mesma ação; HEAD novo não muda o nonce do arquivar.
-  assert.deepEqual(proximo(r.dir, { filhas: [viva] }), a);
-  r.vazio("outro commit");
-  assert.equal(proximo(r.dir, { filhas: [viva] }).nonce, a.nonce);
+  assert.deepEqual(p([viva]), p([viva]));
+  assert.equal(p([viva], { head: "d".repeat(40) }).nonce, a.nonce);
   // Já arquivada: não emite nada para ela.
-  const depois = proximo(r.dir, { filhas: [{ ...viva, estado: "ARCHIVED" }] });
+  const depois = p([{ ...viva, estado: "ARCHIVED" }]);
   assert.equal(depois.acao, "abrir");
   assert.deepEqual(depois.tarefas.map((x) => x.task), ["T2"]);
   // Um arquivar executado e ainda viva: repete; dois sem ARCHIVED: falha de arquivamento.
-  assert.equal(proximo(r.dir, { filhas: [{ ...viva, arquivamentos: [a.nonce] }] }).acao, "arquivar");
-  const p = proximo(r.dir, { filhas: [{ ...viva, arquivamentos: [a.nonce, a.nonce] }] });
-  assert.equal(p.acao, "perguntar");
-  assert.equal(p.motivo, "falha-de-arquivamento");
-});
+  assert.equal(p([{ ...viva, arquivamentos: [a.nonce] }]).acao, "arquivar");
+  const f = p([{ ...viva, arquivamentos: [a.nonce, a.nonce] }]);
+  assert.equal(f.acao, "perguntar");
+  assert.equal(f.motivo, "falha-de-arquivamento");
 
-test("sem aviso ou com tentativa ainda nao decidida, nunca arquivar", (t) => {
-  const r = novoRepo();
-  t.after(r.limpar);
-  r.emVoo("T1", 1, "n1");
+  // Sem aviso ou com tentativa ainda não decidida, nunca arquivar.
+  const v = sintetico();
+  v.emVoo("T1", 1, "n1");
   // Aviso OK com tentativa ainda em voo: a decisão é trazer, não arquivar.
-  assert.equal(proximo(r.dir, { filhas: [filha({ estado: "IDLE", aviso: "T1-OK deadbeef n1" })] }).acao, "trazer");
+  assert.equal(v.proximo(base.dir, { filhas: [filha({ estado: "IDLE", aviso: "T1-OK deadbeef n1" })] }).acao, "trazer");
   // Falha gravada, filha viva sem aviso: a rede não a toca.
-  r.falhou("T1", 1, "n1");
-  assert.notEqual(proximo(r.dir, { filhas: [filha({ estado: "IDLE" })] }).acao, "arquivar");
+  v.falhou("T1", 1, "n1");
+  assert.notEqual(v.proximo(base.dir, { filhas: [filha({ estado: "IDLE" })] }).acao, "arquivar");
   // Falha gravada e aviso FALHA: decidida ⇒ arquivar.
-  const a = proximo(r.dir, { filhas: [filha({ estado: "IDLE", aviso: "T1-FALHA vitest n1" })] });
-  assert.equal(a.acao, "arquivar");
-  assert.equal(a.aviso, "FALHA");
+  const fa = v.proximo(base.dir, { filhas: [filha({ estado: "IDLE", aviso: "T1-FALHA vitest n1" })] });
+  assert.equal(fa.acao, "arquivar");
+  assert.equal(fa.aviso, "FALHA");
 });
 
 // ── verbo de git da falha ───────────────────────────────────────────────────
@@ -455,71 +529,6 @@ test("abrir com --falhou grava a falha antes do marcador; registrar-falha e idem
   assert.match(ruim.stderr, /uso: --coberta sim\|nao/);
 });
 
-test("falha de ambiente nao conta no teto, leva trailer proprio e exige motivo (P7 do ATRM-51)", (t) => {
-  const r = novoRepo([task("T1"), task("T2")], 2);
-  t.after(r.limpar);
-  const origin = pastaTemporaria("conducao-vigia-origin-");
-  t.after(() => rmSync(origin, { recursive: true, force: true }));
-  execFileSync("git", ["init", "-q", "--bare", origin]);
-  r.g(["remote", "add", "origin", origin]);
-  const head0 = r.g(["rev-parse", "HEAD"]);
-  r.g(["push", "-q", "origin", `${head0}:refs/conducao/${CICLO}/copia`]);
-  r.g(["update-ref", `refs/conducao-local/${CICLO}/copia`, head0]);
-  r.emVoo("T1", 1, "n1");
-
-  const sem = cli(r.dir, ["registrar-falha", "T1", "--tentativa", "1", "--coberta", "ambiente"]);
-  assert.equal(sem.status, 1);
-  assert.match(sem.stderr, /motivo-ausente/);
-
-  const ok = cli(r.dir, ["registrar-falha", "T1", "--tentativa", "1", "--coberta", "ambiente", "--motivo", "classificador recusou leitura de producao"]);
-  assert.equal(ok.status, 0, ok.stderr);
-  const sha = JSON.parse(ok.linhas[0]).sha;
-  assert.equal(r.g(["log", "-1", "--format=%(trailers:key=Conducao-Falha-Ambiente,valueonly=true)", sha]), "sim");
-  assert.equal(r.g(["log", "-1", "--format=%(trailers:key=coberta-por-reinicio,valueonly=true)", sha]), "nao");
-
-  r.emVoo("T1", 2, "n2");
-  const ret = cli(r.dir, ["retomar"]);
-  assert.equal(ret.status, 0, ret.stderr);
-  assert.deepEqual(JSON.parse(ret.linhas[0]).falhas, {}, "falha de ambiente não entra na contagem");
-  // A falha seguinte, de trabalho, é a primeira contada: reabre em vez de parar no teto.
-  const a = proximo(r.dir, { filhas: [filha({ tentativa: 2, nonce: "n2", estado: "IDLE", aviso: "T1-FALHA tsc n2" })] });
-  assert.equal(a.acao, "abrir", JSON.stringify(a));
-});
-
-test("falha de ambiente tem teto proprio e entra pelo abrir --falhou (P7 do ATRM-51)", (t) => {
-  const r = novoRepo([task("T1"), task("T2")], 2);
-  t.after(r.limpar);
-  const origin = pastaTemporaria("conducao-vigia-origin-");
-  t.after(() => rmSync(origin, { recursive: true, force: true }));
-  execFileSync("git", ["init", "-q", "--bare", origin]);
-  r.g(["remote", "add", "origin", origin]);
-  const head0 = r.g(["rev-parse", "HEAD"]);
-  r.g(["push", "-q", "origin", `${head0}:refs/conducao/${CICLO}/copia`]);
-  r.g(["update-ref", `refs/conducao-local/${CICLO}/copia`, head0]);
-  r.emVoo("T1", 1, "n1");
-  // 1ª e 2ª falhas de ambiente pelo caminho do `abrir --falhou`, com motivo.
-  for (const [n, nonce] of [[2, "nn22"], [3, "nn33"]]) {
-    const ab = cli(r.dir, ["abrir", "T1", "--tentativa", String(n), "--nonce", nonce, "--falhou", String(n - 1), "--coberta", "ambiente", "--motivo", "credencial da ponte ausente", "--modo-maestra", "auto"]);
-    assert.equal(ab.status, 0, ab.stderr);
-    const s = JSON.parse(ab.linhas[0]);
-    assert.equal(r.g(["log", "-1", "--format=%(trailers:key=Conducao-Falha-Ambiente,valueonly=true)", s.base]), "sim");
-  }
-  // Sem motivo, o `abrir --falhou … ambiente` recusa e não abre.
-  const semMotivo = cli(r.dir, ["abrir", "T1", "--tentativa", "4", "--nonce", "nn44", "--falhou", "3", "--coberta", "ambiente", "--modo-maestra", "auto"]);
-  assert.equal(semMotivo.status, 1);
-  assert.equal(r.g(["ls-remote", "origin", `refs/conducao/${CICLO}/T1/4`]), "");
-  // 3ª falha de ambiente: não conta no teto de trabalho, mas para no teto próprio.
-  const de = cli(r.dir, ["registrar-falha", "T1", "--tentativa", "3", "--coberta", "ambiente", "--motivo", "classificador recusou de novo"]);
-  assert.equal(de.status, 0, de.stderr);
-  const ret = JSON.parse(cli(r.dir, ["retomar"]).linhas[0]);
-  assert.deepEqual(ret.falhas, {});
-  assert.deepEqual(ret.falhasAmbiente, { T1: 3 });
-  const a = proximo(r.dir, { filhas: [] });
-  assert.equal(a.acao, "perguntar", JSON.stringify(a));
-  assert.equal(a.motivo, "teto-de-falhas-ambiente");
-  assert.equal(a.falhasAmbiente, 3);
-});
-
 /**
  * Três tentativas da T1 encerradas com a mesma `coberta`, as duas primeiras pelo
  * `abrir --falhou` e a terceira pelo `registrar-falha`, como a condutora grava.
@@ -551,16 +560,71 @@ function tresEncerradas(t, coberta, motivo) {
   const nonces = { 1: "n1", 2: "nn22", 3: "nn33" };
   // Com `pergunta`, cada tentativa encerrada leva o aviso de pergunta da filha.
   const perguntou = (n) => coberta === "pergunta" && aviso(r, n, `T1-FALHA pergunta ${nonces[n]}`);
+  const bases = [];
   for (const n of [2, 3]) {
     perguntou(n - 1);
     const ab = cli(r.dir, ["abrir", "T1", "--tentativa", String(n), "--nonce", nonces[n], "--falhou", String(n - 1), "--coberta", coberta, "--motivo", motivo, "--modo-maestra", "auto"]);
     assert.equal(ab.status, 0, ab.stderr);
+    bases.push(JSON.parse(ab.linhas[0]).base);
   }
   const avisoSha = perguntou(3);
   const de = cli(r.dir, ["registrar-falha", "T1", "--tentativa", "3", "--coberta", coberta, "--motivo", motivo]);
   assert.equal(de.status, 0, de.stderr);
-  return { r, sha: JSON.parse(de.linhas[0]).sha, avisoSha };
+  return { r, sha: JSON.parse(de.linhas[0]).sha, avisoSha, bases };
 }
+
+test("falha de ambiente exige motivo, leva trailer proprio, nao conta no teto e nao se reclassifica (P7 do ATRM-51, ATRM-54 F4)", (t) => {
+  const r = comOrigin(t);
+  r.emVoo("T1", 1, "n1");
+
+  const sem = cli(r.dir, ["registrar-falha", "T1", "--tentativa", "1", "--coberta", "ambiente"]);
+  assert.equal(sem.status, 1);
+  assert.match(sem.stderr, /motivo-ausente/);
+
+  const amb = cli(r.dir, ["registrar-falha", "T1", "--tentativa", "1", "--coberta", "ambiente", "--motivo", "  credencial ausente  "]);
+  assert.equal(amb.status, 0, amb.stderr);
+  const sha = JSON.parse(amb.linhas[0]).sha;
+  assert.equal(r.g(["log", "-1", "--format=%(trailers:key=Conducao-Falha-Ambiente,valueonly=true)", sha]), "sim");
+  assert.equal(r.g(["log", "-1", "--format=%(trailers:key=coberta-por-reinicio,valueonly=true)", sha]), "nao");
+  assert.equal(r.g(["log", "-1", "--format=%b", sha]).split("\n")[0], "credencial ausente", "motivo gravado sem as bordas");
+
+  // A marca de ambiente não se reclassifica como pergunta, nem com o aviso de pergunta no git.
+  aviso(r, 1, "T1-FALHA pergunta n1");
+  const diverge = cli(r.dir, ["registrar-falha", "T1", "--tentativa", "1", "--coberta", "pergunta", "--motivo", "re-plano"]);
+  assert.equal(diverge.status, 1);
+  const s = JSON.parse(diverge.linhas[0]);
+  assert.equal(s.motivo, "coberta-diverge-da-marca");
+  assert.equal(s.gravada, "ambiente");
+  assert.equal(s.pedida, "pergunta");
+  // A mesma coberta segue idempotente.
+  const igual = JSON.parse(cli(r.dir, ["registrar-falha", "T1", "--tentativa", "1", "--coberta", "ambiente", "--motivo", "x"]).linhas[0]);
+  assert.equal(igual.nova, false);
+  assert.equal(igual.coberta, "ambiente");
+
+  // A falha seguinte, de trabalho, é a primeira contada: reabre em vez de parar no teto.
+  r.emVoo("T1", 2, "n2");
+  const a = proximo(r.dir, { filhas: [filha({ tentativa: 2, nonce: "n2", estado: "IDLE", aviso: "T1-FALHA tsc n2" })] });
+  assert.equal(a.acao, "abrir", JSON.stringify(a));
+});
+
+test("falha de ambiente tem teto proprio e entra pelo abrir --falhou, que exige motivo (P7 do ATRM-51, ATRM-54 F4)", (t) => {
+  // 1ª e 2ª falhas de ambiente pelo caminho do `abrir --falhou`, com motivo; a 3ª pelo `registrar-falha`.
+  const { r, sha, bases } = tresEncerradas(t, "ambiente", "credencial da ponte ausente");
+  for (const b of [...bases, sha]) assert.equal(r.g(["log", "-1", "--format=%(trailers:key=Conducao-Falha-Ambiente,valueonly=true)", b]), "sim");
+  // Sem motivo, o `abrir --falhou … ambiente` recusa e não abre.
+  const semMotivo = cli(r.dir, ["abrir", "T1", "--tentativa", "4", "--nonce", "nn44", "--falhou", "3", "--coberta", "ambiente", "--modo-maestra", "auto"]);
+  assert.equal(semMotivo.status, 1);
+  assert.equal(r.g(["ls-remote", "origin", `refs/conducao/${CICLO}/T1/4`]), "");
+  // 3 falhas de ambiente: não contam no teto de trabalho nem como pergunta, mas param no teto próprio.
+  const ret = JSON.parse(cli(r.dir, ["retomar"]).linhas[0]);
+  assert.deepEqual(ret.falhas, {}, "falha de ambiente não entra na contagem");
+  assert.deepEqual(ret.falhasAmbiente, { T1: 3 });
+  assert.deepEqual(ret.falhasPergunta, {});
+  const a = proximo(r.dir, { filhas: [] });
+  assert.equal(a.acao, "perguntar", JSON.stringify(a));
+  assert.equal(a.motivo, "teto-de-falhas-ambiente");
+  assert.equal(a.falhasAmbiente, 3);
+});
 
 test("pergunta respondida com re-plano encerra a tentativa fora de todo teto (ATRM-54 F4)", (t) => {
   const motivo = "D-ATRM54-24: re-plano, T22 reabre depois das tasks novas";
@@ -586,23 +650,13 @@ test("pergunta respondida com re-plano encerra a tentativa fora de todo teto (AT
   assert.equal(x.falhaAnterior, undefined);
 });
 
-test("controle positivo: tres encerradas por ambiente ainda param no teto de ambiente (ATRM-54 F4)", (t) => {
-  const { r } = tresEncerradas(t, "ambiente", "credencial da ponte ausente");
-  const ret = JSON.parse(cli(r.dir, ["retomar"]).linhas[0]);
-  assert.deepEqual(ret.falhasAmbiente, { T1: 3 });
-  assert.deepEqual(ret.falhasPergunta, {});
-  const a = proximo(r.dir, { filhas: [] });
-  assert.equal(a.acao, "perguntar", JSON.stringify(a));
-  assert.equal(a.motivo, "teto-de-falhas-ambiente");
-});
-
-test("coberta pergunta exige motivo, no registrar-falha e no abrir --falhou (ATRM-54 F4)", (t) => {
-  const r = novoRepo([task("T1"), task("T2")], 2);
-  t.after(r.limpar);
+test("coberta pergunta exige motivo e o aviso de pergunta da propria tentativa no git (ATRM-54 F4)", (t) => {
+  const r = comOrigin(t);
   r.emVoo("T1", 1, "n1");
-  const sem = cli(r.dir, ["registrar-falha", "T1", "--tentativa", "1", "--coberta", "pergunta"]);
-  assert.equal(sem.status, 1);
-  assert.match(sem.stderr, /motivo-ausente/);
+  // Sem motivo, ou só com espaço, no registrar-falha e no abrir --falhou: recusa.
+  const semMotivo = cli(r.dir, ["registrar-falha", "T1", "--tentativa", "1", "--coberta", "pergunta"]);
+  assert.equal(semMotivo.status, 1);
+  assert.match(semMotivo.stderr, /motivo-ausente/);
   const branco = cli(r.dir, ["registrar-falha", "T1", "--tentativa", "1", "--coberta", "pergunta", "--motivo", "   "]);
   assert.equal(branco.status, 1);
   assert.match(branco.stderr, /motivo-ausente/);
@@ -610,11 +664,7 @@ test("coberta pergunta exige motivo, no registrar-falha e no abrir --falhou (ATR
   assert.equal(ab.status, 1);
   assert.match(ab.stderr, /motivo-ausente/);
   assert.equal(r.g(["log", "--format=%s", "--grep=falhou"]), "", "recusa sem gravar marca");
-});
 
-test("coberta pergunta exige o aviso de pergunta da propria tentativa no git (ATRM-54 F4)", (t) => {
-  const r = comOrigin(t);
-  r.emVoo("T1", 1, "n1");
   const registrar = () => cli(r.dir, ["registrar-falha", "T1", "--tentativa", "1", "--coberta", "pergunta", "--motivo", "re-plano"]);
   // Sem aviso nenhum: pergunta, não grava — falha de trabalho não sai do teto por declaração.
   const sem = registrar();
@@ -645,25 +695,6 @@ test("aviso posterior no origin derruba a pergunta ja vista (ATRM-54 F4)", (t) =
   assert.equal(s.motivo, "pergunta-sem-aviso");
   assert.match(s.encontrado, /T1-FALHA tsc n1/);
   assert.equal(r.g(["log", "--format=%s", "--grep=falhou"]), "", "recusa sem gravar marca");
-});
-
-test("registrar-falha nao reclassifica marca existente de outra coberta (ATRM-54 F4)", (t) => {
-  const r = comOrigin(t);
-  r.emVoo("T1", 1, "n1");
-  const amb = cli(r.dir, ["registrar-falha", "T1", "--tentativa", "1", "--coberta", "ambiente", "--motivo", "  credencial ausente  "]);
-  assert.equal(amb.status, 0, amb.stderr);
-  assert.equal(r.g(["log", "-1", "--format=%b", JSON.parse(amb.linhas[0]).sha]).split("\n")[0], "credencial ausente", "motivo gravado sem as bordas");
-  aviso(r, 1, "T1-FALHA pergunta n1");
-  const diverge = cli(r.dir, ["registrar-falha", "T1", "--tentativa", "1", "--coberta", "pergunta", "--motivo", "re-plano"]);
-  assert.equal(diverge.status, 1);
-  const s = JSON.parse(diverge.linhas[0]);
-  assert.equal(s.motivo, "coberta-diverge-da-marca");
-  assert.equal(s.gravada, "ambiente");
-  assert.equal(s.pedida, "pergunta");
-  // A mesma coberta segue idempotente.
-  const igual = JSON.parse(cli(r.dir, ["registrar-falha", "T1", "--tentativa", "1", "--coberta", "ambiente", "--motivo", "x"]).linhas[0]);
-  assert.equal(igual.nova, false);
-  assert.equal(igual.coberta, "ambiente");
 });
 
 // ── vigia por estado (VEGA-37 T21) ──────────────────────────────────────────

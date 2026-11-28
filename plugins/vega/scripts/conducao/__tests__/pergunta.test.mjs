@@ -236,7 +236,7 @@ describe("toda parada sai pelo mesmo construtor", () => {
 
   test("a fábrica do decidir é embrulhada por comPergunta", () => {
     const { src } = FONTES.find((x) => x.f === "conducao.mjs");
-    assert.match(src, /contextoDoProximo\(params, pergunta\.comPergunta\(fabrica\)\)/);
+    assert.match(src, /contextoDoProximo\(\{ \.\.\.params, emEspera \}, pergunta\.comPergunta\(fabrica\)\)/);
   });
 });
 
